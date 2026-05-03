@@ -270,3 +270,81 @@ def analyze(sp_path: str, sb_path: str,
 
     results.sort(key=lambda x: -x.score)
     return results
+
+
+def analyze_with_products(sp_path: str, sb_path: str,
+                           target_roas: float = TARGET_ROAS,
+                           low_impr: int = LOW_IMPR_THRESHOLD,
+                           breakeven_map: dict = None) -> list[CampaignResult]:
+    """
+    Same as analyze() but uses per-ASIN break-even ROAS when available.
+    Falls back to global target_roas for campaigns without ASIN match.
+    breakeven_map = {asin: break_even_roas}
+    """
+    if breakeven_map is None:
+        breakeven_map = {}
+
+    def get_campaign_target(campaign_name: str) -> float:
+        """Match ASIN in campaign name to break-even ROAS."""
+        if breakeven_map:
+            for asin, be_roas in breakeven_map.items():
+                if asin.upper() in campaign_name.upper():
+                    return be_roas
+        return target_roas
+
+    sp_grp = load_and_aggregate(sp_path, '7 Day Total Sales')
+    sb_grp = load_and_aggregate(sb_path, '14 Day Total Sales')
+
+    df_sp = pd.read_excel(sp_path)
+    df_sp.columns = df_sp.columns.str.strip()
+    sp_types = {
+        c: ('Auto' if 'AUTO' in c.upper() else 'Manual')
+        for c in df_sp['Campaign Name'].unique()
+    }
+
+    results = []
+
+    for camp in sp_grp['Campaign'].unique():
+        sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
+        camp_target = get_campaign_target(camp)
+        sc = score_campaign(sub, camp_target)
+        total_spend = sub['Spend'].sum()
+        total_sales = sub['Sales'].sum()
+        r = CampaignResult(
+            campaign=camp,
+            ad_type='SP',
+            targeting=sp_types.get(camp, 'Manual'),
+            top=_build_placement(sub, 'Top'),
+            rest=_build_placement(sub, 'Rest'),
+            product=_build_placement(sub, 'Product'),
+            score=sc,
+            score_label=score_label(sc),
+            bid_rec=bid_recommendation(sub, camp_target),
+            alert=alert_message(sub, sc, low_impr),
+            total_roas=total_sales / total_spend if total_spend > 0 else 0,
+        )
+        results.append(r)
+
+    for camp in sb_grp['Campaign'].unique():
+        sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
+        camp_target = get_campaign_target(camp)
+        sc = score_campaign(sub, camp_target)
+        total_spend = sub['Spend'].sum()
+        total_sales = sub['Sales'].sum()
+        r = CampaignResult(
+            campaign=camp,
+            ad_type='SB',
+            targeting='Brand (SB)',
+            top=_build_placement(sub, 'Top'),
+            rest=_build_placement(sub, 'Rest'),
+            product=_build_placement(sub, 'Product'),
+            score=sc,
+            score_label=score_label(sc),
+            bid_rec=bid_recommendation(sub, camp_target),
+            alert=alert_message(sub, sc, low_impr),
+            total_roas=total_sales / total_spend if total_spend > 0 else 0,
+        )
+        results.append(r)
+
+    results.sort(key=lambda x: -x.score)
+    return results
