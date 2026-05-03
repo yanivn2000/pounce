@@ -212,13 +212,17 @@ def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
             margin_floor_roas = top_roas * (1 - min_margin_pct)
 
     for pl in ['Top', 'Rest', 'Product']:
-        roas  = _get(sub, pl, 'ROAS') or 0
-        sales = _get(sub, pl, 'Sales') or 0
-        spend = _get(sub, pl, 'Spend') or 0
+        roas   = _get(sub, pl, 'ROAS') or 0
+        sales  = _get(sub, pl, 'Sales') or 0
+        spend  = _get(sub, pl, 'Spend') or 0
+        orders = _get(sub, pl, 'Orders') or 0
         if spend == 0:
             continue
         if sales == 0:
             parts.append(f"{pl}: no sales — don't raise")
+            continue
+        if orders < 3:
+            parts.append(f"{pl}: insufficient data ({int(orders)} order{'s' if orders != 1 else ''}) — monitor before raising")
             continue
         if roas >= target_roas:
             ratio = roas / avg_roas if avg_roas > 0 else 1
