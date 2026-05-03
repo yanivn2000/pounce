@@ -64,7 +64,25 @@ def _safe(v):
 def load_and_aggregate(path: str, sales_col: str) -> pd.DataFrame:
     df = pd.read_excel(path)
     df.columns = df.columns.str.strip()
-    df = df.rename(columns={sales_col: 'Sales', 'Campaign Name': 'Campaign'})
+
+    # Handle empty or missing Placement column gracefully
+    if 'Placement' not in df.columns or df.empty:
+        return pd.DataFrame(columns=['Campaign', 'PL', 'Impressions',
+                                     'Clicks', 'Spend', 'Sales', 'Orders',
+                                     'CTR', 'CPC', 'ROAS', 'ACOS'])
+
+    df = df.rename(columns={'Campaign Name': 'Campaign'})
+
+    # Auto-detect sales column — handles different Amazon report formats:
+    # "7 Day Total Sales", "7 Day Total Sales ($)", "14 Day Total Sales"
+    if sales_col in df.columns:
+        df = df.rename(columns={sales_col: 'Sales'})
+    else:
+        sales_candidates = [c for c in df.columns if 'Sales' in c and 'Day' in c]
+        if sales_candidates:
+            df = df.rename(columns={sales_candidates[0]: 'Sales'})
+        else:
+            raise ValueError(f"Could not find Sales column. Available: {list(df.columns)}")
 
     order_cols = [c for c in df.columns if 'Orders' in c and 'Day' in c and '#' in c]
     if order_cols:
