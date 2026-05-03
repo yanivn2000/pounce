@@ -305,9 +305,7 @@ with tab_products:
         display_df["Landed Cost"] = display_df.apply(
             lambda r: round(calc_landed_cost(r), 2), axis=1
         )
-        display_df["Break-even ROAS"] = display_df.apply(
-            lambda r: calc_breakeven_roas(r) or "—", axis=1
-        )
+        display_df["Break-even ROAS"] = "Calculated from report"
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     st.divider()
