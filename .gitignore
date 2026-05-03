@@ -1,0 +1,5 @@
+.DS_Store
+nohup.out
+git_pull.sh
+__pycache__/
+*.pyc
