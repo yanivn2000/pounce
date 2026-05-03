@@ -100,6 +100,12 @@ with st.sidebar:
         min_value=100, max_value=50000,
         value=LOW_IMPR_THRESHOLD, step=100,
     )
+    min_margin_pct = st.number_input(
+        "Minimum Profit Margin %",
+        min_value=5, max_value=80,
+        value=25, step=5,
+        help="Bid recommendations will never exceed this margin floor. Default 25%."
+    ) / 100
 
     st.divider()
     products_status = "✅ Loaded" if products_exist() else "⚠️ Not set up"
@@ -149,7 +155,7 @@ with tab_analysis:
                 with open(sp_path, "wb") as f: f.write(sp_file.read())
                 with open(sb_path, "wb") as f: f.write(sb_file.read())
                 try:
-                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map)
+                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct)
                 finally:
                     for p in [sp_path, sb_path]:
                         if os.path.exists(p): os.unlink(p)

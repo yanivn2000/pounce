@@ -163,11 +163,53 @@ def score_label(s: int) -> str:
     return "Not recommended now"
 
 
-def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS) -> str:
+def calc_max_roas_for_margin(avg_price: float, landed_cost: float,
+                              fba_fee: float, min_margin_pct: float,
+                              amazon_fee_pct: float = 0.15) -> float | None:
+    """
+    Calculate the minimum ROAS we can accept without dropping below min_margin_pct.
+    Max ACOS = 1 - min_margin% - amazon_fee% - (fba_fee / price)
+    Min acceptable ROAS = 1 / Max ACOS
+    Returns None if we can't calculate (missing data).
+    """
+    if avg_price <= 0:
+        return None
+    fba_pct    = fba_fee / avg_price
+    max_acos   = 1 - min_margin_pct - amazon_fee_pct - fba_pct
+    if max_acos <= 0:
+        return None
+    return round(1 / max_acos, 2)
+
+
+def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
+                       min_margin_pct: float = 0.25,
+                       cost_data: dict = None,
+                       avg_price: float = 0.0) -> str:
+    """
+    Recommend bid adjustments per placement.
+    Never recommends a bid that would push ROAS below the margin floor.
+    cost_data = {landed_cost, fba_fee} if available from products CSV.
+    avg_price = calculated from report (Sales / Orders).
+    """
     parts = []
     total_spend = sub['Spend'].sum()
     total_sales = sub['Sales'].sum()
     avg_roas = total_sales / total_spend if total_spend > 0 else 0
+
+    # Calculate margin floor ROAS
+    margin_floor_roas = None
+    if cost_data and avg_price > 0:
+        margin_floor_roas = calc_max_roas_for_margin(
+            avg_price=avg_price,
+            landed_cost=cost_data.get('landed_cost', 0),
+            fba_fee=cost_data.get('fba_fee', 0),
+            min_margin_pct=min_margin_pct,
+        )
+    else:
+        # No CSV data — use current Top ROAS as conservative floor
+        top_roas = _get(sub, 'Top', 'ROAS') or 0
+        if top_roas > 0:
+            margin_floor_roas = top_roas * (1 - min_margin_pct)
 
     for pl in ['Top', 'Rest', 'Product']:
         roas  = _get(sub, pl, 'ROAS') or 0
@@ -181,9 +223,9 @@ def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS) -> s
         if roas >= target_roas:
             ratio = roas / avg_roas if avg_roas > 0 else 1
             if pl == 'Top':
-                top_impr  = _get(sub, 'Top', 'Impressions') or 0
+                top_impr   = _get(sub, 'Top', 'Impressions') or 0
                 total_impr = sub['Impressions'].sum()
-                top_share = top_impr / total_impr if total_impr > 0 else 0
+                top_share  = top_impr / total_impr if total_impr > 0 else 0
                 if ratio >= 1.5 and top_share < 0.15:
                     pct = min(int((ratio - 1) * 100), 100)
                 elif ratio >= 1.2:
@@ -192,6 +234,20 @@ def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS) -> s
                     pct = max(min(int((ratio - 1) * 60), 30), 10)
             else:
                 pct = min(max(int((roas / target_roas - 1) * 30), 10), 50)
+
+            # Margin cap: estimate ROAS after bid increase
+            # Higher bid → more spend → lower ROAS. Rough estimate: ROAS drops ~pct/2
+            if margin_floor_roas and roas > 0:
+                estimated_new_roas = roas * (1 - (pct / 200))
+                if estimated_new_roas < margin_floor_roas:
+                    # Cap the bid increase to stay above margin floor
+                    safe_pct = max(int((roas / margin_floor_roas - 1) * 100), 0)
+                    if safe_pct == 0:
+                        parts.append(f"{pl}: 0% (margin floor reached — ROAS {roas:.1f} near limit {margin_floor_roas:.1f})")
+                        continue
+                    parts.append(f"{pl}: +{safe_pct}% ⚠️ capped at margin floor (was +{pct}%)")
+                    continue
+
             parts.append(f"{pl}: +{pct}%")
         else:
             parts.append(f"{pl}: 0% (ROAS {roas:.1f} < target)")
@@ -275,7 +331,8 @@ def analyze(sp_path: str, sb_path: str,
 def analyze_with_products(sp_path: str, sb_path: str,
                            target_roas: float = TARGET_ROAS,
                            low_impr: int = LOW_IMPR_THRESHOLD,
-                           cost_map: dict = None) -> list[CampaignResult]:
+                           cost_map: dict = None,
+                           min_margin_pct: float = 0.25) -> list[CampaignResult]:
     """
     Same as analyze() but uses per-ASIN break-even ROAS when available.
     Price is calculated dynamically from report: Total Sales / Total Orders.
@@ -295,8 +352,11 @@ def analyze_with_products(sp_path: str, sb_path: str,
             return total_sales / total_orders
         return 0.0
 
-    def get_campaign_target(campaign_name: str, avg_price: float) -> float:
-        """Match ASIN in campaign name to break-even ROAS using dynamic price."""
+    def get_campaign_data(campaign_name: str, avg_price: float) -> tuple[float, dict | None]:
+        """
+        Returns (campaign_target_roas, cost_data_or_none).
+        Matches ASIN in campaign name to break-even ROAS using dynamic price.
+        """
         if cost_map and avg_price > 0:
             for asin, costs in cost_map.items():
                 if asin.upper() in campaign_name.upper():
@@ -304,9 +364,9 @@ def analyze_with_products(sp_path: str, sb_path: str,
                     fba_fee     = costs['fba_fee']
                     amazon_fee  = avg_price * AMAZON_FEE_PCT
                     margin      = avg_price - landed_cost - fba_fee - amazon_fee
-                    if margin > 0:
-                        return round(avg_price / margin, 2)
-        return target_roas
+                    be_roas     = round(avg_price / margin, 2) if margin > 0 else target_roas
+                    return be_roas, costs
+        return target_roas, None
 
     sp_grp = load_and_aggregate(sp_path, '7 Day Total Sales')
     sb_grp = load_and_aggregate(sb_path, '14 Day Total Sales')
@@ -322,9 +382,9 @@ def analyze_with_products(sp_path: str, sb_path: str,
 
     for camp in sp_grp['Campaign'].unique():
         sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
-        avg_price   = get_avg_price(sub)
-        camp_target = get_campaign_target(camp, avg_price)
-        sc = score_campaign(sub, camp_target)
+        avg_price              = get_avg_price(sub)
+        camp_target, cost_data = get_campaign_data(camp, avg_price)
+        sc          = score_campaign(sub, camp_target)
         total_spend = sub['Spend'].sum()
         total_sales = sub['Sales'].sum()
         r = CampaignResult(
@@ -336,7 +396,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
             product=_build_placement(sub, 'Product'),
             score=sc,
             score_label=score_label(sc),
-            bid_rec=bid_recommendation(sub, camp_target),
+            bid_rec=bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price),
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
         )
@@ -344,9 +404,9 @@ def analyze_with_products(sp_path: str, sb_path: str,
 
     for camp in sb_grp['Campaign'].unique():
         sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
-        avg_price   = get_avg_price(sub)
-        camp_target = get_campaign_target(camp, avg_price)
-        sc = score_campaign(sub, camp_target)
+        avg_price              = get_avg_price(sub)
+        camp_target, cost_data = get_campaign_data(camp, avg_price)
+        sc          = score_campaign(sub, camp_target)
         total_spend = sub['Spend'].sum()
         total_sales = sub['Sales'].sum()
         r = CampaignResult(
@@ -358,7 +418,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
             product=_build_placement(sub, 'Product'),
             score=sc,
             score_label=score_label(sc),
-            bid_rec=bid_recommendation(sub, camp_target),
+            bid_rec=bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price),
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
         )
