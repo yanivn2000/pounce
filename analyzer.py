@@ -275,21 +275,37 @@ def analyze(sp_path: str, sb_path: str,
 def analyze_with_products(sp_path: str, sb_path: str,
                            target_roas: float = TARGET_ROAS,
                            low_impr: int = LOW_IMPR_THRESHOLD,
-                           breakeven_map: dict = None) -> list[CampaignResult]:
+                           cost_map: dict = None) -> list[CampaignResult]:
     """
     Same as analyze() but uses per-ASIN break-even ROAS when available.
+    Price is calculated dynamically from report: Total Sales / Total Orders.
     Falls back to global target_roas for campaigns without ASIN match.
-    breakeven_map = {asin: break_even_roas}
+    cost_map = {asin: {product_cost, shipping_cost, customs_cost, fba_fee, landed_cost}}
     """
-    if breakeven_map is None:
-        breakeven_map = {}
+    if cost_map is None:
+        cost_map = {}
 
-    def get_campaign_target(campaign_name: str) -> float:
-        """Match ASIN in campaign name to break-even ROAS."""
-        if breakeven_map:
-            for asin, be_roas in breakeven_map.items():
+    AMAZON_FEE_PCT = 0.15
+
+    def get_avg_price(sub: pd.DataFrame) -> float:
+        """Calculate average price per order from report data."""
+        total_sales  = sub['Sales'].sum()
+        total_orders = sub['Orders'].sum()
+        if total_orders > 0:
+            return total_sales / total_orders
+        return 0.0
+
+    def get_campaign_target(campaign_name: str, avg_price: float) -> float:
+        """Match ASIN in campaign name to break-even ROAS using dynamic price."""
+        if cost_map and avg_price > 0:
+            for asin, costs in cost_map.items():
                 if asin.upper() in campaign_name.upper():
-                    return be_roas
+                    landed_cost = costs['landed_cost']
+                    fba_fee     = costs['fba_fee']
+                    amazon_fee  = avg_price * AMAZON_FEE_PCT
+                    margin      = avg_price - landed_cost - fba_fee - amazon_fee
+                    if margin > 0:
+                        return round(avg_price / margin, 2)
         return target_roas
 
     sp_grp = load_and_aggregate(sp_path, '7 Day Total Sales')
@@ -306,7 +322,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
 
     for camp in sp_grp['Campaign'].unique():
         sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
-        camp_target = get_campaign_target(camp)
+        avg_price   = get_avg_price(sub)
+        camp_target = get_campaign_target(camp, avg_price)
         sc = score_campaign(sub, camp_target)
         total_spend = sub['Spend'].sum()
         total_sales = sub['Sales'].sum()
@@ -327,7 +344,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
 
     for camp in sb_grp['Campaign'].unique():
         sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
-        camp_target = get_campaign_target(camp)
+        avg_price   = get_avg_price(sub)
+        camp_target = get_campaign_target(camp, avg_price)
         sc = score_campaign(sub, camp_target)
         total_spend = sub['Spend'].sum()
         total_sales = sub['Sales'].sum()

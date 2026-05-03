@@ -14,7 +14,7 @@ from claude_client import generate_comments
 from excel_builder import build_excel
 from products import (
     load_products, save_products, calc_breakeven_roas, calc_landed_cost,
-    import_csv, get_breakeven_map, products_exist, COLUMNS
+    import_csv, get_cost_map, products_exist, COLUMNS
 )
 
 # ── Session isolation ─────────────────────────────────────────────────────────
@@ -124,11 +124,11 @@ with tab_analysis:
     )
 
     if products_exist():
-        be_map = get_breakeven_map()
-        st.success(f"✅ Product cost data loaded — using per-ASIN break-even ROAS for {len(be_map)} products. Default ROAS target {target_roas} used for others.")
+        cost_map = get_cost_map()
+        st.success(f"✅ Product cost data loaded — break-even ROAS calculated dynamically from report prices for {len(cost_map)} products. Default ROAS target {target_roas} used for others.")
     else:
         st.warning("⚠️ No product cost data found. Using default ROAS target for all campaigns. Go to **Products & Costs** tab to set up.")
-        be_map = {}
+        cost_map = {}
 
     st.divider()
 
@@ -149,7 +149,7 @@ with tab_analysis:
                 with open(sp_path, "wb") as f: f.write(sp_file.read())
                 with open(sb_path, "wb") as f: f.write(sb_file.read())
                 try:
-                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, be_map)
+                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map)
                 finally:
                     for p in [sp_path, sb_path]:
                         if os.path.exists(p): os.unlink(p)
@@ -326,7 +326,6 @@ with tab_products:
         column_config={
             "ASIN":          st.column_config.TextColumn("ASIN", help="Amazon ASIN — must appear in campaign name"),
             "Product Name":  st.column_config.TextColumn("Product Name"),
-            "Price":         st.column_config.NumberColumn("Price $", format="$%.2f", min_value=0.0),
             "Product Cost":  st.column_config.NumberColumn("Product Cost $", format="$%.2f", min_value=0.0),
             "Shipping Cost": st.column_config.NumberColumn("Shipping Cost $", format="$%.2f", min_value=0.0),
             "Customs Cost":  st.column_config.NumberColumn("Customs Cost $", format="$%.2f", min_value=0.0),
@@ -334,24 +333,29 @@ with tab_products:
         }
     )
 
-    # Live break-even preview
+    # Live cost preview (no price — calculated from report)
     if not edited_df.empty:
-        st.markdown("#### 📐 Break-even ROAS Preview")
+        st.markdown("#### 📐 Cost Breakdown Preview")
+        st.markdown(
+            f"<p style='color:{T['text_secondary']};font-size:0.83rem;'>"
+            f"Break-even ROAS will be calculated during analysis using actual avg price from your report.</p>",
+            unsafe_allow_html=True
+        )
         preview_rows = []
         for _, row in edited_df.iterrows():
             asin = str(row.get("ASIN") or "")
             name = str(row.get("Product Name") or "")
-            be   = calc_breakeven_roas(row)
             lc   = calc_landed_cost(row)
-            price = float(row.get("Price") or 0)
-            margin = price - lc - float(row.get("FBA Fee") or 0) - price * 0.15
+            fba  = float(row.get("FBA Fee") or 0)
             preview_rows.append({
-                "ASIN": asin,
-                "Product": name,
-                "Price": f"${price:.2f}",
-                "Landed Cost": f"${lc:.2f}",
-                "Margin": f"${margin:.2f}" if margin > 0 else "⚠️ Negative",
-                "Break-even ROAS": be if be else "⚠️ Check data",
+                "ASIN":          asin,
+                "Product":       name,
+                "Product Cost":  f"${float(row.get('Product Cost') or 0):.2f}",
+                "Shipping Cost": f"${float(row.get('Shipping Cost') or 0):.2f}",
+                "Customs Cost":  f"${float(row.get('Customs Cost') or 0):.2f}",
+                "Landed Cost":   f"${lc:.2f}",
+                "FBA Fee":       f"${fba:.2f}",
+                "Total Fixed Cost": f"${lc + fba:.2f}",
             })
         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
