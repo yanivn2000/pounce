@@ -517,7 +517,8 @@ with tab_sales:
             pct = pd.DataFrame(index=matrix.index, columns=date_cols, dtype=float)
             for i, col in enumerate(date_cols):
                 if yoy_mode and ly_matrix is not None and col in ly_matrix.columns:
-                    ly_vals = ly_matrix.set_index("asin")[col].reindex(matrix["asin"].values).values
+                    ly_by_asin = ly_matrix.groupby("asin")[col].sum()
+                    ly_vals = ly_by_asin.reindex(matrix["asin"].values).values
                     cur_vals = matrix[col].values.astype(float)
                     pct[col] = pd.Series(
                         [(c - l) / l * 100 if l and l > 0 else None
