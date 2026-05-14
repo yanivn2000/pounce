@@ -555,7 +555,21 @@ with tab_sales:
                 .apply(_color_matrix, axis=None)
                 .format({c: "{:,.0f}" for c in date_cols})
             )
-            st.dataframe(styled, use_container_width=True)
+            st.markdown("""
+                <style>
+                [data-testid="stDataFrame"] .dvn-scroller [role="gridcell"],
+                [data-testid="stDataFrame"] .dvn-scroller [role="columnheader"] {
+                    padding-top: 3px !important;
+                    padding-bottom: 3px !important;
+                    min-height: unset !important;
+                }
+                </style>
+            """, unsafe_allow_html=True)
+            col_cfg = {
+                "asin":  st.column_config.TextColumn("ASIN",  width=120),
+                "title": st.column_config.TextColumn("Title", width=240),
+            }
+            st.dataframe(styled, use_container_width=True, column_config=col_cfg)
 
         # ── Change log per product ────────────────────────────────────────────
         st.divider()
