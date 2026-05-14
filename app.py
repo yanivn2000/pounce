@@ -130,8 +130,8 @@ with st.sidebar:
     )
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_analysis, tab_products, tab_sales, tab_recs = st.tabs([
-    "📊 Analysis", "📦 Products & Costs", "📈 Sales Dashboard", "📋 Recommendations"
+tab_analysis, tab_products, tab_sales, tab_recs, tab_admin = st.tabs([
+    "📊 Analysis", "📦 Products & Costs", "📈 Sales Dashboard", "📋 Recommendations", "⚙️ Admin"
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -678,3 +678,59 @@ with tab_recs:
                     st.rerun()
                 else:
                     st.warning("Enter an outcome first.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — ADMIN
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_admin:
+    st.markdown("# ⚙️ Admin")
+    st.markdown(
+        f"<p style='color:{T['text_secondary']};'>Maintenance tools. Use with care.</p>",
+        unsafe_allow_html=True
+    )
+    st.divider()
+
+    st.markdown("### 🗑️ Reset Data")
+
+    from db.database import get_conn as _get_conn
+
+    def _count(table):
+        conn = _get_conn()
+        n = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        conn.close()
+        return n
+
+    rec_count = _count("recommendations")
+    log_count = _count("change_log")
+
+    st.markdown(
+        f"Current records: &nbsp;"
+        f"<strong>{rec_count:,}</strong> recommendations &nbsp;·&nbsp; "
+        f"<strong>{log_count:,}</strong> change log entries",
+        unsafe_allow_html=True
+    )
+    st.divider()
+
+    col_r, col_c = st.columns(2)
+
+    with col_r:
+        st.markdown("#### Recommendations")
+        confirm_recs = st.checkbox("Yes, delete all recommendations", key="confirm_recs")
+        if st.button("🗑️ Delete All Recommendations", type="primary", disabled=not confirm_recs):
+            conn = _get_conn()
+            with conn:
+                conn.execute("DELETE FROM recommendations")
+            conn.close()
+            st.success(f"✅ Deleted {rec_count:,} recommendations.")
+            st.rerun()
+
+    with col_c:
+        st.markdown("#### Change Log")
+        confirm_log = st.checkbox("Yes, delete all change log entries", key="confirm_log")
+        if st.button("🗑️ Delete All Change Log", type="primary", disabled=not confirm_log):
+            conn = _get_conn()
+            with conn:
+                conn.execute("DELETE FROM change_log")
+            conn.close()
+            st.success(f"✅ Deleted {log_count:,} change log entries.")
+            st.rerun()
