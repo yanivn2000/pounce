@@ -177,6 +177,35 @@ with tab_analysis:
                     for p in [sp_path, sb_path]:
                         if os.path.exists(p): os.unlink(p)
 
+            # ── Auto-save recommendations to DB ──────────────────────────────
+            today_str   = str(date.today())
+            review_str  = str(date.today() + timedelta(days=14))
+            saved_count = 0
+            cost_map_for_asin = cost_map  # already loaded above
+            for r in results:
+                asin = next(
+                    (a for a in cost_map_for_asin if a.upper() in r.campaign.upper()),
+                    None
+                )
+                for pl_rec in r.bid_recs_data:
+                    save_recommendation({
+                        "date_given":             today_str,
+                        "asin":                   asin,
+                        "marketplace":            r.marketplace,
+                        "campaign_name":          r.campaign,
+                        "placement_type":         pl_rec["placement_type"],
+                        "campaign_type":          r.ad_type,
+                        "current_multiplier":     None,
+                        "recommended_action":     pl_rec["recommended_action"],
+                        "recommended_multiplier": pl_rec["recommended_multiplier"],
+                        "reasoning":              pl_rec["reasoning"],
+                        "window_days":            14,
+                        "review_date":            review_str,
+                    })
+                    saved_count += 1
+            if saved_count:
+                st.success(f"✅ {saved_count} placement recommendations auto-saved to history.")
+
             if api_key:
                 st.markdown("### 🤖 Generating AI Comments...")
                 progress_bar = st.progress(0)

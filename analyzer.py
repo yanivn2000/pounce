@@ -69,6 +69,7 @@ class CampaignResult:
     score: int = 0
     score_label: str = ''
     bid_rec: str = ''
+    bid_recs_data: list = field(default_factory=list)  # structured per-placement recs
     alert: str = ''
     comment: str = ''       # filled by Claude API
     total_roas: float = 0.0
@@ -225,17 +226,25 @@ def calc_max_roas_for_margin(avg_price: float, landed_cost: float,
     return round(1 / max_acos, 2)
 
 
+_PL_LABEL = {
+    'Top':     'Top of Search',
+    'Rest':    'Rest of Search',
+    'Product': 'Product Pages',
+}
+
+
 def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
                        min_margin_pct: float = 0.25,
                        cost_data: dict = None,
-                       avg_price: float = 0.0) -> str:
+                       avg_price: float = 0.0) -> tuple[str, list[dict]]:
     """
     Recommend bid adjustments per placement.
-    Never recommends a bid that would push ROAS below the margin floor.
-    cost_data = {landed_cost, fba_fee} if available from products CSV.
-    avg_price = calculated from report (Sales / Orders).
+    Returns (display_string, structured_list).
+    structured_list has one dict per placement with spend > 0:
+      {placement_type, recommended_action, recommended_multiplier, reasoning, spend, roas, orders}
     """
     parts = []
+    structured = []
     total_spend = sub['Spend'].sum()
     total_sales = sub['Sales'].sum()
     avg_roas = total_sales / total_spend if total_spend > 0 else 0
@@ -250,7 +259,6 @@ def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
             min_margin_pct=min_margin_pct,
         )
     else:
-        # No CSV data — use current Top ROAS as conservative floor
         top_roas = _get(sub, 'Top', 'ROAS') or 0
         if top_roas > 0:
             margin_floor_roas = top_roas * (1 - min_margin_pct)
@@ -262,11 +270,25 @@ def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
         orders = _get(sub, pl, 'Orders') or 0
         if spend == 0:
             continue
+
+        def _rec(action, multiplier, text):
+            parts.append(f"{pl}: {text}")
+            structured.append({
+                "placement_type":         _PL_LABEL[pl],
+                "recommended_action":     action,
+                "recommended_multiplier": multiplier,
+                "reasoning":              text,
+                "spend":                  round(float(spend), 2),
+                "roas":                   round(float(roas), 2) if roas else None,
+                "orders":                 int(orders),
+            })
+
         if sales == 0:
-            parts.append(f"{pl}: no sales — don't raise")
+            _rec("No sales", 0, "no sales — don't raise")
             continue
         if orders < 3:
-            parts.append(f"{pl}: insufficient data ({int(orders)} order{'s' if orders != 1 else ''}) — monitor before raising")
+            _rec("Insufficient data", None,
+                 f"insufficient data ({int(orders)} order{'s' if orders != 1 else ''}) — monitor before raising")
             continue
         if roas >= target_roas:
             ratio = roas / avg_roas if avg_roas > 0 else 1
@@ -283,24 +305,23 @@ def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
             else:
                 pct = min(max(int((roas / target_roas - 1) * 30), 10), 50)
 
-            # Margin cap: estimate ROAS after bid increase
-            # Higher bid → more spend → lower ROAS. Rough estimate: ROAS drops ~pct/2
             if margin_floor_roas and roas > 0:
                 estimated_new_roas = roas * (1 - (pct / 200))
                 if estimated_new_roas < margin_floor_roas:
-                    # Cap the bid increase to stay above margin floor
                     safe_pct = max(int((roas / margin_floor_roas - 1) * 100), 0)
                     if safe_pct == 0:
-                        parts.append(f"{pl}: 0% (margin floor reached — ROAS {roas:.1f} near limit {margin_floor_roas:.1f})")
+                        _rec("Keep", 0,
+                             f"0% (margin floor reached — ROAS {roas:.1f} near limit {margin_floor_roas:.1f})")
                         continue
-                    parts.append(f"{pl}: +{safe_pct}% ⚠️ capped at margin floor (was +{pct}%)")
+                    _rec("Increase", safe_pct,
+                         f"+{safe_pct}% ⚠️ capped at margin floor (was +{pct}%)")
                     continue
 
-            parts.append(f"{pl}: +{pct}%")
+            _rec("Increase", pct, f"+{pct}%")
         else:
-            parts.append(f"{pl}: 0% (ROAS {roas:.1f} < target)")
+            _rec("Keep", 0, f"0% (ROAS {roas:.1f} < target)")
 
-    return " | ".join(parts) if parts else "—"
+    return (" | ".join(parts) if parts else "—"), structured
 
 
 def alert_message(sub: pd.DataFrame, sc: int,
@@ -337,6 +358,7 @@ def analyze(sp_path: str, sb_path: str,
         sc = score_campaign(sub, target_roas)
         total_spend = sub['Spend'].sum()
         total_sales = sub['Sales'].sum()
+        bid_str, bid_data = bid_recommendation(sub, target_roas)
         r = CampaignResult(
             campaign=camp,
             ad_type='SP',
@@ -346,7 +368,8 @@ def analyze(sp_path: str, sb_path: str,
             product=_build_placement(sub, 'Product'),
             score=sc,
             score_label=score_label(sc),
-            bid_rec=bid_recommendation(sub, target_roas),
+            bid_rec=bid_str,
+            bid_recs_data=bid_data,
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
         )
@@ -357,6 +380,7 @@ def analyze(sp_path: str, sb_path: str,
         sc = score_campaign(sub, target_roas)
         total_spend = sub['Spend'].sum()
         total_sales = sub['Sales'].sum()
+        bid_str, bid_data = bid_recommendation(sub, target_roas)
         r = CampaignResult(
             campaign=camp,
             ad_type='SB',
@@ -366,7 +390,8 @@ def analyze(sp_path: str, sb_path: str,
             product=_build_placement(sub, 'Product'),
             score=sc,
             score_label=score_label(sc),
-            bid_rec=bid_recommendation(sub, target_roas),
+            bid_rec=bid_str,
+            bid_recs_data=bid_data,
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
         )
@@ -433,9 +458,10 @@ def analyze_with_products(sp_path: str, sb_path: str,
         sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
         avg_price              = get_avg_price(sub)
         camp_target, cost_data = get_campaign_data(camp, avg_price)
-        sc          = score_campaign(sub, camp_target)
-        total_spend = sub['Spend'].sum()
-        total_sales = sub['Sales'].sum()
+        sc                     = score_campaign(sub, camp_target)
+        total_spend            = sub['Spend'].sum()
+        total_sales            = sub['Sales'].sum()
+        bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
         r = CampaignResult(
             campaign=camp,
             ad_type='SP',
@@ -445,7 +471,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
             product=_build_placement(sub, 'Product'),
             score=sc,
             score_label=score_label(sc),
-            bid_rec=bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price),
+            bid_rec=bid_str,
+            bid_recs_data=bid_data,
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
             marketplace=marketplace,
@@ -456,9 +483,10 @@ def analyze_with_products(sp_path: str, sb_path: str,
         sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
         avg_price              = get_avg_price(sub)
         camp_target, cost_data = get_campaign_data(camp, avg_price)
-        sc          = score_campaign(sub, camp_target)
-        total_spend = sub['Spend'].sum()
-        total_sales = sub['Sales'].sum()
+        sc                     = score_campaign(sub, camp_target)
+        total_spend            = sub['Spend'].sum()
+        total_sales            = sub['Sales'].sum()
+        bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
         r = CampaignResult(
             campaign=camp,
             ad_type='SB',
@@ -468,7 +496,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
             product=_build_placement(sub, 'Product'),
             score=sc,
             score_label=score_label(sc),
-            bid_rec=bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price),
+            bid_rec=bid_str,
+            bid_recs_data=bid_data,
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
             marketplace=marketplace,
