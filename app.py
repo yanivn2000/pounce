@@ -684,13 +684,39 @@ with tab_recs:
                 (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
             ]
 
+        def _fmt_change(row):
+            action = str(row.get("recommended_action") or "").strip()
+            mult   = row.get("recommended_multiplier")
+            try:
+                pct = int(round(float(mult)))
+            except (TypeError, ValueError):
+                pct = None
+            if action.lower() == "increase" and pct is not None:
+                return f"+{pct}%"
+            elif action.lower() == "decrease" and pct is not None:
+                return f"-{pct}%"
+            elif action.lower() == "no change":
+                return "0%"
+            return action or "—"
+
+        recs_display = recs_df.copy()
+        recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
+
         display_cols = [
             "id", "date_given", "asin", "marketplace", "campaign_name",
-            "placement_type", "campaign_type", "recommended_action",
-            "recommended_multiplier", "review_date", "outcome"
+            "placement_type", "campaign_type", "change",
+            "reasoning", "review_date", "outcome"
         ]
-        existing_cols = [c for c in display_cols if c in recs_df.columns]
-        st.dataframe(recs_df[existing_cols], use_container_width=True, hide_index=True)
+        existing_cols = [c for c in display_cols if c in recs_display.columns]
+        st.dataframe(
+            recs_display[existing_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "change":    st.column_config.TextColumn("Change",    width=90),
+                "reasoning": st.column_config.TextColumn("Reasoning", width=400),
+            }
+        )
 
         # ── Record outcome ────────────────────────────────────────────────────
         st.divider()
