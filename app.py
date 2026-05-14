@@ -543,10 +543,11 @@ with tab_sales:
                             p = float(p)
                         except (TypeError, ValueError):
                             continue
+                        col_loc = styles.columns.get_loc(col)
                         if p >= threshold:
-                            styles.iloc[pos][col] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
+                            styles.iloc[pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
                         elif p <= -threshold:
-                            styles.iloc[pos][col] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                            styles.iloc[pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
                 return styles
 
             styled = (
