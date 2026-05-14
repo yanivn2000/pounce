@@ -19,8 +19,7 @@ def get_conn() -> sqlite3.Connection:
 def init_db():
     """Create all tables if they don't exist."""
     conn = get_conn()
-    with conn:
-        conn.executescript("""
+    conn.executescript("""
             CREATE TABLE IF NOT EXISTS products (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 asin        TEXT NOT NULL,
@@ -79,23 +78,49 @@ def init_db():
 
             CREATE TABLE IF NOT EXISTS product_costs (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                asin            TEXT NOT NULL,
-                marketplace     TEXT NOT NULL DEFAULT 'amazon.com',
+                asin            TEXT NOT NULL UNIQUE,
                 product_name    TEXT,
                 product_cost    REAL DEFAULT 0,
                 shipping_cost   REAL DEFAULT 0,
                 customs_cost    REAL DEFAULT 0,
                 fba_fee         REAL DEFAULT 0,
-                updated_at      TEXT DEFAULT (datetime('now')),
-                UNIQUE(asin, marketplace)
+                updated_at      TEXT DEFAULT (datetime('now'))
             );
 
-            CREATE INDEX IF NOT EXISTS idx_orders_date     ON orders(order_date);
-            CREATE INDEX IF NOT EXISTS idx_orders_asin     ON orders(asin);
-            CREATE INDEX IF NOT EXISTS idx_orders_market   ON orders(marketplace);
-            CREATE INDEX IF NOT EXISTS idx_recs_date       ON recommendations(date_given);
-            CREATE INDEX IF NOT EXISTS idx_recs_asin       ON recommendations(asin);
-            CREATE INDEX IF NOT EXISTS idx_changelog_asin  ON change_log(asin, log_date);
-            CREATE INDEX IF NOT EXISTS idx_costs_market    ON product_costs(marketplace);
+            CREATE INDEX IF NOT EXISTS idx_orders_date    ON orders(order_date);
+            CREATE INDEX IF NOT EXISTS idx_orders_asin    ON orders(asin);
+            CREATE INDEX IF NOT EXISTS idx_orders_market  ON orders(marketplace);
+            CREATE INDEX IF NOT EXISTS idx_recs_date      ON recommendations(date_given);
+            CREATE INDEX IF NOT EXISTS idx_recs_asin      ON recommendations(asin);
+            CREATE INDEX IF NOT EXISTS idx_changelog_asin ON change_log(asin, log_date);
         """)
+    _migrate_product_costs(conn)
+    conn.close()
+
+
+def _migrate_product_costs(conn: sqlite3.Connection):
+    """If product_costs still has a marketplace column, collapse to one row per ASIN."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(product_costs)").fetchall()]
+    if "marketplace" not in cols:
+        return
+    # Recreate without marketplace column, keeping one row per ASIN (latest updated_at)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS product_costs_new (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            asin          TEXT NOT NULL UNIQUE,
+            product_name  TEXT,
+            product_cost  REAL DEFAULT 0,
+            shipping_cost REAL DEFAULT 0,
+            customs_cost  REAL DEFAULT 0,
+            fba_fee       REAL DEFAULT 0,
+            updated_at    TEXT DEFAULT (datetime('now'))
+        );
+        INSERT OR IGNORE INTO product_costs_new
+            (asin, product_name, product_cost, shipping_cost, customs_cost, fba_fee, updated_at)
+        SELECT asin, product_name, product_cost, shipping_cost, customs_cost, fba_fee, MAX(updated_at)
+        FROM product_costs
+        GROUP BY asin;
+        DROP TABLE product_costs;
+        ALTER TABLE product_costs_new RENAME TO product_costs;
+    """)
     conn.close()

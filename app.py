@@ -10,7 +10,7 @@ import uuid
 import pandas as pd
 import io
 from datetime import date, timedelta
-from analyzer import analyze_with_products, TARGET_ROAS, LOW_IMPR_THRESHOLD
+from analyzer import analyze_with_products, detect_marketplace_from_xlsx, TARGET_ROAS, LOW_IMPR_THRESHOLD
 from claude_client import generate_comments
 from excel_builder import build_excel
 from products import (
@@ -19,6 +19,9 @@ from products import (
     load_products_db, save_products_db, get_cost_map_db, products_exist_db,
     delete_product_db, migrate_csv_to_db, DB_COLUMNS,
 )
+# One-time migration from CSV to DB on startup
+if products_exist() and not products_exist_db():
+    migrate_csv_to_db()
 from db.database import init_db
 from db.importer import import_orders_csv, save_recommendation, update_recommendation_outcome
 from db.queries import (
@@ -86,24 +89,11 @@ h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace !important; letter-spacing
 </style>
 """, unsafe_allow_html=True)
 
-MARKETPLACES = ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"]
-
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🐾 Pounce")
     st.markdown(f"<p style='color:{T['text_secondary']};font-size:0.8rem;margin-top:-10px;'>Hunt down your best placements.</p>", unsafe_allow_html=True)
     st.divider()
-
-    marketplace = st.selectbox(
-        "🌍 Marketplace",
-        MARKETPLACES,
-        index=0,
-        help="Select the marketplace for this session. Product costs and analysis are scoped per marketplace.",
-    )
-
-    # One-time migration: if CSV exists but DB has no costs for this marketplace, import it
-    if products_exist() and not products_exist_db(marketplace):
-        migrate_csv_to_db(marketplace)
 
     api_key = st.text_input(
         "Anthropic API Key",
@@ -132,8 +122,8 @@ with st.sidebar:
     ) / 100
 
     st.divider()
-    products_status = "✅ Loaded" if products_exist_db(marketplace) else "⚠️ Not set up"
-    st.markdown(f"**Product Costs ({marketplace}):** {products_status}")
+    products_status = "✅ Loaded" if products_exist_db() else "⚠️ Not set up"
+    st.markdown(f"**Product Costs:** {products_status}")
     st.markdown(
         f"<div style='color:{T['text_secondary']};font-size:0.75rem;margin-top:1rem;'>triple gifted · Pounce v1.0</div>",
         unsafe_allow_html=True
@@ -155,11 +145,11 @@ with tab_analysis:
         unsafe_allow_html=True
     )
 
-    if products_exist_db(marketplace):
-        cost_map = get_cost_map_db(marketplace)
-        st.success(f"✅ Product cost data loaded for **{marketplace}** — break-even ROAS calculated dynamically for {len(cost_map)} products. Default ROAS target {target_roas} used for others.")
+    if products_exist_db():
+        cost_map = get_cost_map_db()
+        st.success(f"✅ Product cost data loaded — break-even ROAS calculated dynamically for {len(cost_map)} products. Default ROAS target {target_roas} used for others.")
     else:
-        st.warning(f"⚠️ No product cost data for **{marketplace}**. Using default ROAS target. Go to **Products & Costs** tab to set up.")
+        st.warning("⚠️ No product cost data found. Using default ROAS target. Go to **Products & Costs** tab to set up.")
         cost_map = {}
 
     st.divider()
@@ -180,8 +170,9 @@ with tab_analysis:
                 sb_path = os.path.join(SESSION_DIR, "sb_report.xlsx")
                 with open(sp_path, "wb") as f: f.write(sp_file.read())
                 with open(sb_path, "wb") as f: f.write(sb_file.read())
+                detected_marketplace = detect_marketplace_from_xlsx(sp_path)
                 try:
-                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct, marketplace)
+                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct, detected_marketplace)
                 finally:
                     for p in [sp_path, sb_path]:
                         if os.path.exists(p): os.unlink(p)
@@ -205,6 +196,7 @@ with tab_analysis:
                 st.info("ℹ️ No API key — skipping AI comments.")
 
             st.divider()
+            st.caption(f"🌍 Marketplace auto-detected: **{detected_marketplace}**")
             st.markdown("### 📈 Summary")
 
             sp_count  = sum(1 for r in results if r.ad_type == "SP")
@@ -284,10 +276,10 @@ with tab_analysis:
 # TAB 2 — PRODUCTS & COSTS (per marketplace, DB-backed)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_products:
-    st.markdown(f"# 📦 Products & Costs — {marketplace}")
+    st.markdown("# 📦 Products & Costs")
     st.markdown(
-        f"<p style='color:{T['text_secondary']};'>Product costs are stored per marketplace. "
-        f"Switch the marketplace in the sidebar to manage costs for a different store.</p>",
+        f"<p style='color:{T['text_secondary']};'>Product costs are shared across all marketplaces. "
+        f"Set them once and they apply everywhere.</p>",
         unsafe_allow_html=True
     )
     st.markdown(
@@ -298,7 +290,7 @@ with tab_products:
     st.divider()
 
     # ── Upload CSV ────────────────────────────────────────────────────────────
-    with st.expander("📤 Import CSV for this marketplace", expanded=not products_exist_db(marketplace)):
+    with st.expander("📤 Import CSV", expanded=not products_exist_db()):
         template_path = os.path.join(os.path.dirname(__file__), "data", "products_template.csv")
         if os.path.exists(template_path):
             with open(template_path, "rb") as f:
@@ -315,23 +307,23 @@ with tab_products:
             if err:
                 st.error(f"❌ {err}")
             else:
-                st.success(f"✅ {len(df_imported)} products ready to import for **{marketplace}**.")
+                st.success(f"✅ {len(df_imported)} products ready to import.")
                 st.dataframe(df_imported, use_container_width=True, hide_index=True)
                 if st.button("💾 Save to DB", type="primary"):
-                    save_products_db(df_imported, marketplace)
-                    st.success(f"✅ Saved {len(df_imported)} products for {marketplace}.")
+                    save_products_db(df_imported)
+                    st.success(f"✅ Saved {len(df_imported)} products.")
                     st.rerun()
 
     st.divider()
 
     # ── View & Edit ───────────────────────────────────────────────────────────
-    df_products = load_products_db(marketplace)
+    df_products = load_products_db()
 
     if df_products.empty:
-        st.info(f"No products for **{marketplace}** yet. Upload a CSV above or add rows manually below.")
+        st.info("No products yet. Upload a CSV above or add rows manually below.")
         df_products = pd.DataFrame(columns=DB_COLUMNS)
     else:
-        st.markdown(f"### Current Products — {marketplace}")
+        st.markdown("### Current Products")
         display_df = df_products.copy()
         display_df["Landed Cost"] = display_df.apply(lambda r: round(calc_landed_cost(r), 2), axis=1)
         display_df["Break-even ROAS"] = "Calculated from report"
@@ -384,8 +376,8 @@ with tab_products:
         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
     if st.button("💾 Save Changes", type="primary", use_container_width=True):
-        save_products_db(edited_df, marketplace)
-        st.success(f"✅ Product costs saved for **{marketplace}**. Will be used in next analysis run.")
+        save_products_db(edited_df)
+        st.success("✅ Product costs saved. Will be used in next analysis run.")
         st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -410,14 +402,14 @@ with tab_sales:
         )
         st.markdown(
             f"<p style='color:{T['text_secondary']};font-size:0.82rem;'>"
-            f"Marketplace is auto-detected from the CSV. If the file has no marketplace column, "
-            f"orders will be imported as <strong>{marketplace}</strong> (from sidebar).</p>",
+            f"Marketplace is auto-detected from the <code>sales-channel</code> or <code>currency</code> column in your CSV. "
+            f"No manual selection needed.</p>",
             unsafe_allow_html=True
         )
         orders_file = st.file_uploader("Upload Orders CSV", type=["csv", "txt"], key="orders_csv")
 
         if orders_file and st.button("📥 Import Orders", type="primary"):
-            override = marketplace  # sidebar value as fallback; CSV auto-detect takes priority
+            override = None  # always use CSV auto-detection
             with st.spinner("Importing..."):
                 n, warns = import_orders_csv(orders_file, marketplace_override=override)
             if warns:
@@ -443,17 +435,16 @@ with tab_sales:
         st.divider()
 
         # ── Filters ───────────────────────────────────────────────────────────
+        available_markets = get_marketplaces()
         fcol1, fcol2, fcol3 = st.columns(3)
         with fcol1:
-            show_all_markets = st.checkbox("Show all marketplaces", value=False, key="dash_all_markets")
-            sel_market = None if show_all_markets else marketplace
+            mkt_options = ["all"] + available_markets
+            sel_market_raw = st.selectbox("Marketplace", mkt_options, key="dash_market")
+            sel_market = None if sel_market_raw == "all" else sel_market_raw
         with fcol2:
             view_mode = st.radio("View", ["Daily", "Weekly"], horizontal=True, key="dash_view")
         with fcol3:
             days_back = st.selectbox("Period", [7, 14, 30, 60, 90], index=2, key="dash_days")
-
-        if not show_all_markets:
-            st.caption(f"Showing: **{marketplace}** — check 'Show all marketplaces' to view across stores.")
 
         # ── Revenue matrix ────────────────────────────────────────────────────
         st.divider()
@@ -538,7 +529,7 @@ with tab_sales:
             with cl3:
                 cl_notes = st.text_input("Notes", placeholder="Reduced price from $29.99 to $24.99")
             cl_date = st.date_input("Date", value=date.today())
-            st.caption(f"Will be logged for: **{marketplace}**")
+            cl_mkt  = st.selectbox("Marketplace", ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="cl_market")
 
             if st.form_submit_button("➕ Add Entry"):
                 if cl_asin.strip():
@@ -547,7 +538,7 @@ with tab_sales:
                     with conn2:
                         conn2.execute(
                             "INSERT INTO change_log (log_date, asin, marketplace, change_type, notes) VALUES (?,?,?,?,?)",
-                            (str(cl_date), cl_asin.strip().upper(), marketplace, cl_type, cl_notes)
+                            (str(cl_date), cl_asin.strip().upper(), cl_mkt, cl_type, cl_notes)
                         )
                     conn2.close()
                     st.success("✅ Logged.")
@@ -589,7 +580,7 @@ with tab_recs:
                 r_action  = st.selectbox("Recommended Action", ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"])
                 r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900, value=0)
 
-            st.caption(f"Will be saved for: **{marketplace}**")
+            r_mkt = st.selectbox("Marketplace", ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rec_mkt")
             r_reasoning = st.text_area("Reasoning / Notes")
             r_review = st.date_input("Review Date", value=date.today() + timedelta(days=14))
 
@@ -597,7 +588,7 @@ with tab_recs:
                 save_recommendation({
                     "date_given":             str(r_date),
                     "asin":                   r_asin.strip().upper() or None,
-                    "marketplace":            marketplace,
+                    "marketplace":            r_mkt,
                     "campaign_name":          r_camp,
                     "placement_type":         r_place,
                     "campaign_type":          r_type,
@@ -616,10 +607,8 @@ with tab_recs:
     # ── Filter + list ─────────────────────────────────────────────────────────
     rhf1, rhf2 = st.columns(2)
     with rhf1:
-        rh_show_all = st.checkbox("Show all marketplaces", value=False, key="rh_all")
-        rh_market = None if rh_show_all else marketplace
-        if not rh_show_all:
-            st.caption(f"Showing: **{marketplace}**")
+        rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
+        rh_market = None if rh_market == "all" else rh_market
     with rhf2:
         show_pending = st.checkbox("Show only pending review", value=False)
 

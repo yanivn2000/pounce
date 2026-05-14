@@ -68,9 +68,16 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
 
     warnings = []
 
-    # CSV auto-detect wins; marketplace_override is used only when CSV has no sales-channel column
+    _CURRENCY_MAP = {"USD": "amazon.com", "CAD": "amazon.ca",
+                     "GBP": "amazon.co.uk", "EUR": "amazon.de", "AUD": "amazon.com.au"}
+
+    # Priority: sales-channel column → currency column → override → default
     if "marketplace" in df.columns:
         df["marketplace"] = df["marketplace"].apply(_normalize_marketplace)
+    elif "currency" in df.columns:
+        df["marketplace"] = df["currency"].str.strip().str.upper().map(
+            lambda c: _CURRENCY_MAP.get(c, marketplace_override or "amazon.com")
+        )
     elif marketplace_override:
         df["marketplace"] = _normalize_marketplace(marketplace_override)
     else:

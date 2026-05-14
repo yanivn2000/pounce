@@ -12,6 +12,31 @@ from typing import Optional
 TARGET_ROAS = 3.0
 LOW_IMPR_THRESHOLD = 1000
 
+_CURRENCY_TO_MARKETPLACE = {
+    "USD": "amazon.com",
+    "CAD": "amazon.ca",
+    "GBP": "amazon.co.uk",
+    "EUR": "amazon.de",
+    "AUD": "amazon.com.au",
+}
+
+
+def detect_marketplace_from_xlsx(path: str) -> str:
+    """
+    Read the first data row of an Amazon ads report and detect marketplace from currency.
+    Falls back to 'amazon.com' if not detectable.
+    """
+    try:
+        df = pd.read_excel(path, nrows=5)
+        df.columns = df.columns.str.strip()
+        for col in ("Currency", "currency"):
+            if col in df.columns:
+                val = str(df[col].dropna().iloc[0]).strip().upper()
+                return _CURRENCY_TO_MARKETPLACE.get(val, "amazon.com")
+    except Exception:
+        pass
+    return "amazon.com"
+
 PLACEMENT_MAP = {
     'Top of Search on Amazon': 'Top',
     'Rest of search on Amazon': 'Rest',
