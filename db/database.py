@@ -104,6 +104,7 @@ def _migrate_recommendations_score(conn: sqlite3.Connection):
     cols = [r[1] for r in conn.execute("PRAGMA table_info(recommendations)").fetchall()]
     if "score" not in cols:
         conn.execute("ALTER TABLE recommendations ADD COLUMN score INTEGER")
+        conn.commit()
 
 
 def _migrate_product_costs(conn: sqlite3.Connection):
