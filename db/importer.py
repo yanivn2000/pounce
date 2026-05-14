@@ -68,11 +68,11 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
 
     warnings = []
 
-    # Normalize marketplace
-    if marketplace_override:
-        df["marketplace"] = _normalize_marketplace(marketplace_override)
-    elif "marketplace" in df.columns:
+    # CSV auto-detect wins; marketplace_override is used only when CSV has no sales-channel column
+    if "marketplace" in df.columns:
         df["marketplace"] = df["marketplace"].apply(_normalize_marketplace)
+    elif marketplace_override:
+        df["marketplace"] = _normalize_marketplace(marketplace_override)
     else:
         df["marketplace"] = "amazon.com"
 

@@ -408,18 +408,16 @@ with tab_sales:
             f"You can import multiple files — duplicates are handled automatically.</p>",
             unsafe_allow_html=True
         )
-        col_up1, col_up2 = st.columns([3, 1])
-        with col_up1:
-            orders_file = st.file_uploader("Upload Orders CSV", type=["csv", "txt"], key="orders_csv")
-        with col_up2:
-            marketplace_override = st.selectbox(
-                "Marketplace (if not in CSV)",
-                ["auto-detect", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"],
-                key="mkt_override"
-            )
+        st.markdown(
+            f"<p style='color:{T['text_secondary']};font-size:0.82rem;'>"
+            f"Marketplace is auto-detected from the CSV. If the file has no marketplace column, "
+            f"orders will be imported as <strong>{marketplace}</strong> (from sidebar).</p>",
+            unsafe_allow_html=True
+        )
+        orders_file = st.file_uploader("Upload Orders CSV", type=["csv", "txt"], key="orders_csv")
 
         if orders_file and st.button("📥 Import Orders", type="primary"):
-            override = None if marketplace_override == "auto-detect" else marketplace_override
+            override = marketplace  # sidebar value as fallback; CSV auto-detect takes priority
             with st.spinner("Importing..."):
                 n, warns = import_orders_csv(orders_file, marketplace_override=override)
             if warns:
@@ -445,28 +443,27 @@ with tab_sales:
         st.divider()
 
         # ── Filters ───────────────────────────────────────────────────────────
-        marketplaces = get_marketplaces()
-        mkt_options = ["all"] + marketplaces
         fcol1, fcol2, fcol3 = st.columns(3)
         with fcol1:
-            sel_market = st.selectbox("Marketplace", mkt_options, key="dash_market")
+            show_all_markets = st.checkbox("Show all marketplaces", value=False, key="dash_all_markets")
+            sel_market = None if show_all_markets else marketplace
         with fcol2:
             view_mode = st.radio("View", ["Daily", "Weekly"], horizontal=True, key="dash_view")
         with fcol3:
             days_back = st.selectbox("Period", [7, 14, 30, 60, 90], index=2, key="dash_days")
+
+        if not show_all_markets:
+            st.caption(f"Showing: **{marketplace}** — check 'Show all marketplaces' to view across stores.")
 
         # ── Revenue matrix ────────────────────────────────────────────────────
         st.divider()
         st.markdown("### Revenue Matrix ($ per product per day)")
 
         if view_mode == "Daily":
-            matrix = get_sales_matrix(
-                marketplace=None if sel_market == "all" else sel_market,
-                days=days_back
-            )
+            matrix = get_sales_matrix(marketplace=sel_market, days=days_back)
         else:
             matrix = get_weekly_summary(
-                marketplace=None if sel_market == "all" else sel_market,
+                marketplace=sel_market,
                 weeks=days_back // 7 or 1
             )
             if not matrix.empty:
@@ -540,8 +537,8 @@ with tab_sales:
                 cl_type = st.selectbox("Change Type", ["price", "image", "title", "deal", "listing", "other"])
             with cl3:
                 cl_notes = st.text_input("Notes", placeholder="Reduced price from $29.99 to $24.99")
-            cl_date  = st.date_input("Date", value=date.today())
-            cl_mkt   = st.selectbox("Marketplace", mkt_options, key="cl_market")
+            cl_date = st.date_input("Date", value=date.today())
+            st.caption(f"Will be logged for: **{marketplace}**")
 
             if st.form_submit_button("➕ Add Entry"):
                 if cl_asin.strip():
@@ -550,9 +547,7 @@ with tab_sales:
                     with conn2:
                         conn2.execute(
                             "INSERT INTO change_log (log_date, asin, marketplace, change_type, notes) VALUES (?,?,?,?,?)",
-                            (str(cl_date), cl_asin.strip().upper(),
-                             cl_mkt if cl_mkt != "all" else "amazon.com",
-                             cl_type, cl_notes)
+                            (str(cl_date), cl_asin.strip().upper(), marketplace, cl_type, cl_notes)
                         )
                     conn2.close()
                     st.success("✅ Logged.")
@@ -560,10 +555,7 @@ with tab_sales:
                 else:
                     st.warning("ASIN is required.")
 
-        cl_df = get_change_log(
-            marketplace=None if sel_market == "all" else sel_market,
-            days=days_back
-        )
+        cl_df = get_change_log(marketplace=sel_market, days=days_back)
         if not cl_df.empty:
             st.dataframe(
                 cl_df[["log_date", "asin", "marketplace", "change_type", "notes"]],
@@ -597,8 +589,7 @@ with tab_recs:
                 r_action  = st.selectbox("Recommended Action", ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"])
                 r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900, value=0)
 
-            marketplaces2 = get_marketplaces() or ["amazon.com"]
-            r_mkt = st.selectbox("Marketplace", marketplaces2, key="rec_mkt")
+            st.caption(f"Will be saved for: **{marketplace}**")
             r_reasoning = st.text_area("Reasoning / Notes")
             r_review = st.date_input("Review Date", value=date.today() + timedelta(days=14))
 
@@ -606,7 +597,7 @@ with tab_recs:
                 save_recommendation({
                     "date_given":             str(r_date),
                     "asin":                   r_asin.strip().upper() or None,
-                    "marketplace":            r_mkt,
+                    "marketplace":            marketplace,
                     "campaign_name":          r_camp,
                     "placement_type":         r_place,
                     "campaign_type":          r_type,
@@ -623,17 +614,16 @@ with tab_recs:
     st.divider()
 
     # ── Filter + list ─────────────────────────────────────────────────────────
-    rh_marketplaces = get_marketplaces()
-    rh_mkt_opts = ["all"] + rh_marketplaces
     rhf1, rhf2 = st.columns(2)
     with rhf1:
-        rh_market = st.selectbox("Filter by Marketplace", rh_mkt_opts, key="rh_market")
+        rh_show_all = st.checkbox("Show all marketplaces", value=False, key="rh_all")
+        rh_market = None if rh_show_all else marketplace
+        if not rh_show_all:
+            st.caption(f"Showing: **{marketplace}**")
     with rhf2:
         show_pending = st.checkbox("Show only pending review", value=False)
 
-    recs_df = get_recommendations_history(
-        marketplace=None if rh_market == "all" else rh_market
-    )
+    recs_df = get_recommendations_history(marketplace=rh_market)
 
     if recs_df.empty:
         st.info("No recommendations logged yet. Run an analysis or add one manually above.")
