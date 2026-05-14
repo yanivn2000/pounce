@@ -2,7 +2,8 @@
 products.py
 Manages product cost data — load, save, calculate break-even ROAS.
 Price is calculated dynamically from the ads report (Sales / Orders).
-Data is stored in data/products.csv on the server.
+Costs are stored per marketplace in SQLite (product_costs table).
+Legacy CSV path kept for migration only.
 """
 
 import pandas as pd
@@ -113,3 +114,100 @@ def import_csv(uploaded_file) -> tuple[pd.DataFrame, str]:
 
 def products_exist() -> bool:
     return os.path.exists(PRODUCTS_PATH) and os.path.getsize(PRODUCTS_PATH) > 0
+
+
+# ── DB-backed product costs (per marketplace) ─────────────────────────────────
+
+DB_COLUMNS = ["ASIN", "Product Name", "Product Cost", "Shipping Cost", "Customs Cost", "FBA Fee"]
+
+
+def load_products_db(marketplace: str = "amazon.com") -> pd.DataFrame:
+    from db.database import get_conn
+    conn = get_conn()
+    df = pd.read_sql_query(
+        "SELECT asin AS ASIN, product_name AS 'Product Name', "
+        "product_cost AS 'Product Cost', shipping_cost AS 'Shipping Cost', "
+        "customs_cost AS 'Customs Cost', fba_fee AS 'FBA Fee' "
+        "FROM product_costs WHERE marketplace = ? ORDER BY asin",
+        conn, params=[marketplace]
+    )
+    conn.close()
+    return df
+
+
+def save_products_db(df: pd.DataFrame, marketplace: str = "amazon.com"):
+    from db.database import get_conn
+    conn = get_conn()
+    with conn:
+        for _, row in df.iterrows():
+            asin = str(row.get("ASIN", "")).strip().upper()
+            if not asin:
+                continue
+            conn.execute("""
+                INSERT INTO product_costs
+                    (asin, marketplace, product_name, product_cost,
+                     shipping_cost, customs_cost, fba_fee, updated_at)
+                VALUES (?,?,?,?,?,?,?,datetime('now'))
+                ON CONFLICT(asin, marketplace) DO UPDATE SET
+                    product_name  = excluded.product_name,
+                    product_cost  = excluded.product_cost,
+                    shipping_cost = excluded.shipping_cost,
+                    customs_cost  = excluded.customs_cost,
+                    fba_fee       = excluded.fba_fee,
+                    updated_at    = datetime('now')
+            """, (
+                asin, marketplace,
+                str(row.get("Product Name") or ""),
+                float(row.get("Product Cost") or 0),
+                float(row.get("Shipping Cost") or 0),
+                float(row.get("Customs Cost") or 0),
+                float(row.get("FBA Fee") or 0),
+            ))
+    conn.close()
+
+
+def delete_product_db(asin: str, marketplace: str = "amazon.com"):
+    from db.database import get_conn
+    conn = get_conn()
+    with conn:
+        conn.execute(
+            "DELETE FROM product_costs WHERE asin = ? AND marketplace = ?",
+            (asin.strip().upper(), marketplace)
+        )
+    conn.close()
+
+
+def get_cost_map_db(marketplace: str = "amazon.com") -> dict:
+    """Returns {ASIN: {product_cost, shipping_cost, customs_cost, fba_fee, landed_cost}}"""
+    df = load_products_db(marketplace)
+    result = {}
+    for _, row in df.iterrows():
+        asin = str(row.get("ASIN", "")).strip()
+        if asin:
+            lc = calc_landed_cost(row)
+            result[asin] = {
+                "product_cost":  float(row.get("Product Cost") or 0),
+                "shipping_cost": float(row.get("Shipping Cost") or 0),
+                "customs_cost":  float(row.get("Customs Cost") or 0),
+                "fba_fee":       float(row.get("FBA Fee") or 0),
+                "landed_cost":   lc,
+            }
+    return result
+
+
+def products_exist_db(marketplace: str = "amazon.com") -> bool:
+    from db.database import get_conn
+    conn = get_conn()
+    n = conn.execute(
+        "SELECT COUNT(*) FROM product_costs WHERE marketplace = ?", [marketplace]
+    ).fetchone()[0]
+    conn.close()
+    return n > 0
+
+
+def migrate_csv_to_db(marketplace: str = "amazon.com"):
+    """One-time migration: import existing products.csv into DB for given marketplace."""
+    if not products_exist():
+        return
+    df = load_products()
+    save_products_db(df, marketplace)

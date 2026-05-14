@@ -47,6 +47,7 @@ class CampaignResult:
     alert: str = ''
     comment: str = ''       # filled by Claude API
     total_roas: float = 0.0
+    marketplace: str = 'amazon.com'
 
 
 def _safe(v):
@@ -354,7 +355,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
                            target_roas: float = TARGET_ROAS,
                            low_impr: int = LOW_IMPR_THRESHOLD,
                            cost_map: dict = None,
-                           min_margin_pct: float = 0.25) -> list[CampaignResult]:
+                           min_margin_pct: float = 0.25,
+                           marketplace: str = 'amazon.com') -> list[CampaignResult]:
     """
     Same as analyze() but uses per-ASIN break-even ROAS when available.
     Price is calculated dynamically from report: Total Sales / Total Orders.
@@ -421,6 +423,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
             bid_rec=bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price),
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
+            marketplace=marketplace,
         )
         results.append(r)
 
@@ -443,6 +446,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
             bid_rec=bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price),
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
+            marketplace=marketplace,
         )
         results.append(r)
 

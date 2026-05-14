@@ -77,11 +77,25 @@ def init_db():
                 created_at              TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS product_costs (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                asin            TEXT NOT NULL,
+                marketplace     TEXT NOT NULL DEFAULT 'amazon.com',
+                product_name    TEXT,
+                product_cost    REAL DEFAULT 0,
+                shipping_cost   REAL DEFAULT 0,
+                customs_cost    REAL DEFAULT 0,
+                fba_fee         REAL DEFAULT 0,
+                updated_at      TEXT DEFAULT (datetime('now')),
+                UNIQUE(asin, marketplace)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_orders_date     ON orders(order_date);
             CREATE INDEX IF NOT EXISTS idx_orders_asin     ON orders(asin);
             CREATE INDEX IF NOT EXISTS idx_orders_market   ON orders(marketplace);
             CREATE INDEX IF NOT EXISTS idx_recs_date       ON recommendations(date_given);
             CREATE INDEX IF NOT EXISTS idx_recs_asin       ON recommendations(asin);
             CREATE INDEX IF NOT EXISTS idx_changelog_asin  ON change_log(asin, log_date);
+            CREATE INDEX IF NOT EXISTS idx_costs_market    ON product_costs(marketplace);
         """)
     conn.close()

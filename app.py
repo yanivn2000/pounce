@@ -15,7 +15,9 @@ from claude_client import generate_comments
 from excel_builder import build_excel
 from products import (
     load_products, save_products, calc_breakeven_roas, calc_landed_cost,
-    import_csv, get_cost_map, products_exist, COLUMNS
+    import_csv, get_cost_map, products_exist, COLUMNS,
+    load_products_db, save_products_db, get_cost_map_db, products_exist_db,
+    delete_product_db, migrate_csv_to_db, DB_COLUMNS,
 )
 from db.database import init_db
 from db.importer import import_orders_csv, save_recommendation, update_recommendation_outcome
@@ -84,11 +86,24 @@ h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace !important; letter-spacing
 </style>
 """, unsafe_allow_html=True)
 
+MARKETPLACES = ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"]
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🐾 Pounce")
     st.markdown(f"<p style='color:{T['text_secondary']};font-size:0.8rem;margin-top:-10px;'>Hunt down your best placements.</p>", unsafe_allow_html=True)
     st.divider()
+
+    marketplace = st.selectbox(
+        "🌍 Marketplace",
+        MARKETPLACES,
+        index=0,
+        help="Select the marketplace for this session. Product costs and analysis are scoped per marketplace.",
+    )
+
+    # One-time migration: if CSV exists but DB has no costs for this marketplace, import it
+    if products_exist() and not products_exist_db(marketplace):
+        migrate_csv_to_db(marketplace)
 
     api_key = st.text_input(
         "Anthropic API Key",
@@ -117,8 +132,8 @@ with st.sidebar:
     ) / 100
 
     st.divider()
-    products_status = "✅ Loaded" if products_exist() else "⚠️ Not set up"
-    st.markdown(f"**Product Costs:** {products_status}")
+    products_status = "✅ Loaded" if products_exist_db(marketplace) else "⚠️ Not set up"
+    st.markdown(f"**Product Costs ({marketplace}):** {products_status}")
     st.markdown(
         f"<div style='color:{T['text_secondary']};font-size:0.75rem;margin-top:1rem;'>triple gifted · Pounce v1.0</div>",
         unsafe_allow_html=True
@@ -140,11 +155,11 @@ with tab_analysis:
         unsafe_allow_html=True
     )
 
-    if products_exist():
-        cost_map = get_cost_map()
-        st.success(f"✅ Product cost data loaded — break-even ROAS calculated dynamically from report prices for {len(cost_map)} products. Default ROAS target {target_roas} used for others.")
+    if products_exist_db(marketplace):
+        cost_map = get_cost_map_db(marketplace)
+        st.success(f"✅ Product cost data loaded for **{marketplace}** — break-even ROAS calculated dynamically for {len(cost_map)} products. Default ROAS target {target_roas} used for others.")
     else:
-        st.warning("⚠️ No product cost data found. Using default ROAS target for all campaigns. Go to **Products & Costs** tab to set up.")
+        st.warning(f"⚠️ No product cost data for **{marketplace}**. Using default ROAS target. Go to **Products & Costs** tab to set up.")
         cost_map = {}
 
     st.divider()
@@ -166,7 +181,7 @@ with tab_analysis:
                 with open(sp_path, "wb") as f: f.write(sp_file.read())
                 with open(sb_path, "wb") as f: f.write(sb_file.read())
                 try:
-                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct)
+                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct, marketplace)
                 finally:
                     for p in [sp_path, sb_path]:
                         if os.path.exists(p): os.unlink(p)
@@ -233,6 +248,7 @@ with tab_analysis:
             table_data = []
             for r in results:
                 table_data.append({
+                    "Marketplace": r.marketplace,
                     "Campaign": r.campaign, "Type": r.ad_type, "Targeting": r.targeting,
                     "Score": r.score, "Label": r.score_label,
                     "Top ROAS": round(r.top.roas, 2) if r.top.roas else None,
@@ -265,13 +281,13 @@ with tab_analysis:
             )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — PRODUCTS & COSTS
+# TAB 2 — PRODUCTS & COSTS (per marketplace, DB-backed)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_products:
-    st.markdown("# 📦 Products & Costs")
+    st.markdown(f"# 📦 Products & Costs — {marketplace}")
     st.markdown(
-        f"<p style='color:{T['text_secondary']};'>Set your product costs once. "
-        f"Pounce will use them to calculate a real break-even ROAS per campaign.</p>",
+        f"<p style='color:{T['text_secondary']};'>Product costs are stored per marketplace. "
+        f"Switch the marketplace in the sidebar to manage costs for a different store.</p>",
         unsafe_allow_html=True
     )
     st.markdown(
@@ -282,8 +298,7 @@ with tab_products:
     st.divider()
 
     # ── Upload CSV ────────────────────────────────────────────────────────────
-    with st.expander("📤 Upload CSV to replace all products", expanded=not products_exist()):
-        # Download template
+    with st.expander("📤 Import CSV for this marketplace", expanded=not products_exist_db(marketplace)):
         template_path = os.path.join(os.path.dirname(__file__), "data", "products_template.csv")
         if os.path.exists(template_path):
             with open(template_path, "rb") as f:
@@ -300,28 +315,25 @@ with tab_products:
             if err:
                 st.error(f"❌ {err}")
             else:
-                st.success(f"✅ {len(df_imported)} products ready to import.")
+                st.success(f"✅ {len(df_imported)} products ready to import for **{marketplace}**.")
                 st.dataframe(df_imported, use_container_width=True, hide_index=True)
-                if st.button("💾 Save to server", type="primary"):
-                    save_products(df_imported)
-                    st.success("✅ Saved! Products will be used in next analysis run.")
+                if st.button("💾 Save to DB", type="primary"):
+                    save_products_db(df_imported, marketplace)
+                    st.success(f"✅ Saved {len(df_imported)} products for {marketplace}.")
                     st.rerun()
 
     st.divider()
 
     # ── View & Edit ───────────────────────────────────────────────────────────
-    df_products = load_products()
+    df_products = load_products_db(marketplace)
 
     if df_products.empty:
-        st.info("No products yet. Upload a CSV above or add rows manually below.")
-        df_products = pd.DataFrame(columns=COLUMNS)
+        st.info(f"No products for **{marketplace}** yet. Upload a CSV above or add rows manually below.")
+        df_products = pd.DataFrame(columns=DB_COLUMNS)
     else:
-        # Show break-even ROAS for each product
-        st.markdown("### Current Products")
+        st.markdown(f"### Current Products — {marketplace}")
         display_df = df_products.copy()
-        display_df["Landed Cost"] = display_df.apply(
-            lambda r: round(calc_landed_cost(r), 2), axis=1
-        )
+        display_df["Landed Cost"] = display_df.apply(lambda r: round(calc_landed_cost(r), 2), axis=1)
         display_df["Break-even ROAS"] = "Calculated from report"
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
@@ -329,7 +341,7 @@ with tab_products:
     st.markdown("### ✏️ Edit Products")
     st.markdown(
         f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
-        f"Edit directly in the table below. Click Save when done.</p>",
+        f"Edit directly in the table. Changes are saved per marketplace.</p>",
         unsafe_allow_html=True
     )
 
@@ -348,35 +360,32 @@ with tab_products:
         }
     )
 
-    # Live cost preview (no price — calculated from report)
     if not edited_df.empty:
         st.markdown("#### 📐 Cost Breakdown Preview")
         st.markdown(
             f"<p style='color:{T['text_secondary']};font-size:0.83rem;'>"
-            f"Break-even ROAS will be calculated during analysis using actual avg price from your report.</p>",
+            f"Break-even ROAS calculated during analysis using avg price from your report.</p>",
             unsafe_allow_html=True
         )
         preview_rows = []
         for _, row in edited_df.iterrows():
-            asin = str(row.get("ASIN") or "")
-            name = str(row.get("Product Name") or "")
-            lc   = calc_landed_cost(row)
-            fba  = float(row.get("FBA Fee") or 0)
+            lc  = calc_landed_cost(row)
+            fba = float(row.get("FBA Fee") or 0)
             preview_rows.append({
-                "ASIN":          asin,
-                "Product":       name,
-                "Product Cost":  f"${float(row.get('Product Cost') or 0):.2f}",
-                "Shipping Cost": f"${float(row.get('Shipping Cost') or 0):.2f}",
-                "Customs Cost":  f"${float(row.get('Customs Cost') or 0):.2f}",
-                "Landed Cost":   f"${lc:.2f}",
-                "FBA Fee":       f"${fba:.2f}",
+                "ASIN":             str(row.get("ASIN") or ""),
+                "Product":          str(row.get("Product Name") or ""),
+                "Product Cost":     f"${float(row.get('Product Cost') or 0):.2f}",
+                "Shipping Cost":    f"${float(row.get('Shipping Cost') or 0):.2f}",
+                "Customs Cost":     f"${float(row.get('Customs Cost') or 0):.2f}",
+                "Landed Cost":      f"${lc:.2f}",
+                "FBA Fee":          f"${fba:.2f}",
                 "Total Fixed Cost": f"${lc + fba:.2f}",
             })
         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
     if st.button("💾 Save Changes", type="primary", use_container_width=True):
-        save_products(edited_df)
-        st.success("✅ Product costs saved to server. Will be used in next analysis run.")
+        save_products_db(edited_df, marketplace)
+        st.success(f"✅ Product costs saved for **{marketplace}**. Will be used in next analysis run.")
         st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
