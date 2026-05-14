@@ -591,7 +591,7 @@ with tab_sales:
                 else:
                     st.warning("ASIN is required.")
 
-        cl_df = get_change_log(marketplace=sel_market, days=days_back)
+        cl_df = get_change_log(marketplace=sel_market, days=days_back_raw)
         if not cl_df.empty:
             st.dataframe(
                 cl_df[["log_date", "asin", "marketplace", "change_type", "notes"]],
