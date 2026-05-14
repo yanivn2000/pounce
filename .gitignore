@@ -3,3 +3,5 @@ nohup.out
 git_pull.sh
 __pycache__/
 *.pyc
+data/pounce.db
+.claude/

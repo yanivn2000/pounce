@@ -9,6 +9,7 @@ import os
 import uuid
 import pandas as pd
 import io
+from datetime import date, timedelta
 from analyzer import analyze_with_products, TARGET_ROAS, LOW_IMPR_THRESHOLD
 from claude_client import generate_comments
 from excel_builder import build_excel
@@ -16,6 +17,14 @@ from products import (
     load_products, save_products, calc_breakeven_roas, calc_landed_cost,
     import_csv, get_cost_map, products_exist, COLUMNS
 )
+from db.database import init_db
+from db.importer import import_orders_csv, save_recommendation, update_recommendation_outcome
+from db.queries import (
+    get_sales_matrix, get_weekly_summary, get_recommendations_history,
+    get_change_log, get_marketplaces, get_order_date_range, count_orders,
+)
+
+init_db()
 
 # ── Session isolation ─────────────────────────────────────────────────────────
 if "session_id" not in st.session_state:
@@ -116,7 +125,9 @@ with st.sidebar:
     )
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_analysis, tab_products = st.tabs(["📊 Analysis", "📦 Products & Costs"])
+tab_analysis, tab_products, tab_sales, tab_recs = st.tabs([
+    "📊 Analysis", "📦 Products & Costs", "📈 Sales Dashboard", "📋 Recommendations"
+])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — ANALYSIS
@@ -367,3 +378,286 @@ with tab_products:
         save_products(edited_df)
         st.success("✅ Product costs saved to server. Will be used in next analysis run.")
         st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — SALES DASHBOARD
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_sales:
+    st.markdown("# 📈 Sales Dashboard")
+    st.markdown(
+        f"<p style='color:{T['text_secondary']};'>Product × Date revenue matrix. "
+        f"Upload Amazon order reports to populate.</p>",
+        unsafe_allow_html=True
+    )
+    st.divider()
+
+    # ── Import orders ─────────────────────────────────────────────────────────
+    with st.expander("📤 Import Amazon Orders CSV", expanded=(count_orders() == 0)):
+        st.markdown(
+            f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
+            f"Download from Seller Central → Reports → Business Reports → Orders. "
+            f"You can import multiple files — duplicates are handled automatically.</p>",
+            unsafe_allow_html=True
+        )
+        col_up1, col_up2 = st.columns([3, 1])
+        with col_up1:
+            orders_file = st.file_uploader("Upload Orders CSV", type=["csv", "txt"], key="orders_csv")
+        with col_up2:
+            marketplace_override = st.selectbox(
+                "Marketplace (if not in CSV)",
+                ["auto-detect", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"],
+                key="mkt_override"
+            )
+
+        if orders_file and st.button("📥 Import Orders", type="primary"):
+            override = None if marketplace_override == "auto-detect" else marketplace_override
+            with st.spinner("Importing..."):
+                n, warns = import_orders_csv(orders_file, marketplace_override=override)
+            if warns:
+                for w in warns[:5]:
+                    st.warning(w)
+            if n > 0:
+                st.success(f"✅ Imported {n} orders.")
+                st.rerun()
+            else:
+                st.error("No rows imported. Check warnings above.")
+
+    # ── Stats bar ─────────────────────────────────────────────────────────────
+    total_orders = count_orders()
+    if total_orders == 0:
+        st.info("No order data yet. Import an Amazon Orders CSV above to get started.")
+    else:
+        min_date, max_date = get_order_date_range()
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.markdown(f'<div class="metric-card"><p class="metric-val">{total_orders:,}</p><p class="metric-label">Total Orders</p></div>', unsafe_allow_html=True)
+        sc2.markdown(f'<div class="metric-card"><p class="metric-val">{min_date}</p><p class="metric-label">Earliest Date</p></div>', unsafe_allow_html=True)
+        sc3.markdown(f'<div class="metric-card"><p class="metric-val">{max_date}</p><p class="metric-label">Latest Date</p></div>', unsafe_allow_html=True)
+
+        st.divider()
+
+        # ── Filters ───────────────────────────────────────────────────────────
+        marketplaces = get_marketplaces()
+        mkt_options = ["all"] + marketplaces
+        fcol1, fcol2, fcol3 = st.columns(3)
+        with fcol1:
+            sel_market = st.selectbox("Marketplace", mkt_options, key="dash_market")
+        with fcol2:
+            view_mode = st.radio("View", ["Daily", "Weekly"], horizontal=True, key="dash_view")
+        with fcol3:
+            days_back = st.selectbox("Period", [7, 14, 30, 60, 90], index=2, key="dash_days")
+
+        # ── Revenue matrix ────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### Revenue Matrix ($ per product per day)")
+
+        if view_mode == "Daily":
+            matrix = get_sales_matrix(
+                marketplace=None if sel_market == "all" else sel_market,
+                days=days_back
+            )
+        else:
+            matrix = get_weekly_summary(
+                marketplace=None if sel_market == "all" else sel_market,
+                weeks=days_back // 7 or 1
+            )
+            if not matrix.empty:
+                matrix = matrix.pivot_table(
+                    index=["asin", "title"],
+                    columns="week_start",
+                    values="revenue",
+                    aggfunc="sum",
+                    fill_value=0
+                ).reset_index()
+                date_cols = sorted([c for c in matrix.columns if c not in ("asin", "title")], reverse=True)
+                matrix = matrix[["asin", "title"] + date_cols]
+
+        if matrix.empty:
+            st.info("No data for the selected filters.")
+        else:
+            date_cols = [c for c in matrix.columns if c not in ("asin", "title")]
+
+            # Color-code revenue cells
+            def color_revenue(val):
+                if not isinstance(val, (int, float)) or val == 0:
+                    return "color: #aaa"
+                if val >= 500:
+                    return "background-color: #1a7f3722; color: #1a7f37; font-weight:600"
+                if val >= 100:
+                    return "background-color: #9a670022; color: #9a6700"
+                return ""
+
+            styled = matrix.style.applymap(color_revenue, subset=date_cols).format(
+                {c: "${:,.0f}" for c in date_cols}
+            )
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            # Change detection: flag drops > 30% vs previous period
+            if len(date_cols) >= 2:
+                st.divider()
+                st.markdown("### 🔻 Notable Changes (vs previous period)")
+                latest_col = date_cols[0]
+                prev_col   = date_cols[1]
+                alerts_df  = matrix[["asin", "title", latest_col, prev_col]].copy()
+                alerts_df  = alerts_df[alerts_df[prev_col] > 0].copy()
+                alerts_df["change_pct"] = (
+                    (alerts_df[latest_col] - alerts_df[prev_col]) / alerts_df[prev_col] * 100
+                ).round(1)
+                drops = alerts_df[alerts_df["change_pct"] <= -30].sort_values("change_pct")
+                if drops.empty:
+                    st.success("No significant drops detected.")
+                else:
+                    for _, row in drops.iterrows():
+                        st.markdown(
+                            f'<div class="alert-box">🔻 <strong>{row["asin"]}</strong> — {row["title"] or ""} &nbsp;'
+                            f'<span style="color:{T["score_lo"]};font-weight:600">{row["change_pct"]:+.1f}%</span> '
+                            f'(${row[latest_col]:,.0f} vs ${row[prev_col]:,.0f})</div>',
+                            unsafe_allow_html=True
+                        )
+
+        # ── Change log per product ────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 📝 Change Log")
+        st.markdown(
+            f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
+            f"Record manual changes (price, image, title, deal) to track their sales impact.</p>",
+            unsafe_allow_html=True
+        )
+
+        with st.form("change_log_form"):
+            cl1, cl2, cl3 = st.columns([2, 2, 3])
+            with cl1:
+                cl_asin = st.text_input("ASIN", placeholder="B0XXXXXXXX")
+            with cl2:
+                cl_type = st.selectbox("Change Type", ["price", "image", "title", "deal", "listing", "other"])
+            with cl3:
+                cl_notes = st.text_input("Notes", placeholder="Reduced price from $29.99 to $24.99")
+            cl_date  = st.date_input("Date", value=date.today())
+            cl_mkt   = st.selectbox("Marketplace", mkt_options, key="cl_market")
+
+            if st.form_submit_button("➕ Add Entry"):
+                if cl_asin.strip():
+                    from db.database import get_conn
+                    conn2 = get_conn()
+                    with conn2:
+                        conn2.execute(
+                            "INSERT INTO change_log (log_date, asin, marketplace, change_type, notes) VALUES (?,?,?,?,?)",
+                            (str(cl_date), cl_asin.strip().upper(),
+                             cl_mkt if cl_mkt != "all" else "amazon.com",
+                             cl_type, cl_notes)
+                        )
+                    conn2.close()
+                    st.success("✅ Logged.")
+                    st.rerun()
+                else:
+                    st.warning("ASIN is required.")
+
+        cl_df = get_change_log(
+            marketplace=None if sel_market == "all" else sel_market,
+            days=days_back
+        )
+        if not cl_df.empty:
+            st.dataframe(
+                cl_df[["log_date", "asin", "marketplace", "change_type", "notes"]],
+                use_container_width=True, hide_index=True
+            )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — RECOMMENDATIONS HISTORY
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_recs:
+    st.markdown("# 📋 Recommendations History")
+    st.markdown(
+        f"<p style='color:{T['text_secondary']};'>Track placement bid recommendations over time "
+        f"and record outcomes after the review window.</p>",
+        unsafe_allow_html=True
+    )
+    st.divider()
+
+    # ── Save recommendation manually ──────────────────────────────────────────
+    with st.expander("➕ Log a Recommendation"):
+        with st.form("rec_form"):
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                r_date    = st.date_input("Date Given", value=date.today())
+                r_asin    = st.text_input("ASIN (optional)", placeholder="B0XXXXXXXX")
+                r_camp    = st.text_input("Campaign Name")
+                r_place   = st.selectbox("Placement", ["Top of Search", "Rest of Search", "Product Pages"])
+            with rc2:
+                r_type    = st.selectbox("Campaign Type", ["SP", "SB"])
+                r_cur_mul = st.number_input("Current Multiplier %", min_value=0, max_value=900, value=0)
+                r_action  = st.selectbox("Recommended Action", ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"])
+                r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900, value=0)
+
+            marketplaces2 = get_marketplaces() or ["amazon.com"]
+            r_mkt = st.selectbox("Marketplace", marketplaces2, key="rec_mkt")
+            r_reasoning = st.text_area("Reasoning / Notes")
+            r_review = st.date_input("Review Date", value=date.today() + timedelta(days=14))
+
+            if st.form_submit_button("💾 Save Recommendation", type="primary"):
+                save_recommendation({
+                    "date_given":             str(r_date),
+                    "asin":                   r_asin.strip().upper() or None,
+                    "marketplace":            r_mkt,
+                    "campaign_name":          r_camp,
+                    "placement_type":         r_place,
+                    "campaign_type":          r_type,
+                    "current_multiplier":     r_cur_mul,
+                    "recommended_action":     r_action,
+                    "recommended_multiplier": r_rec_mul,
+                    "reasoning":              r_reasoning,
+                    "window_days":            14,
+                    "review_date":            str(r_review),
+                })
+                st.success("✅ Recommendation saved.")
+                st.rerun()
+
+    st.divider()
+
+    # ── Filter + list ─────────────────────────────────────────────────────────
+    rh_marketplaces = get_marketplaces()
+    rh_mkt_opts = ["all"] + rh_marketplaces
+    rhf1, rhf2 = st.columns(2)
+    with rhf1:
+        rh_market = st.selectbox("Filter by Marketplace", rh_mkt_opts, key="rh_market")
+    with rhf2:
+        show_pending = st.checkbox("Show only pending review", value=False)
+
+    recs_df = get_recommendations_history(
+        marketplace=None if rh_market == "all" else rh_market
+    )
+
+    if recs_df.empty:
+        st.info("No recommendations logged yet. Run an analysis or add one manually above.")
+    else:
+        if show_pending:
+            today_str = str(date.today())
+            recs_df = recs_df[
+                (recs_df["review_date"].fillna("") <= today_str) &
+                (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
+            ]
+
+        display_cols = [
+            "id", "date_given", "asin", "marketplace", "campaign_name",
+            "placement_type", "campaign_type", "recommended_action",
+            "recommended_multiplier", "review_date", "outcome"
+        ]
+        existing_cols = [c for c in display_cols if c in recs_df.columns]
+        st.dataframe(recs_df[existing_cols], use_container_width=True, hide_index=True)
+
+        # ── Record outcome ────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### ✅ Record Outcome")
+        oc1, oc2, oc3 = st.columns([1, 3, 1])
+        with oc1:
+            outcome_id = st.number_input("Rec ID", min_value=1, step=1)
+        with oc2:
+            outcome_text = st.text_input("Outcome", placeholder="e.g. ROAS improved from 2.1 to 3.4")
+        with oc3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("💾 Save Outcome"):
+                if outcome_text.strip():
+                    update_recommendation_outcome(int(outcome_id), outcome_text.strip())
+                    st.success("✅ Outcome recorded.")
+                    st.rerun()
+                else:
+                    st.warning("Enter an outcome first.")
