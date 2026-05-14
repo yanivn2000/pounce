@@ -8,44 +8,41 @@ from db.database import get_conn
 
 def get_daily_sales(marketplace: str = None, days: int = 30) -> pd.DataFrame:
     """
-    Returns daily revenue per ASIN for the last N days.
-    Columns: order_date, asin, title, marketplace, units, revenue
+    Returns daily units + revenue per ASIN for the last N days.
+    When marketplace is specified: one row per (date, asin, marketplace).
+    When marketplace is None (all): aggregated by (date, asin) across all marketplaces,
+    title preferred from amazon.com.
     """
     conn = get_conn()
-    market_filter = "AND marketplace = ?" if marketplace and marketplace != "all" else ""
-    params = [days]
-    if marketplace and marketplace != "all":
-        params = [marketplace, days]
-        market_filter = "AND marketplace = ?"
-        sql = f"""
-            SELECT
-                order_date,
-                asin,
-                MAX(title)     AS title,
-                marketplace,
-                SUM(quantity)  AS units,
-                SUM(item_price) AS revenue
+    if marketplace:
+        sql = """
+            SELECT order_date, asin,
+                   MAX(title) AS title,
+                   marketplace,
+                   SUM(quantity)   AS units,
+                   SUM(item_price) AS revenue
             FROM orders
             WHERE marketplace = ?
               AND order_date >= date('now', '-' || ? || ' days')
               AND order_status NOT IN ('Cancelled', 'Pending')
             GROUP BY order_date, asin, marketplace
-            ORDER BY order_date DESC, revenue DESC
+            ORDER BY order_date DESC, units DESC
         """
+        params = [marketplace, days]
     else:
-        sql = f"""
-            SELECT
-                order_date,
-                asin,
-                MAX(title)      AS title,
-                marketplace,
-                SUM(quantity)   AS units,
-                SUM(item_price) AS revenue
+        sql = """
+            SELECT order_date, asin,
+                   COALESCE(
+                       MAX(CASE WHEN marketplace = 'amazon.com' THEN title END),
+                       MAX(title)
+                   ) AS title,
+                   SUM(quantity)   AS units,
+                   SUM(item_price) AS revenue
             FROM orders
             WHERE order_date >= date('now', '-' || ? || ' days')
               AND order_status NOT IN ('Cancelled', 'Pending')
-            GROUP BY order_date, asin, marketplace
-            ORDER BY order_date DESC, revenue DESC
+            GROUP BY order_date, asin
+            ORDER BY order_date DESC, units DESC
         """
         params = [days]
 
@@ -109,12 +106,13 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8) -> tupl
     conn = get_conn()
     days = weeks * 7
     mkt_clause = "AND marketplace = ?" if marketplace else ""
-    base_params = ([marketplace, days] if marketplace else [days])
+    title_expr = ("MAX(title)" if marketplace else
+                  "COALESCE(MAX(CASE WHEN marketplace='amazon.com' THEN title END), MAX(title))")
 
     # Current period
     sql_cur = f"""
         SELECT date(order_date, 'weekday 1', '-7 days') AS week_start,
-               asin, MAX(title) AS title, SUM(quantity) AS units
+               asin, {title_expr} AS title, SUM(quantity) AS units
         FROM orders
         WHERE order_date >= date('now', '-' || ? || ' days')
           AND order_status NOT IN ('Cancelled', 'Pending')
@@ -127,7 +125,7 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8) -> tupl
     # Last year: shift dates forward 364 days so week labels match current year
     sql_ly = f"""
         SELECT date(date(order_date, '+364 days'), 'weekday 1', '-7 days') AS week_start,
-               asin, MAX(title) AS title, SUM(quantity) AS units
+               asin, {title_expr} AS title, SUM(quantity) AS units
         FROM orders
         WHERE order_date >= date('now', '-' || ? || ' days', '-364 days')
           AND order_date <  date('now', '-364 days')
@@ -155,11 +153,14 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8) -> tupl
 
 
 def get_weekly_summary(marketplace: str = None, weeks: int = 8) -> pd.DataFrame:
-    """Weekly units + revenue per ASIN. Columns: week_start, asin, title, marketplace, units, revenue."""
+    """
+    Weekly units + revenue per ASIN.
+    When marketplace specified: grouped by (week, asin, marketplace).
+    When None (all): grouped by (week, asin), title from amazon.com preferred.
+    """
     conn = get_conn()
     days = weeks * 7
-    if marketplace and marketplace != "all":
-        params = [marketplace, days]
+    if marketplace:
         sql = """
             SELECT date(order_date, 'weekday 1', '-7 days') AS week_start,
                    asin, MAX(title) AS title, marketplace,
@@ -169,20 +170,25 @@ def get_weekly_summary(marketplace: str = None, weeks: int = 8) -> pd.DataFrame:
               AND order_date >= date('now', '-' || ? || ' days')
               AND order_status NOT IN ('Cancelled', 'Pending')
             GROUP BY week_start, asin, marketplace
-            ORDER BY week_start DESC, revenue DESC
+            ORDER BY week_start DESC, units DESC
         """
+        params = [marketplace, days]
     else:
-        params = [days]
         sql = """
             SELECT date(order_date, 'weekday 1', '-7 days') AS week_start,
-                   asin, MAX(title) AS title, marketplace,
+                   asin,
+                   COALESCE(
+                       MAX(CASE WHEN marketplace = 'amazon.com' THEN title END),
+                       MAX(title)
+                   ) AS title,
                    SUM(quantity) AS units, SUM(item_price) AS revenue
             FROM orders
             WHERE order_date >= date('now', '-' || ? || ' days')
               AND order_status NOT IN ('Cancelled', 'Pending')
-            GROUP BY week_start, asin, marketplace
-            ORDER BY week_start DESC, revenue DESC
+            GROUP BY week_start, asin
+            ORDER BY week_start DESC, units DESC
         """
+        params = [days]
     df = pd.read_sql_query(sql, conn, params=params)
     conn.close()
     return df

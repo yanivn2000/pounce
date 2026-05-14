@@ -511,49 +511,50 @@ with tab_sales:
         else:
             date_cols = [c for c in matrix.columns if c not in ("asin", "title")]
 
-            # Build pct_change matrix: each col vs previous col (or LY col)
+            # Build pct_change matrix aligned to matrix index
             pct = pd.DataFrame(index=matrix.index, columns=date_cols, dtype=float)
             for i, col in enumerate(date_cols):
                 if yoy_mode and ly_matrix is not None and col in ly_matrix.columns:
-                    # Align LY by ASIN
                     ly_vals = ly_matrix.set_index("asin")[col].reindex(matrix["asin"].values).values
                     cur_vals = matrix[col].values.astype(float)
-                    with pd.option_context("mode.use_inf_as_na", True):
-                        pct[col] = pd.Series(
-                            [(c - l) / l * 100 if l and l > 0 else None
-                             for c, l in zip(cur_vals, ly_vals)],
-                            index=matrix.index
-                        )
+                    pct[col] = pd.Series(
+                        [(c - l) / l * 100 if l and l > 0 else None
+                         for c, l in zip(cur_vals, ly_vals)],
+                        index=matrix.index
+                    )
                 elif i + 1 < len(date_cols):
-                    prev_col = date_cols[i + 1]
-                    prev = matrix[prev_col].replace(0, None)
-                    pct[col] = ((matrix[col] - matrix[prev_col]) / prev * 100)
+                    prev = matrix[date_cols[i + 1]].replace(0, None)
+                    pct[col] = (matrix[col] - matrix[date_cols[i + 1]]) / prev * 100
                 else:
-                    pct[col] = None  # oldest column has no previous
+                    pct[col] = None
+
+            # Freeze asin + title by setting them as the DataFrame index
+            display = matrix.set_index(["asin", "title"])
+            pct_indexed = pct  # shares integer index with matrix
 
             def _color_matrix(df):
                 styles = pd.DataFrame("", index=df.index, columns=df.columns)
                 for col in date_cols:
                     if col not in df.columns:
                         continue
-                    for idx in df.index:
-                        p = pct.loc[idx, col] if col in pct.columns else None
+                    for pos, idx in enumerate(matrix.index):
+                        p = pct_indexed.loc[idx, col]
                         try:
                             p = float(p)
                         except (TypeError, ValueError):
                             continue
                         if p >= threshold:
-                            styles.loc[idx, col] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
+                            styles.iloc[pos][col] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
                         elif p <= -threshold:
-                            styles.loc[idx, col] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                            styles.iloc[pos][col] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
                 return styles
 
             styled = (
-                matrix.style
+                display.style
                 .apply(_color_matrix, axis=None)
                 .format({c: "{:,.0f}" for c in date_cols})
             )
-            st.dataframe(styled, use_container_width=True, hide_index=True)
+            st.dataframe(styled, use_container_width=True)
 
         # ── Change log per product ────────────────────────────────────────────
         st.divider()
