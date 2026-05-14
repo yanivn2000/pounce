@@ -202,6 +202,7 @@ with tab_analysis:
                         "reasoning":              pl_rec["reasoning"],
                         "window_days":            14,
                         "review_date":            review_str,
+                        "score":                  r.score,
                     })
                     saved_count += 1
             if saved_count:
@@ -703,7 +704,7 @@ with tab_recs:
         recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
 
         display_cols = [
-            "id", "date_given", "asin", "marketplace", "campaign_name",
+            "id", "date_given", "score", "asin", "marketplace", "campaign_name",
             "placement_type", "campaign_type", "change",
             "reasoning", "review_date", "outcome"
         ]

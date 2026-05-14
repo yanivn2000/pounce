@@ -95,7 +95,15 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_changelog_asin ON change_log(asin, log_date);
         """)
     _migrate_product_costs(conn)
+    _migrate_recommendations_score(conn)
     conn.close()
+
+
+def _migrate_recommendations_score(conn: sqlite3.Connection):
+    """Add score column to recommendations if missing."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(recommendations)").fetchall()]
+    if "score" not in cols:
+        conn.execute("ALTER TABLE recommendations ADD COLUMN score INTEGER")
 
 
 def _migrate_product_costs(conn: sqlite3.Connection):
