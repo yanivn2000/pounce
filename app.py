@@ -27,6 +27,7 @@ from db.importer import import_orders_csv, save_recommendation, update_recommend
 from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
     get_change_log, get_marketplaces, get_order_date_range, count_orders,
+    get_units_matrix, get_weekly_units_matrix, get_weekly_units_matrix_yoy,
 )
 
 init_db()
@@ -465,7 +466,7 @@ with tab_sales:
 
         # ── Filters ───────────────────────────────────────────────────────────
         available_markets = get_marketplaces()
-        fcol1, fcol2, fcol3 = st.columns(3)
+        fcol1, fcol2, fcol3, fcol4 = st.columns([2, 2, 2, 1])
         with fcol1:
             mkt_options = ["all"] + available_markets
             sel_market_raw = st.selectbox("Marketplace", mkt_options, key="dash_market")
@@ -473,72 +474,86 @@ with tab_sales:
         with fcol2:
             view_mode = st.radio("View", ["Daily", "Weekly"], horizontal=True, key="dash_view")
         with fcol3:
-            days_back = st.selectbox("Period", [7, 14, 30, 60, 90], index=2, key="dash_days")
+            period_opts = [7, 14, 30, 60, 90] if view_mode == "Daily" else [4, 8, 12, 26, 52]
+            period_labels = [f"{v} days" for v in period_opts] if view_mode == "Daily" else [f"{v} weeks" for v in period_opts]
+            period_idx = 2
+            days_back_raw = st.selectbox("Period", period_opts, index=period_idx,
+                                         format_func=lambda v: f"{v} {'days' if view_mode == 'Daily' else 'weeks'}",
+                                         key="dash_days")
+        with fcol4:
+            if view_mode == "Weekly":
+                yoy_mode = st.checkbox("YoY", value=False, key="dash_yoy",
+                                       help="Compare to same week last year")
+            else:
+                yoy_mode = False
 
-        # ── Revenue matrix ────────────────────────────────────────────────────
+        # ── Units matrix ──────────────────────────────────────────────────────
         st.divider()
-        st.markdown("### Revenue Matrix ($ per product per day)")
+        compare_label = ("vs same week LY" if yoy_mode else
+                         "vs prev week" if view_mode == "Weekly" else "vs prev day")
+        st.markdown(f"### Units Sold — color coded {compare_label}")
 
+        ly_matrix = None
         if view_mode == "Daily":
-            matrix = get_sales_matrix(marketplace=sel_market, days=days_back)
-        else:
-            matrix = get_weekly_summary(
-                marketplace=sel_market,
-                weeks=days_back // 7 or 1
+            matrix = get_units_matrix(marketplace=sel_market, days=days_back_raw)
+            threshold = 30
+        elif yoy_mode:
+            matrix, ly_matrix = get_weekly_units_matrix_yoy(
+                marketplace=sel_market, weeks=days_back_raw
             )
-            if not matrix.empty:
-                matrix = matrix.pivot_table(
-                    index=["asin", "title"],
-                    columns="week_start",
-                    values="revenue",
-                    aggfunc="sum",
-                    fill_value=0
-                ).reset_index()
-                date_cols = sorted([c for c in matrix.columns if c not in ("asin", "title")], reverse=True)
-                matrix = matrix[["asin", "title"] + date_cols]
+            threshold = 20
+        else:
+            matrix = get_weekly_units_matrix(marketplace=sel_market, weeks=days_back_raw)
+            threshold = 20
 
         if matrix.empty:
             st.info("No data for the selected filters.")
         else:
             date_cols = [c for c in matrix.columns if c not in ("asin", "title")]
 
-            # Color-code revenue cells
-            def color_revenue(val):
-                if not isinstance(val, (int, float)) or val == 0:
-                    return "color: #aaa"
-                if val >= 500:
-                    return "background-color: #1a7f3722; color: #1a7f37; font-weight:600"
-                if val >= 100:
-                    return "background-color: #9a670022; color: #9a6700"
-                return ""
+            # Build pct_change matrix: each col vs previous col (or LY col)
+            pct = pd.DataFrame(index=matrix.index, columns=date_cols, dtype=float)
+            for i, col in enumerate(date_cols):
+                if yoy_mode and ly_matrix is not None and col in ly_matrix.columns:
+                    # Align LY by ASIN
+                    ly_vals = ly_matrix.set_index("asin")[col].reindex(matrix["asin"].values).values
+                    cur_vals = matrix[col].values.astype(float)
+                    with pd.option_context("mode.use_inf_as_na", True):
+                        pct[col] = pd.Series(
+                            [(c - l) / l * 100 if l and l > 0 else None
+                             for c, l in zip(cur_vals, ly_vals)],
+                            index=matrix.index
+                        )
+                elif i + 1 < len(date_cols):
+                    prev_col = date_cols[i + 1]
+                    prev = matrix[prev_col].replace(0, None)
+                    pct[col] = ((matrix[col] - matrix[prev_col]) / prev * 100)
+                else:
+                    pct[col] = None  # oldest column has no previous
 
-            styled = matrix.style.applymap(color_revenue, subset=date_cols).format(
-                {c: "${:,.0f}" for c in date_cols}
+            def _color_matrix(df):
+                styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                for col in date_cols:
+                    if col not in df.columns:
+                        continue
+                    for idx in df.index:
+                        p = pct.loc[idx, col] if col in pct.columns else None
+                        try:
+                            p = float(p)
+                        except (TypeError, ValueError):
+                            continue
+                        if p >= threshold:
+                            styles.loc[idx, col] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
+                        elif p <= -threshold:
+                            styles.loc[idx, col] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                return styles
+
+            styled = (
+                matrix.style
+                .apply(_color_matrix, axis=None)
+                .format({c: "{:,.0f}" for c in date_cols})
             )
             st.dataframe(styled, use_container_width=True, hide_index=True)
-
-            # Change detection: flag drops > 30% vs previous period
-            if len(date_cols) >= 2:
-                st.divider()
-                st.markdown("### 🔻 Notable Changes (vs previous period)")
-                latest_col = date_cols[0]
-                prev_col   = date_cols[1]
-                alerts_df  = matrix[["asin", "title", latest_col, prev_col]].copy()
-                alerts_df  = alerts_df[alerts_df[prev_col] > 0].copy()
-                alerts_df["change_pct"] = (
-                    (alerts_df[latest_col] - alerts_df[prev_col]) / alerts_df[prev_col] * 100
-                ).round(1)
-                drops = alerts_df[alerts_df["change_pct"] <= -30].sort_values("change_pct")
-                if drops.empty:
-                    st.success("No significant drops detected.")
-                else:
-                    for _, row in drops.iterrows():
-                        st.markdown(
-                            f'<div class="alert-box">🔻 <strong>{row["asin"]}</strong> — {row["title"] or ""} &nbsp;'
-                            f'<span style="color:{T["score_lo"]};font-weight:600">{row["change_pct"]:+.1f}%</span> '
-                            f'(${row[latest_col]:,.0f} vs ${row[prev_col]:,.0f})</div>',
-                            unsafe_allow_html=True
-                        )
 
         # ── Change log per product ────────────────────────────────────────────
         st.divider()
