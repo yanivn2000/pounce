@@ -206,7 +206,8 @@ with tab_analysis:
                     })
                     saved_count += 1
             if saved_count:
-                st.success(f"✅ {saved_count} placement recommendations auto-saved to history.")
+                score_sample = [(r.campaign[:20], r.score) for r in results[:3]]
+                st.success(f"✅ {saved_count} placement recommendations auto-saved. Score sample: {score_sample}")
 
             if api_key:
                 st.markdown("### 🤖 Generating AI Comments...")
