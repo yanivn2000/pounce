@@ -699,11 +699,6 @@ with tab_sales:
                 else:
                     st.warning("ASIN is required.")
 
-        if not cl_df.empty:
-            st.dataframe(
-                cl_df[["log_date", "asin", "marketplace", "change_type", "notes"]],
-                use_container_width=True, hide_index=True
-            )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 4 — RECOMMENDATIONS HISTORY
