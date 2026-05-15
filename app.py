@@ -552,6 +552,19 @@ with tab_sales:
             display = matrix.set_index(["asin", "title"])
             pct_indexed = pct  # shares integer index with matrix
 
+            # Pre-format cell values: numbers with commas, ⚑ appended for changed cells
+            display_marked = display.copy().astype(object)
+            for col in date_cols:
+                col_idx = display_marked.columns.get_loc(col)
+                for pos, (asin, title) in enumerate(display_marked.index):
+                    val = display_marked.iloc[pos, col_idx]
+                    try:
+                        num_str = f"{int(float(val)):,}" if pd.notna(val) else "0"
+                    except (ValueError, TypeError):
+                        num_str = "0"
+                    flag = " ⚑" if (str(asin), col) in change_set else ""
+                    display_marked.iloc[pos, col_idx] = num_str + flag
+
             def _color_matrix(df):
                 styles = pd.DataFrame("", index=df.index, columns=df.columns)
                 # Green / red performance coloring
@@ -569,19 +582,19 @@ with tab_sales:
                             styles.iloc[pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
                         elif p <= -threshold:
                             styles.iloc[pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
-                # Yellow change-log overlay (overrides green/red)
+                # Yellow only for neutral changed cells; green/red cells keep their color
                 if change_set:
                     for pos, (asin, title) in enumerate(df.index):
                         for col in date_cols:
                             if col in df.columns and (str(asin), col) in change_set:
                                 col_loc = styles.columns.get_loc(col)
-                                styles.iloc[pos, col_loc] = "background-color:#fff3b0;color:#7d4e00;font-weight:700"
+                                if styles.iloc[pos, col_loc] == "":
+                                    styles.iloc[pos, col_loc] = "background-color:#fff3b0;color:#7d4e00;font-weight:700"
                 return styles
 
             styled = (
-                display.style
+                display_marked.style
                 .apply(_color_matrix, axis=None)
-                .format({c: "{:,.0f}" for c in date_cols})
             )
             st.markdown("""
                 <style>
