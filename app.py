@@ -8,6 +8,7 @@ import tempfile
 import os
 import uuid
 import pandas as pd
+import plotly.express as px
 import io
 from datetime import date, timedelta
 from analyzer import analyze_with_products, detect_marketplace_from_xlsx, TARGET_ROAS, LOW_IMPR_THRESHOLD
@@ -488,6 +489,23 @@ with tab_sales:
             else:
                 yoy_mode = False
 
+        # ── Load change log early so matrix can use it ────────────────────────
+        cl_df = get_change_log(marketplace=sel_market, days=days_back_raw if view_mode == "Daily" else days_back_raw * 7)
+
+        def _to_week_start(date_str: str) -> str:
+            """Replicate SQLite: date(d,'weekday 1','-7 days') → Monday of that week."""
+            d = pd.Timestamp(date_str)
+            days_to_next_monday = 0 if d.weekday() == 0 else (7 - d.weekday())
+            return (d + pd.Timedelta(days=days_to_next_monday) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+
+        if not cl_df.empty:
+            if view_mode == "Daily":
+                change_set = {(str(r.asin), str(r.log_date)) for _, r in cl_df.iterrows()}
+            else:
+                change_set = {(str(r.asin), _to_week_start(str(r.log_date))) for _, r in cl_df.iterrows()}
+        else:
+            change_set = set()
+
         # ── Units matrix ──────────────────────────────────────────────────────
         st.divider()
         compare_label = ("vs same week LY" if yoy_mode else
@@ -536,6 +554,7 @@ with tab_sales:
 
             def _color_matrix(df):
                 styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                # Green / red performance coloring
                 for col in date_cols:
                     if col not in df.columns:
                         continue
@@ -550,6 +569,13 @@ with tab_sales:
                             styles.iloc[pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
                         elif p <= -threshold:
                             styles.iloc[pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                # Yellow change-log overlay (overrides green/red)
+                if change_set:
+                    for pos, (asin, title) in enumerate(df.index):
+                        for col in date_cols:
+                            if col in df.columns and (str(asin), col) in change_set:
+                                col_loc = styles.columns.get_loc(col)
+                                styles.iloc[pos, col_loc] = "background-color:#fff3b0;color:#7d4e00;font-weight:700"
                 return styles
 
             styled = (
@@ -572,6 +598,36 @@ with tab_sales:
                 "title": st.column_config.TextColumn("Title", width=240),
             }
             st.dataframe(styled, use_container_width=True, column_config=col_cfg)
+
+            # ── Change log timeline overlay ───────────────────────────────────
+            if not cl_df.empty:
+                st.markdown("<p style='font-size:0.78rem;color:#888;margin-top:4px;'>🟡 Yellow cell = change logged on that date</p>", unsafe_allow_html=True)
+                tl = cl_df.copy()
+                tl["log_date"] = pd.to_datetime(tl["log_date"])
+                tl["label"] = tl["change_type"].str.capitalize() + ": " + tl["notes"].fillna("")
+                _COLOR_MAP = {
+                    "price": "#e36209", "image": "#0969da", "title": "#8250df",
+                    "deal": "#1a7f37", "listing": "#cf222e", "other": "#6e7781",
+                }
+                fig = px.scatter(
+                    tl, x="log_date", y="asin",
+                    color="change_type",
+                    color_discrete_map=_COLOR_MAP,
+                    hover_name="label",
+                    hover_data={"asin": True, "log_date": True, "change_type": False, "label": False},
+                    height=max(140, 40 + 32 * tl["asin"].nunique()),
+                )
+                fig.update_traces(marker=dict(size=14, symbol="diamond", line=dict(width=1.5, color="white")))
+                fig.update_layout(
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    yaxis_title=None, xaxis_title=None,
+                    legend_title="Change",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+                    yaxis=dict(showgrid=False),
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
         # ── Change log per product ────────────────────────────────────────────
         st.divider()
@@ -608,7 +664,6 @@ with tab_sales:
                 else:
                     st.warning("ASIN is required.")
 
-        cl_df = get_change_log(marketplace=sel_market, days=days_back_raw)
         if not cl_df.empty:
             st.dataframe(
                 cl_df[["log_date", "asin", "marketplace", "change_type", "notes"]],
