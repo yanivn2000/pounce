@@ -619,6 +619,7 @@ with tab_sales:
             )
 
             # ── Toast popup for change-log flags ─────────────────────────────
+            st.write("DEBUG event:", event.selection if hasattr(event, "selection") else "no selection attr")
             if change_set and hasattr(event, "selection") and event.selection.rows:
                 sel_pos  = event.selection.rows[0]
                 sel_asin = str(matrix.iloc[sel_pos]["asin"])
