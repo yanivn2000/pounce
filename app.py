@@ -612,6 +612,27 @@ with tab_sales:
             }
             st.dataframe(styled, use_container_width=True, column_config=col_cfg)
 
+            # ── Legend ────────────────────────────────────────────────────────
+            if yoy_mode:
+                st.markdown(
+                    "<p style='font-size:0.78rem;color:#888;margin-top:6px;'>"
+                    "🟢 Green = sold more than same week last year (&gt;+20%) &nbsp;·&nbsp; "
+                    "🔴 Red = sold less than same week last year (&gt;−20%) &nbsp;·&nbsp; "
+                    "⬜ White = within ±20% of last year &nbsp;·&nbsp; "
+                    "Colors compare vs same week shifted by exactly 364 days (52 weeks)"
+                    "</p>",
+                    unsafe_allow_html=True
+                )
+            else:
+                period = "previous day" if view_mode == "Daily" else "previous week"
+                st.markdown(
+                    f"<p style='font-size:0.78rem;color:#888;margin-top:6px;'>"
+                    f"🟢 Green = &gt;+{threshold}% vs {period} &nbsp;·&nbsp; "
+                    f"🔴 Red = &gt;−{threshold}% vs {period}"
+                    f"</p>",
+                    unsafe_allow_html=True
+                )
+
             # ── Change log timeline overlay ───────────────────────────────────
             if not cl_df.empty:
                 st.markdown("<p style='font-size:0.78rem;color:#888;margin-top:4px;'>🟡 Yellow cell = change logged on that date</p>", unsafe_allow_html=True)
