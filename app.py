@@ -609,7 +609,26 @@ with tab_sales:
                 "asin":  st.column_config.TextColumn("ASIN",  width=120),
                 "title": st.column_config.TextColumn("Title", width=240),
             }
-            st.dataframe(styled, use_container_width=True, column_config=col_cfg)
+            event = st.dataframe(
+                styled,
+                use_container_width=True,
+                column_config=col_cfg,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="sales_matrix",
+            )
+
+            # ── Toast popup for change-log flags ─────────────────────────────
+            if change_set and hasattr(event, "selection") and event.selection.rows:
+                sel_pos  = event.selection.rows[0]
+                sel_asin = str(matrix.iloc[sel_pos]["asin"])
+                asin_changes = cl_df[cl_df["asin"] == sel_asin].sort_values("log_date")
+                if not asin_changes.empty:
+                    lines = []
+                    for _, chg in asin_changes.iterrows():
+                        notes = f": {chg['notes']}" if chg.get("notes") else ""
+                        lines.append(f"{chg['log_date']} — {chg['change_type'].capitalize()}{notes}")
+                    st.toast("  \n".join(lines), icon="🟡")
 
             # ── Legend ────────────────────────────────────────────────────────
             if yoy_mode:
