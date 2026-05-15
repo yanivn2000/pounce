@@ -8,7 +8,6 @@ import tempfile
 import os
 import uuid
 import pandas as pd
-import plotly.express as px
 import io
 from datetime import date, timedelta
 from analyzer import analyze_with_products, detect_marketplace_from_xlsx, TARGET_ROAS, LOW_IMPR_THRESHOLD
@@ -633,35 +632,8 @@ with tab_sales:
                     unsafe_allow_html=True
                 )
 
-            # ── Change log timeline overlay ───────────────────────────────────
             if not cl_df.empty:
                 st.markdown("<p style='font-size:0.78rem;color:#888;margin-top:4px;'>🟡 Yellow cell = change logged on that date</p>", unsafe_allow_html=True)
-                tl = cl_df.copy()
-                tl["log_date"] = pd.to_datetime(tl["log_date"])
-                tl["label"] = tl["change_type"].str.capitalize() + ": " + tl["notes"].fillna("")
-                _COLOR_MAP = {
-                    "price": "#e36209", "image": "#0969da", "title": "#8250df",
-                    "deal": "#1a7f37", "listing": "#cf222e", "other": "#6e7781",
-                }
-                fig = px.scatter(
-                    tl, x="log_date", y="asin",
-                    color="change_type",
-                    color_discrete_map=_COLOR_MAP,
-                    hover_name="label",
-                    hover_data={"asin": True, "log_date": True, "change_type": False, "label": False},
-                    height=max(140, 40 + 32 * tl["asin"].nunique()),
-                )
-                fig.update_traces(marker=dict(size=14, symbol="diamond", line=dict(width=1.5, color="white")))
-                fig.update_layout(
-                    margin=dict(l=0, r=0, t=10, b=0),
-                    yaxis_title=None, xaxis_title=None,
-                    legend_title="Change",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
-                    yaxis=dict(showgrid=False),
-                )
-                st.plotly_chart(fig, use_container_width=True)
 
         # ── Change log per product ────────────────────────────────────────────
         st.divider()
