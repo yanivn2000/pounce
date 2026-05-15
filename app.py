@@ -609,27 +609,36 @@ with tab_sales:
                 "asin":  st.column_config.TextColumn("ASIN",  width=120),
                 "title": st.column_config.TextColumn("Title", width=240),
             }
-            event = st.dataframe(
-                styled,
-                use_container_width=True,
-                column_config=col_cfg,
-                on_select="rerun",
-                selection_mode="single-row",
-                key="sales_matrix",
-            )
+            st.dataframe(styled, use_container_width=True, column_config=col_cfg)
 
-            # ── Toast popup for change-log flags ─────────────────────────────
-            st.write("DEBUG event:", event.selection if hasattr(event, "selection") else "no selection attr")
-            if change_set and hasattr(event, "selection") and event.selection.rows:
-                sel_pos  = event.selection.rows[0]
-                sel_asin = str(matrix.iloc[sel_pos]["asin"])
-                asin_changes = cl_df[cl_df["asin"] == sel_asin].sort_values("log_date")
-                if not asin_changes.empty:
-                    lines = []
-                    for _, chg in asin_changes.iterrows():
-                        notes = f": {chg['notes']}" if chg.get("notes") else ""
-                        lines.append(f"{chg['log_date']} — {chg['change_type'].capitalize()}{notes}")
-                    st.toast("  \n".join(lines), icon="🟡")
+            # ── Change flag summary (shown when ⚑ cells exist in view) ────────
+            if change_set and not cl_df.empty:
+                visible_asins = set(matrix["asin"].astype(str))
+                visible_changes = cl_df[cl_df["asin"].astype(str).isin(visible_asins)].sort_values(
+                    ["asin", "log_date"]
+                )
+                if not visible_changes.empty:
+                    rows_html = ""
+                    for _, chg in visible_changes.iterrows():
+                        notes = chg.get("notes") or ""
+                        rows_html += (
+                            f"<tr>"
+                            f"<td style='padding:2px 10px 2px 0;font-weight:600;'>{chg['asin']}</td>"
+                            f"<td style='padding:2px 10px 2px 0;color:#888;'>{chg['log_date']}</td>"
+                            f"<td style='padding:2px 10px 2px 0;'>"
+                            f"<span style='background:#fff3b0;padding:1px 6px;border-radius:4px;"
+                            f"font-size:0.8rem;font-weight:600;color:#7d4e00;'>{chg['change_type'].capitalize()}</span>"
+                            f"</td>"
+                            f"<td style='padding:2px 0;color:#444;font-size:0.85rem;'>{notes}</td>"
+                            f"</tr>"
+                        )
+                    st.markdown(
+                        f"<div style='margin-top:6px;'>"
+                        f"<span style='font-size:0.78rem;font-weight:600;color:#7d4e00;'>⚑ Changes in this period</span>"
+                        f"<table style='width:100%;border-collapse:collapse;margin-top:4px;font-size:0.82rem;'>"
+                        f"{rows_html}</table></div>",
+                        unsafe_allow_html=True
+                    )
 
             # ── Legend ────────────────────────────────────────────────────────
             if yoy_mode:
