@@ -547,102 +547,83 @@ with tab_sales:
                 else:
                     pct[col] = None
 
-            from st_aggrid import AgGrid, GridOptionsBuilder, JsCode, GridUpdateMode
-
             pct_indexed = pct  # shares integer index with matrix
 
-            # Build AG Grid data: flat DataFrame with style-hint columns
-            ag_data = matrix.copy()
+            # Freeze asin + title by setting them as the DataFrame index
+            display = matrix.set_index(["asin", "title"])
+
+            # Pre-format cell values: numbers with commas, ⚑ appended for changed cells
+            display_marked = display.copy().astype(object)
             for col in date_cols:
-                style_vals = []
-                fmt_vals   = []
-                for pos in range(len(ag_data)):
-                    asin = str(ag_data.iloc[pos]["asin"])
-                    idx  = ag_data.index[pos]
-                    p    = pct_indexed.loc[idx, col]
-                    try:
-                        p = float(p)
-                    except (TypeError, ValueError):
-                        p = None
-                    s = ""
-                    if p is not None and p >= threshold:
-                        s = "G"
-                    elif p is not None and p <= -threshold:
-                        s = "R"
-                    if (asin, col) in change_set:
-                        s = ("Y" if s == "" else s)   # yellow if neutral, keep G/R otherwise
-                    style_vals.append(s)
-                    val = ag_data.iloc[pos][col]
+                col_idx = display_marked.columns.get_loc(col)
+                for pos, (asin, title) in enumerate(display_marked.index):
+                    val = display_marked.iloc[pos, col_idx]
                     try:
                         num_str = f"{int(float(val)):,}" if pd.notna(val) else "0"
                     except (ValueError, TypeError):
                         num_str = "0"
-                    flag = " ⚑" if (asin, col) in change_set else ""
-                    fmt_vals.append(num_str + flag)
-                ag_data[f"_s_{col}"] = style_vals
-                ag_data[col]         = fmt_vals
+                    flag = " ⚑" if (str(asin), col) in change_set else ""
+                    display_marked.iloc[pos, col_idx] = num_str + flag
 
-            # AG Grid options
-            cell_style_js = JsCode("""
-                function(params) {
-                    var s = params.data['_s_' + params.colDef.field];
-                    var base = {textAlign: 'right'};
-                    if (s === 'G') return Object.assign(base, {backgroundColor:'#1a7f3733', color:'#1a7f37', fontWeight:'600'});
-                    if (s === 'R') return Object.assign(base, {backgroundColor:'#cf222e22', color:'#cf222e', fontWeight:'600'});
-                    if (s === 'Y') return Object.assign(base, {backgroundColor:'#fff3b0',   color:'#7d4e00', fontWeight:'700'});
-                    return base;
-                }
-            """)
+            def _color_matrix(df):
+                styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                for col in date_cols:
+                    if col not in df.columns:
+                        continue
+                    for pos, idx in enumerate(matrix.index):
+                        p = pct_indexed.loc[idx, col]
+                        try:
+                            p = float(p)
+                        except (TypeError, ValueError):
+                            continue
+                        col_loc = styles.columns.get_loc(col)
+                        if p >= threshold:
+                            styles.iloc[pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
+                        elif p <= -threshold:
+                            styles.iloc[pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                if change_set:
+                    for pos, (asin, title) in enumerate(df.index):
+                        for col in date_cols:
+                            if col in df.columns and (str(asin), col) in change_set:
+                                col_loc = styles.columns.get_loc(col)
+                                if styles.iloc[pos, col_loc] == "":
+                                    styles.iloc[pos, col_loc] = "background-color:#fff3b0;color:#7d4e00;font-weight:700"
+                return styles
 
-            gb = GridOptionsBuilder.from_dataframe(ag_data)
-            gb.configure_default_column(resizable=True, sortable=False, filter=False, suppressMenu=True)
-            gb.configure_column("asin",  headerName="ASIN",  pinned="left", width=130, lockPosition=True)
-            gb.configure_column("title", headerName="Title", pinned="left", width=260, lockPosition=True)
-            for col in date_cols:
-                gb.configure_column(col, width=110, cellStyle=cell_style_js)
-                gb.configure_column(f"_s_{col}", hide=True)
-            gb.configure_selection(selection_mode="single", use_checkbox=False)
-            gb.configure_grid_options(rowHeight=34, suppressRowClickSelection=False)
-            grid_opts = gb.build()
+            styled = display_marked.style.apply(_color_matrix, axis=None)
+            col_cfg = {
+                "asin":  st.column_config.TextColumn("ASIN",  width=120),
+                "title": st.column_config.TextColumn("Title", width=240),
+            }
+            st.dataframe(styled, use_container_width=True, column_config=col_cfg)
 
-            grid_resp = AgGrid(
-                ag_data,
-                gridOptions=grid_opts,
-                update_mode=GridUpdateMode.SELECTION_CHANGED,
-                allow_unsafe_jscode=True,
-                use_container_width=True,
-                height=min(600, 60 + 34 * len(ag_data)),
-            )
-
-            # ── Show change log for selected ASIN ────────────────────────────
-            selected = grid_resp.selected_rows
-            if selected is not None:
-                sel_list = selected.to_dict("records") if hasattr(selected, "to_dict") else list(selected)
-                if sel_list:
-                    sel_asin     = str(sel_list[0]["asin"])
-                    asin_changes = cl_df[cl_df["asin"] == sel_asin].sort_values("log_date")
-                    if not asin_changes.empty:
-                        rows_html = ""
-                        for _, chg in asin_changes.iterrows():
-                            notes = chg.get("notes") or ""
-                            rows_html += (
-                                f"<tr>"
-                                f"<td style='padding:3px 12px 3px 0;color:#888;font-size:0.82rem;'>{chg['log_date']}</td>"
-                                f"<td style='padding:3px 12px 3px 0;'>"
-                                f"<span style='background:#fff3b0;padding:1px 8px;border-radius:4px;"
-                                f"font-size:0.8rem;font-weight:600;color:#7d4e00;'>{chg['change_type'].capitalize()}</span>"
-                                f"</td>"
-                                f"<td style='padding:3px 0;color:#444;font-size:0.82rem;'>{notes}</td>"
-                                f"</tr>"
-                            )
-                        st.markdown(
-                            f"<div style='margin-top:8px;padding:10px 14px;border-left:3px solid #d4a72c;"
-                            f"background:#fffdf0;border-radius:4px;'>"
-                            f"<span style='font-size:0.82rem;font-weight:700;color:#7d4e00;'>⚑ Changes for {sel_asin}</span>"
-                            f"<table style='width:100%;border-collapse:collapse;margin-top:6px;'>"
-                            f"{rows_html}</table></div>",
-                            unsafe_allow_html=True
+            # ── Change log grouped by ASIN ────────────────────────────────────
+            if change_set and not cl_df.empty:
+                visible_asins   = set(matrix["asin"].astype(str))
+                visible_changes = cl_df[cl_df["asin"].astype(str).isin(visible_asins)].sort_values(["asin", "log_date"])
+                if not visible_changes.empty:
+                    blocks = ""
+                    for asin_val, grp in visible_changes.groupby("asin"):
+                        rows_html = "".join(
+                            f"<tr>"
+                            f"<td style='padding:2px 12px 2px 0;color:#888;font-size:0.81rem;'>{r.log_date}</td>"
+                            f"<td style='padding:2px 12px 2px 0;'><span style='background:#fff3b0;padding:1px 7px;"
+                            f"border-radius:4px;font-size:0.79rem;font-weight:600;color:#7d4e00;'>"
+                            f"{r.change_type.capitalize()}</span></td>"
+                            f"<td style='padding:2px 0;color:#444;font-size:0.81rem;'>{r.get('notes') or ''}</td>"
+                            f"</tr>"
+                            for _, r in grp.iterrows()
                         )
+                        blocks += (
+                            f"<div style='margin-bottom:8px;'>"
+                            f"<span style='font-weight:700;font-size:0.82rem;'>⚑ {asin_val}</span>"
+                            f"<table style='border-collapse:collapse;margin-top:3px;'>{rows_html}</table></div>"
+                        )
+                    st.markdown(
+                        f"<div style='margin-top:8px;padding:10px 14px;border-left:3px solid #d4a72c;"
+                        f"background:#fffdf0;border-radius:4px;'>{blocks}</div>",
+                        unsafe_allow_html=True
+                    )
 
             # ── Legend ────────────────────────────────────────────────────────
             if yoy_mode:
