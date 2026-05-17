@@ -934,6 +934,7 @@ with tab_recs:
                     "reasoning":              r_reasoning,
                     "window_days":            14,
                     "review_date":            str(r_review),
+                    "source":                 "manual",
                 })
                 st.session_state.pop("rec_prefill", None)
                 st.success("✅ Recommendation saved.")
@@ -942,14 +943,21 @@ with tab_recs:
     st.divider()
 
     # ── Filter + list ─────────────────────────────────────────────────────────
-    rhf1, rhf2 = st.columns(2)
+    rhf1, rhf2, rhf3 = st.columns(3)
     with rhf1:
         rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
         rh_market = None if rh_market == "all" else rh_market
     with rhf2:
+        rh_source = st.selectbox("Source", ["All", "Manual only", "Auto only"], key="rh_source")
+    with rhf3:
         show_pending = st.checkbox("Show only pending review", value=False)
 
     recs_df = get_recommendations_history(marketplace=rh_market)
+
+    # Apply source filter
+    if not recs_df.empty and rh_source != "All":
+        _src_val = "manual" if rh_source == "Manual only" else "auto"
+        recs_df = recs_df[recs_df["source"].fillna("auto") == _src_val]
 
     # Sort: highest score first, then newest date
     if not recs_df.empty:
@@ -985,7 +993,7 @@ with tab_recs:
         recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
 
         display_cols = [
-            "id", "date_given", "score", "asin", "marketplace", "campaign_name",
+            "id", "date_given", "source", "score", "asin", "marketplace", "campaign_name",
             "placement_type", "campaign_type", "change",
             "reasoning", "review_date", "outcome"
         ]
