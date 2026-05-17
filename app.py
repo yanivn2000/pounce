@@ -864,45 +864,6 @@ with tab_recs:
     )
     st.divider()
 
-    # ── Save recommendation manually ──────────────────────────────────────────
-    with st.expander("➕ Log a Recommendation"):
-        with st.form("rec_form"):
-            rc1, rc2 = st.columns(2)
-            with rc1:
-                r_date    = st.date_input("Date Given", value=date.today())
-                r_asin    = st.text_input("ASIN (optional)", placeholder="B0XXXXXXXX")
-                r_camp    = st.text_input("Campaign Name")
-                r_place   = st.selectbox("Placement", ["Top of Search", "Rest of Search", "Product Pages"])
-            with rc2:
-                r_type    = st.selectbox("Campaign Type", ["SP", "SB"])
-                r_cur_mul = st.number_input("Current Multiplier %", min_value=0, max_value=900, value=0)
-                r_action  = st.selectbox("Recommended Action", ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"])
-                r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900, value=0)
-
-            r_mkt = st.selectbox("Marketplace", ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rec_mkt")
-            r_reasoning = st.text_area("Reasoning / Notes")
-            r_review = st.date_input("Review Date", value=date.today() + timedelta(days=14))
-
-            if st.form_submit_button("💾 Save Recommendation", type="primary"):
-                save_recommendation({
-                    "date_given":             str(r_date),
-                    "asin":                   r_asin.strip().upper() or None,
-                    "marketplace":            r_mkt,
-                    "campaign_name":          r_camp,
-                    "placement_type":         r_place,
-                    "campaign_type":          r_type,
-                    "current_multiplier":     r_cur_mul,
-                    "recommended_action":     r_action,
-                    "recommended_multiplier": r_rec_mul,
-                    "reasoning":              r_reasoning,
-                    "window_days":            14,
-                    "review_date":            str(r_review),
-                })
-                st.success("✅ Recommendation saved.")
-                st.rerun()
-
-    st.divider()
-
     # ── Filter + list ─────────────────────────────────────────────────────────
     rhf1, rhf2 = st.columns(2)
     with rhf1:
@@ -919,7 +880,7 @@ with tab_recs:
         recs_df = recs_df.sort_values(["score", "date_given"], ascending=[False, False]).reset_index(drop=True)
 
     if recs_df.empty:
-        st.info("No recommendations logged yet. Run an analysis or add one manually above.")
+        st.info("No recommendations logged yet. Run an analysis to generate them.")
     else:
         if show_pending:
             today_str = str(date.today())
@@ -952,15 +913,39 @@ with tab_recs:
             "reasoning", "review_date", "outcome"
         ]
         existing_cols = [c for c in display_cols if c in recs_display.columns]
-        st.dataframe(
+
+        st.markdown(
+            f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
+            "💡 Select a row then click <strong>Clone &amp; Edit</strong> to adjust and re-log it.</p>",
+            unsafe_allow_html=True,
+        )
+        _sel = st.dataframe(
             recs_display[existing_cols],
             use_container_width=True,
             hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
             column_config={
                 "change":    st.column_config.TextColumn("Change",    width=90),
                 "reasoning": st.column_config.TextColumn("Reasoning", width=400),
-            }
+            },
+            key="recs_table_sel",
         )
+
+        # Clone & Edit button when a row is selected
+        _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
+        if _sel_rows:
+            _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
+            _camp_preview = str(_sel_data.get("campaign_name") or "")[:50]
+            _place_preview = str(_sel_data.get("placement_type") or "")
+            st.markdown(
+                f"<p style='font-size:0.82rem;color:{T['text_secondary']};margin:4px 0;'>"
+                f"Selected: <strong>{_camp_preview}</strong> · {_place_preview}</p>",
+                unsafe_allow_html=True,
+            )
+            if st.button("📋 Clone & Edit", type="primary"):
+                st.session_state["rec_prefill"] = _sel_data
+                st.rerun()
 
         # ── Record outcome ────────────────────────────────────────────────────
         st.divider()
@@ -979,6 +964,74 @@ with tab_recs:
                     st.rerun()
                 else:
                     st.warning("Enter an outcome first.")
+
+    st.divider()
+
+    # ── Log a Recommendation (manual or pre-filled from table) ────────────────
+    _pf = st.session_state.get("rec_prefill", {})
+    _place_opts  = ["Top of Search", "Rest of Search", "Product Pages"]
+    _action_opts = ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"]
+    _type_opts   = ["SP", "SB"]
+    _mkt_opts    = ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"]
+
+    _expander_label = "📋 Edit & Log (pre-filled from selection)" if _pf else "➕ Log a Recommendation"
+    with st.expander(_expander_label, expanded=bool(_pf)):
+        if _pf:
+            st.info(f"Pre-filled from rec #{int(_pf.get('id', 0))} — adjust as needed before saving.")
+            if st.button("✖ Clear pre-fill", key="clear_prefill"):
+                st.session_state.pop("rec_prefill", None)
+                st.rerun()
+
+        with st.form("rec_form", clear_on_submit=True):
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                r_date  = st.date_input("Date Given", value=date.today())
+                r_asin  = st.text_input("ASIN (optional)",
+                                        value=str(_pf.get("asin") or ""),
+                                        placeholder="B0XXXXXXXX")
+                r_camp  = st.text_input("Campaign Name",
+                                        value=str(_pf.get("campaign_name") or ""))
+                _place_idx = _place_opts.index(_pf["placement_type"]) \
+                    if _pf.get("placement_type") in _place_opts else 0
+                r_place = st.selectbox("Placement", _place_opts, index=_place_idx)
+            with rc2:
+                _type_idx = _type_opts.index(_pf["campaign_type"]) \
+                    if _pf.get("campaign_type") in _type_opts else 0
+                r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx)
+                r_cur_mul = st.number_input("Current Multiplier %", min_value=0, max_value=900,
+                                            value=int(float(_pf.get("current_multiplier") or 0)))
+                _action_idx = next(
+                    (i for i, a in enumerate(_action_opts)
+                     if a.lower() == str(_pf.get("recommended_action") or "").lower()), 0)
+                r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx)
+                r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900,
+                                            value=int(float(_pf.get("recommended_multiplier") or 0)))
+
+            _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
+                if _pf.get("marketplace") in _mkt_opts else 0
+            r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx, key="rec_mkt")
+            r_reasoning = st.text_area("Reasoning / Notes",
+                                       value=str(_pf.get("reasoning") or ""))
+            r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14))
+
+            if st.form_submit_button("💾 Save Recommendation", type="primary"):
+                save_recommendation({
+                    "date_given":             str(r_date),
+                    "asin":                   r_asin.strip().upper() or None,
+                    "marketplace":            r_mkt,
+                    "campaign_name":          r_camp,
+                    "placement_type":         r_place,
+                    "campaign_type":          r_type,
+                    "current_multiplier":     r_cur_mul,
+                    "recommended_action":     r_action,
+                    "recommended_multiplier": r_rec_mul,
+                    "reasoning":              r_reasoning,
+                    "window_days":            14,
+                    "review_date":            str(r_review),
+                })
+                st.session_state.pop("rec_prefill", None)
+                st.success("✅ Recommendation saved.")
+                st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — ADMIN  (admin role only)
