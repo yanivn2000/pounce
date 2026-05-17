@@ -266,20 +266,24 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_ads, tab_products, tab_sales, tab_admin = st.tabs([
-        "📣 Ads", "📦 Products & Costs", "📈 Sales Dashboard", "⚙️ Admin"
+    tab_ads, tab_sales, tab_profit, tab_admin = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "💰 Profit", "⚙️ Admin"
     ])
 else:
-    tab_ads, tab_products, tab_sales = st.tabs([
-        "📣 Ads", "📦 Products & Costs", "📈 Sales Dashboard"
+    tab_ads, tab_sales, tab_profit = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "💰 Profit"
     ])
     tab_admin = None
 
 # Analysis content moved into Ads tab below
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — PRODUCTS & COSTS (per marketplace, DB-backed)
+# TAB — PROFIT
 # ══════════════════════════════════════════════════════════════════════════════
+with tab_profit:
+    _products_tab, = st.tabs(["📦 Products & Costs"])
+    tab_products = _products_tab
+
 with tab_products:
     st.markdown("# 📦 Products & Costs")
     st.markdown(
