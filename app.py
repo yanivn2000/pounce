@@ -471,10 +471,18 @@ with tab_sales:
 
         # ── Filters ───────────────────────────────────────────────────────────
         available_markets = get_marketplaces()
+        _PRIORITY = ["amazon.com", "amazon.ca", "amazon.co.uk"]
+        _SEP      = "── Other ──────────────"
+        _main     = [m for m in _PRIORITY if m in available_markets]
+        _others   = sorted(m for m in available_markets if m not in _PRIORITY)
+        mkt_options = ["all"] + _main + ([_SEP] + _others if _others else [])
+
         fcol1, fcol2, fcol3, fcol4 = st.columns([2, 2, 2, 1])
         with fcol1:
-            mkt_options = ["all"] + available_markets
             sel_market_raw = st.selectbox("Marketplace", mkt_options, key="dash_market")
+            # Treat separator as "all"
+            if sel_market_raw == _SEP:
+                sel_market_raw = "all"
             sel_market = None if sel_market_raw == "all" else sel_market_raw
         with fcol2:
             view_mode = st.radio("View", ["Daily", "Weekly"], horizontal=True, key="dash_view")
