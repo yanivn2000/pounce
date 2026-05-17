@@ -66,17 +66,20 @@ h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace !important; letter-spacing
 .block-container {{ padding-top: 0.6rem !important; padding-bottom: 1rem !important; }}
 header[data-testid="stHeader"] {{ height: 0 !important; min-height: 0 !important; }}
 div[data-testid="stToolbar"] {{ display: none !important; }}
+/* Reduce vertical gap between widgets */
+div[data-testid="stVerticalBlock"] > div {{ gap: 0.3rem !important; }}
+div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div {{ gap: 0.2rem !important; }}
 .metric-card {{
     background: {T['card_bg']}; border: 1px solid {T['card_border']};
-    border-radius: 8px; padding: 1.2rem 1.5rem; text-align: center;
+    border-radius: 6px; padding: 0.45rem 1rem; text-align: center;
 }}
 .metric-val {{
-    font-family: 'IBM Plex Mono', monospace; font-size: 2rem;
+    font-family: 'IBM Plex Mono', monospace; font-size: 1.15rem;
     font-weight: 600; color: {T['metric_val']}; margin: 0;
 }}
 .metric-label {{
-    font-size: 0.75rem; color: {T['text_secondary']};
-    text-transform: uppercase; letter-spacing: 0.08em; margin: 4px 0 0;
+    font-size: 0.68rem; color: {T['text_secondary']};
+    text-transform: uppercase; letter-spacing: 0.08em; margin: 2px 0 0;
 }}
 .alert-box {{
     background: {T['alert_bg']}; border: 1px solid {T['alert_border']};
@@ -466,7 +469,7 @@ with tab_sales:
         sc2.markdown(f'<div class="metric-card"><p class="metric-val">{min_date}</p><p class="metric-label">Earliest Date</p></div>', unsafe_allow_html=True)
         sc3.markdown(f'<div class="metric-card"><p class="metric-val">{max_date}</p><p class="metric-label">Latest Date</p></div>', unsafe_allow_html=True)
 
-        st.divider()
+        st.markdown("<div style='margin: 6px 0 0;'></div>", unsafe_allow_html=True)
 
         # ── Filters ───────────────────────────────────────────────────────────
         available_markets = get_marketplaces()
