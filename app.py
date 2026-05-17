@@ -62,6 +62,10 @@ st.markdown(f"""
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 html, body, [class*="css"] {{ font-family: 'IBM Plex Sans', sans-serif; }}
 h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace !important; letter-spacing: -0.03em; }}
+/* Tighten Streamlit's default top padding */
+.block-container {{ padding-top: 0.6rem !important; padding-bottom: 1rem !important; }}
+header[data-testid="stHeader"] {{ height: 0 !important; min-height: 0 !important; }}
+div[data-testid="stToolbar"] {{ display: none !important; }}
 .metric-card {{
     background: {T['card_bg']}; border: 1px solid {T['card_border']};
     border-radius: 8px; padding: 1.2rem 1.5rem; text-align: center;
@@ -415,13 +419,12 @@ with tab_products:
 # TAB 3 — SALES DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_sales:
-    st.markdown("# 📈 Sales Dashboard")
     st.markdown(
-        f"<p style='color:{T['text_secondary']};'>Product × Date revenue matrix. "
-        f"Upload Amazon order reports to populate.</p>",
+        f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>📈 Sales Dashboard &nbsp;"
+        f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
+        f"Units sold by ASIN × date. Upload Amazon order reports to populate.</span></p>",
         unsafe_allow_html=True
     )
-    st.divider()
 
     # ── Import orders ─────────────────────────────────────────────────────────
     with st.expander("📤 Import Amazon Orders CSV", expanded=(count_orders() == 0)):
