@@ -52,7 +52,15 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
     Returns (rows_imported, warnings).
     """
     try:
-        df = pd.read_csv(file_obj, dtype=str)
+        # Auto-detect separator: Amazon fulfillment reports are tab-separated,
+        # manually exported Google Sheets files are comma-separated.
+        sample = file_obj.read(4096)
+        if isinstance(sample, bytes):
+            sample = sample.decode("utf-8", errors="replace")
+        file_obj.seek(0)
+        first_line = sample.split("\n")[0]
+        sep = "\t" if first_line.count("\t") >= first_line.count(",") else ","
+        df = pd.read_csv(file_obj, dtype=str, sep=sep)
     except Exception as e:
         return 0, [f"Failed to read CSV: {e}"]
 
