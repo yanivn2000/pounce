@@ -62,8 +62,8 @@ st.markdown(f"""
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 html, body, [class*="css"] {{ font-family: 'IBM Plex Sans', sans-serif; }}
 h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace !important; letter-spacing: -0.03em; }}
-/* Tighten Streamlit's default top padding */
-.block-container {{ padding-top: 1rem !important; padding-bottom: 1rem !important; }}
+/* Tighten Streamlit's default top padding (default is 5rem, min needed to clear fixed header ~2.5rem) */
+.block-container {{ padding-top: 2.5rem !important; padding-bottom: 1rem !important; }}
 /* Reduce vertical gap between widgets */
 div[data-testid="stVerticalBlock"] > div {{ gap: 0.3rem !important; }}
 div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div {{ gap: 0.2rem !important; }}
