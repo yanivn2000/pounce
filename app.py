@@ -974,6 +974,15 @@ with tab_recs:
     _type_opts   = ["SP", "SB"]
     _mkt_opts    = ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"]
 
+    def _safe_int(val, default=0):
+        """Convert val to int safely, returning default for None/NaN/invalid."""
+        try:
+            v = float(val)
+            import math
+            return default if math.isnan(v) else int(v)
+        except (TypeError, ValueError):
+            return default
+
     _expander_label = "📋 Edit & Log (pre-filled from selection)" if _pf else "➕ Log a Recommendation"
     with st.expander(_expander_label, expanded=bool(_pf)):
         if _pf:
@@ -999,13 +1008,13 @@ with tab_recs:
                     if _pf.get("campaign_type") in _type_opts else 0
                 r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx)
                 r_cur_mul = st.number_input("Current Multiplier %", min_value=0, max_value=900,
-                                            value=int(float(_pf.get("current_multiplier") or 0)))
+                                            value=_safe_int(_pf.get("current_multiplier")))
                 _action_idx = next(
                     (i for i, a in enumerate(_action_opts)
                      if a.lower() == str(_pf.get("recommended_action") or "").lower()), 0)
                 r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx)
                 r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900,
-                                            value=int(float(_pf.get("recommended_multiplier") or 0)))
+                                            value=_safe_int(_pf.get("recommended_multiplier")))
 
             _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
                 if _pf.get("marketplace") in _mkt_opts else 0
