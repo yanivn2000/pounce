@@ -913,6 +913,11 @@ with tab_recs:
 
     recs_df = get_recommendations_history(marketplace=rh_market)
 
+    # Sort: highest score first, then newest date
+    if not recs_df.empty:
+        recs_df["score"] = pd.to_numeric(recs_df["score"], errors="coerce").fillna(0)
+        recs_df = recs_df.sort_values(["score", "date_given"], ascending=[False, False]).reset_index(drop=True)
+
     if recs_df.empty:
         st.info("No recommendations logged yet. Run an analysis or add one manually above.")
     else:
