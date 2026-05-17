@@ -142,7 +142,7 @@ with tab_analysis:
 
     if products_exist_db():
         cost_map = get_cost_map_db()
-        st.success(f"✅ Product cost data loaded — break-even ROAS calculated dynamically for {len(cost_map)} products. Default ROAS target {target_roas} used for others.")
+        st.success(f"✅ Product cost data loaded — break-even ROAS calculated dynamically for {len(cost_map)} products.")
     else:
         st.warning("⚠️ No product cost data found. Using default ROAS target. Go to **Products & Costs** tab to set up.")
         cost_map = {}
