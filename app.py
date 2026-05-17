@@ -4,6 +4,7 @@ Streamlit web app for triple gifted advertising team.
 """
 
 import streamlit as st
+import streamlit_authenticator as stauth
 import tempfile
 import os
 import uuid
@@ -103,10 +104,50 @@ div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div {{ gap: 0.2
 </style>
 """, unsafe_allow_html=True)
 
+# ── Authentication ────────────────────────────────────────────────────────────
+_secrets  = st.secrets["auth"]
+_creds    = {"usernames": {}}
+for _uname, _udata in _secrets["credentials"]["usernames"].items():
+    _creds["usernames"][_uname] = {
+        "name":            _udata["name"],
+        "email":           _udata["email"],
+        "password":        _udata["hashed_password"],
+    }
+
+authenticator = stauth.Authenticate(
+    credentials        = _creds,
+    cookie_name        = _secrets["cookie_name"],
+    cookie_key         = _secrets["cookie_key"],
+    cookie_expiry_days = int(_secrets["cookie_expiry_days"]),
+)
+
+authenticator.login(location="main")
+authentication_status = st.session_state.get("authentication_status")
+current_username      = st.session_state.get("username", "")
+
+if authentication_status is False:
+    st.error("Incorrect username or password.")
+    st.stop()
+elif authentication_status is None:
+    st.stop()
+
+# Determine role from secrets
+_current_role = st.secrets["auth"]["credentials"]["usernames"].get(
+    current_username, {}
+).get("role", "team")
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🐾 Pounce")
     st.markdown(f"<p style='color:{T['text_secondary']};font-size:0.8rem;margin-top:-10px;'>Hunt down your best placements.</p>", unsafe_allow_html=True)
+
+    _display_name = st.secrets["auth"]["credentials"]["usernames"].get(current_username, {}).get("name", current_username)
+    st.markdown(
+        f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin:0;'>"
+        f"👤 Signed in as <strong>{_display_name}</strong></p>",
+        unsafe_allow_html=True,
+    )
+    authenticator.logout("Sign out", location="sidebar")
     st.divider()
 
     api_key = st.text_input(
@@ -125,9 +166,15 @@ with st.sidebar:
     )
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_analysis, tab_products, tab_sales, tab_recs, tab_admin = st.tabs([
-    "📊 Analysis", "📦 Products & Costs", "📈 Sales Dashboard", "📋 Recommendations", "⚙️ Admin"
-])
+if _current_role == "admin":
+    tab_analysis, tab_products, tab_sales, tab_recs, tab_admin = st.tabs([
+        "📊 Analysis", "📦 Products & Costs", "📈 Sales Dashboard", "📋 Recommendations", "⚙️ Admin"
+    ])
+else:
+    tab_analysis, tab_products, tab_sales, tab_recs = st.tabs([
+        "📊 Analysis", "📦 Products & Costs", "📈 Sales Dashboard", "📋 Recommendations"
+    ])
+    tab_admin = None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — ANALYSIS
@@ -830,57 +877,58 @@ with tab_recs:
                     st.warning("Enter an outcome first.")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — ADMIN
+# TAB 5 — ADMIN  (admin role only)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_admin:
-    st.markdown("# ⚙️ Admin")
-    st.markdown(
-        f"<p style='color:{T['text_secondary']};'>Maintenance tools. Use with care.</p>",
-        unsafe_allow_html=True
-    )
-    st.divider()
+if tab_admin is not None:
+    with tab_admin:
+        st.markdown("# ⚙️ Admin")
+        st.markdown(
+            f"<p style='color:{T['text_secondary']};'>Maintenance tools. Use with care.</p>",
+            unsafe_allow_html=True,
+        )
+        st.divider()
 
-    st.markdown("### 🗑️ Reset Data")
+        st.markdown("### 🗑️ Reset Data")
 
-    from db.database import get_conn as _get_conn
+        from db.database import get_conn as _get_conn
 
-    def _count(table):
-        conn = _get_conn()
-        n = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        conn.close()
-        return n
-
-    rec_count = _count("recommendations")
-    log_count = _count("change_log")
-
-    st.markdown(
-        f"Current records: &nbsp;"
-        f"<strong>{rec_count:,}</strong> recommendations &nbsp;·&nbsp; "
-        f"<strong>{log_count:,}</strong> change log entries",
-        unsafe_allow_html=True
-    )
-    st.divider()
-
-    col_r, col_c = st.columns(2)
-
-    with col_r:
-        st.markdown("#### Recommendations")
-        confirm_recs = st.checkbox("Yes, delete all recommendations", key="confirm_recs")
-        if st.button("🗑️ Delete All Recommendations", type="primary", disabled=not confirm_recs):
+        def _count(table):
             conn = _get_conn()
-            with conn:
-                conn.execute("DELETE FROM recommendations")
+            n = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             conn.close()
-            st.success(f"✅ Deleted {rec_count:,} recommendations.")
-            st.rerun()
+            return n
 
-    with col_c:
-        st.markdown("#### Change Log")
-        confirm_log = st.checkbox("Yes, delete all change log entries", key="confirm_log")
-        if st.button("🗑️ Delete All Change Log", type="primary", disabled=not confirm_log):
-            conn = _get_conn()
-            with conn:
-                conn.execute("DELETE FROM change_log")
-            conn.close()
-            st.success(f"✅ Deleted {log_count:,} change log entries.")
-            st.rerun()
+        rec_count = _count("recommendations")
+        log_count = _count("change_log")
+
+        st.markdown(
+            f"Current records: &nbsp;"
+            f"<strong>{rec_count:,}</strong> recommendations &nbsp;·&nbsp; "
+            f"<strong>{log_count:,}</strong> change log entries",
+            unsafe_allow_html=True,
+        )
+        st.divider()
+
+        col_r, col_c = st.columns(2)
+
+        with col_r:
+            st.markdown("#### Recommendations")
+            confirm_recs = st.checkbox("Yes, delete all recommendations", key="confirm_recs")
+            if st.button("🗑️ Delete All Recommendations", type="primary", disabled=not confirm_recs):
+                conn = _get_conn()
+                with conn:
+                    conn.execute("DELETE FROM recommendations")
+                conn.close()
+                st.success(f"✅ Deleted {rec_count:,} recommendations.")
+                st.rerun()
+
+        with col_c:
+            st.markdown("#### Change Log")
+            confirm_log = st.checkbox("Yes, delete all change log entries", key="confirm_log")
+            if st.button("🗑️ Delete All Change Log", type="primary", disabled=not confirm_log):
+                conn = _get_conn()
+                with conn:
+                    conn.execute("DELETE FROM change_log")
+                conn.close()
+                st.success(f"✅ Deleted {log_count:,} change log entries.")
+                st.rerun()

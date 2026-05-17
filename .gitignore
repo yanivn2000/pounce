@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 data/pounce.db
 .claude/
+
+# Secrets — never commit credentials
+.streamlit/secrets.toml
