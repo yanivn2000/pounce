@@ -864,109 +864,6 @@ with tab_recs:
     )
     st.divider()
 
-    # ── Filter + list ─────────────────────────────────────────────────────────
-    rhf1, rhf2 = st.columns(2)
-    with rhf1:
-        rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
-        rh_market = None if rh_market == "all" else rh_market
-    with rhf2:
-        show_pending = st.checkbox("Show only pending review", value=False)
-
-    recs_df = get_recommendations_history(marketplace=rh_market)
-
-    # Sort: highest score first, then newest date
-    if not recs_df.empty:
-        recs_df["score"] = pd.to_numeric(recs_df["score"], errors="coerce").fillna(0)
-        recs_df = recs_df.sort_values(["score", "date_given"], ascending=[False, False]).reset_index(drop=True)
-
-    if recs_df.empty:
-        st.info("No recommendations logged yet. Run an analysis to generate them.")
-    else:
-        if show_pending:
-            today_str = str(date.today())
-            recs_df = recs_df[
-                (recs_df["review_date"].fillna("") <= today_str) &
-                (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
-            ]
-
-        def _fmt_change(row):
-            action = str(row.get("recommended_action") or "").strip()
-            mult   = row.get("recommended_multiplier")
-            try:
-                pct = int(round(float(mult)))
-            except (TypeError, ValueError):
-                pct = None
-            if action.lower() == "increase" and pct is not None:
-                return f"+{pct}%"
-            elif action.lower() == "decrease" and pct is not None:
-                return f"-{pct}%"
-            elif action.lower() == "no change":
-                return "0%"
-            return action or "—"
-
-        recs_display = recs_df.copy()
-        recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
-
-        display_cols = [
-            "id", "date_given", "score", "asin", "marketplace", "campaign_name",
-            "placement_type", "campaign_type", "change",
-            "reasoning", "review_date", "outcome"
-        ]
-        existing_cols = [c for c in display_cols if c in recs_display.columns]
-
-        st.markdown(
-            f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
-            "💡 Select a row then click <strong>Clone &amp; Edit</strong> to adjust and re-log it.</p>",
-            unsafe_allow_html=True,
-        )
-        _sel = st.dataframe(
-            recs_display[existing_cols],
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            column_config={
-                "change":    st.column_config.TextColumn("Change",    width=90),
-                "reasoning": st.column_config.TextColumn("Reasoning", width=400),
-            },
-            key="recs_table_sel",
-        )
-
-        # Clone & Edit button when a row is selected
-        _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
-        if _sel_rows:
-            _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
-            _camp_preview = str(_sel_data.get("campaign_name") or "")[:50]
-            _place_preview = str(_sel_data.get("placement_type") or "")
-            st.markdown(
-                f"<p style='font-size:0.82rem;color:{T['text_secondary']};margin:4px 0;'>"
-                f"Selected: <strong>{_camp_preview}</strong> · {_place_preview}</p>",
-                unsafe_allow_html=True,
-            )
-            if st.button("📋 Clone & Edit", type="primary"):
-                st.session_state["rec_prefill"] = _sel_data
-                st.rerun()
-
-        # ── Record outcome ────────────────────────────────────────────────────
-        st.divider()
-        st.markdown("### ✅ Record Outcome")
-        oc1, oc2, oc3 = st.columns([1, 3, 1])
-        with oc1:
-            outcome_id = st.number_input("Rec ID", min_value=1, step=1)
-        with oc2:
-            outcome_text = st.text_input("Outcome", placeholder="e.g. ROAS improved from 2.1 to 3.4")
-        with oc3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("💾 Save Outcome"):
-                if outcome_text.strip():
-                    update_recommendation_outcome(int(outcome_id), outcome_text.strip())
-                    st.success("✅ Outcome recorded.")
-                    st.rerun()
-                else:
-                    st.warning("Enter an outcome first.")
-
-    st.divider()
-
     # ── Log a Recommendation (manual or pre-filled from table) ────────────────
     _pf = st.session_state.get("rec_prefill", {})
     _place_opts  = ["Top of Search", "Rest of Search", "Product Pages"]
@@ -1041,6 +938,109 @@ with tab_recs:
                 st.session_state.pop("rec_prefill", None)
                 st.success("✅ Recommendation saved.")
                 st.rerun()
+
+    st.divider()
+
+    # ── Filter + list ─────────────────────────────────────────────────────────
+    rhf1, rhf2 = st.columns(2)
+    with rhf1:
+        rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
+        rh_market = None if rh_market == "all" else rh_market
+    with rhf2:
+        show_pending = st.checkbox("Show only pending review", value=False)
+
+    recs_df = get_recommendations_history(marketplace=rh_market)
+
+    # Sort: highest score first, then newest date
+    if not recs_df.empty:
+        recs_df["score"] = pd.to_numeric(recs_df["score"], errors="coerce").fillna(0)
+        recs_df = recs_df.sort_values(["score", "date_given"], ascending=[False, False]).reset_index(drop=True)
+
+    if recs_df.empty:
+        st.info("No recommendations logged yet. Run an analysis to generate them.")
+    else:
+        if show_pending:
+            today_str = str(date.today())
+            recs_df = recs_df[
+                (recs_df["review_date"].fillna("") <= today_str) &
+                (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
+            ]
+
+        def _fmt_change(row):
+            action = str(row.get("recommended_action") or "").strip()
+            mult   = row.get("recommended_multiplier")
+            try:
+                pct = int(round(float(mult)))
+            except (TypeError, ValueError):
+                pct = None
+            if action.lower() == "increase" and pct is not None:
+                return f"+{pct}%"
+            elif action.lower() == "decrease" and pct is not None:
+                return f"-{pct}%"
+            elif action.lower() == "no change":
+                return "0%"
+            return action or "—"
+
+        recs_display = recs_df.copy()
+        recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
+
+        display_cols = [
+            "id", "date_given", "score", "asin", "marketplace", "campaign_name",
+            "placement_type", "campaign_type", "change",
+            "reasoning", "review_date", "outcome"
+        ]
+        existing_cols = [c for c in display_cols if c in recs_display.columns]
+
+        st.markdown(
+            f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
+            "💡 Select a row then click <strong>Clone &amp; Edit</strong> to adjust and re-log it.</p>",
+            unsafe_allow_html=True,
+        )
+        _sel = st.dataframe(
+            recs_display[existing_cols],
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={
+                "change":    st.column_config.TextColumn("Change",    width=90),
+                "reasoning": st.column_config.TextColumn("Reasoning", width=400),
+            },
+            key="recs_table_sel",
+        )
+
+        # Clone & Edit — scrolls user back up to the form
+        _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
+        if _sel_rows:
+            _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
+            _camp_preview = str(_sel_data.get("campaign_name") or "")[:50]
+            _place_preview = str(_sel_data.get("placement_type") or "")
+            st.markdown(
+                f"<p style='font-size:0.82rem;color:{T['text_secondary']};margin:4px 0;'>"
+                f"Selected: <strong>{_camp_preview}</strong> · {_place_preview}</p>",
+                unsafe_allow_html=True,
+            )
+            if st.button("📋 Clone & Edit", type="primary"):
+                st.session_state["rec_prefill"] = _sel_data
+                st.rerun()
+
+        # ── Record outcome ────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### ✅ Record Outcome")
+        oc1, oc2, oc3 = st.columns([1, 3, 1])
+        with oc1:
+            outcome_id = st.number_input("Rec ID", min_value=1, step=1)
+        with oc2:
+            outcome_text = st.text_input("Outcome", placeholder="e.g. ROAS improved from 2.1 to 3.4")
+        with oc3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("💾 Save Outcome"):
+                if outcome_text.strip():
+                    update_recommendation_outcome(int(outcome_id), outcome_text.strip())
+                    st.success("✅ Outcome recorded.")
+                    st.rerun()
+                else:
+                    st.warning("Enter an outcome first.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — ADMIN  (admin role only)
