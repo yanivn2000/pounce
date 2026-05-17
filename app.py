@@ -121,15 +121,108 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days = int(_secrets["cookie_expiry_days"]),
 )
 
-authenticator.login(location="main")
+# Show custom login page when not yet authenticated
+if not st.session_state.get("authentication_status"):
+    st.markdown("""
+    <style>
+    /* Full-page login background */
+    .stApp { background: #f0f2f6; }
+    .block-container { padding-top: 0 !important; }
+
+    /* Hide default Streamlit form chrome on login page */
+    [data-testid="stForm"] {
+        background: #ffffff;
+        border: 1px solid #d0d7de;
+        border-radius: 12px;
+        padding: 2rem 2rem 1.5rem !important;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        max-width: 420px;
+        margin: 0 auto;
+    }
+    /* Hide the "Login" subheader — we render our own */
+    [data-testid="stForm"] h2 { display: none; }
+
+    /* Input labels */
+    [data-testid="stForm"] label { font-size: 0.82rem !important; font-weight: 600 !important; color: #57606a !important; }
+
+    /* Inputs */
+    [data-testid="stForm"] input {
+        border-radius: 8px !important;
+        border: 1px solid #d0d7de !important;
+        font-size: 0.95rem !important;
+        padding: 0.55rem 0.75rem !important;
+    }
+    [data-testid="stForm"] input:focus {
+        border-color: #0969da !important;
+        box-shadow: 0 0 0 3px rgba(9,105,218,0.15) !important;
+    }
+
+    /* Login button */
+    [data-testid="stFormSubmitButton"] button {
+        width: 100% !important;
+        background: #0969da !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 0.6rem 1rem !important;
+        font-size: 0.95rem !important;
+        font-weight: 600 !important;
+        margin-top: 0.5rem !important;
+        cursor: pointer !important;
+        transition: background 0.15s ease !important;
+    }
+    [data-testid="stFormSubmitButton"] button:hover {
+        background: #0860ca !important;
+    }
+
+    /* Error message */
+    [data-testid="stAlert"] {
+        max-width: 420px;
+        margin: 0.75rem auto 0;
+        border-radius: 8px;
+    }
+
+    /* Mobile */
+    @media (max-width: 600px) {
+        [data-testid="stForm"] {
+            border-radius: 0;
+            border-left: none;
+            border-right: none;
+            box-shadow: none;
+            padding: 1.5rem 1.25rem !important;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Logo + title above the form
+    st.markdown("""
+    <div style="text-align:center; padding: 3rem 1rem 1.5rem;">
+        <div style="font-size:3rem; line-height:1;">🐾</div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:2rem; font-weight:700;
+                    letter-spacing:-0.04em; color:#1f2328; margin-top:0.4rem;">Pounce</div>
+        <div style="font-size:0.82rem; color:#57606a; margin-top:0.25rem;
+                    letter-spacing:0.06em; text-transform:uppercase;">
+            triple gifted · Amazon Ads Intelligence
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Center the form using columns
+    _lc, _mc, _rc = st.columns([1, 2, 1])
+    with _mc:
+        authenticator.login(location="main")
+
+    authentication_status = st.session_state.get("authentication_status")
+    if authentication_status is False:
+        st.markdown("""
+        <div style="max-width:420px;margin:0 auto;">
+        </div>""", unsafe_allow_html=True)
+        st.error("Incorrect username or password.")
+    st.stop()
+
 authentication_status = st.session_state.get("authentication_status")
 current_username      = st.session_state.get("username", "")
-
-if authentication_status is False:
-    st.error("Incorrect username or password.")
-    st.stop()
-elif authentication_status is None:
-    st.stop()
 
 # Determine role from secrets
 _current_role = st.secrets["auth"]["credentials"]["usernames"].get(
