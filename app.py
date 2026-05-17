@@ -67,6 +67,14 @@ h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace !important; letter-spacing
 /* Reduce vertical gap between widgets */
 div[data-testid="stVerticalBlock"] > div {{ gap: 0.3rem !important; }}
 div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div {{ gap: 0.2rem !important; }}
+/* Compact dataframe row height */
+[data-testid="stDataFrame"] .dvn-scroller [role="gridcell"],
+[data-testid="stDataFrame"] .dvn-scroller [role="columnheader"] {{
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+    min-height: unset !important;
+    line-height: 1.3 !important;
+}}
 .metric-card {{
     background: {T['card_bg']}; border: 1px solid {T['card_border']};
     border-radius: 6px; padding: 0.45rem 1rem; text-align: center;
