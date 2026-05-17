@@ -266,202 +266,16 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_analysis, tab_products, tab_sales, tab_recs, tab_admin = st.tabs([
-        "📊 Analysis", "📦 Products & Costs", "📈 Sales Dashboard", "📋 Recommendations", "⚙️ Admin"
+    tab_ads, tab_products, tab_sales, tab_admin = st.tabs([
+        "📣 Ads", "📦 Products & Costs", "📈 Sales Dashboard", "⚙️ Admin"
     ])
 else:
-    tab_analysis, tab_products, tab_sales, tab_recs = st.tabs([
-        "📊 Analysis", "📦 Products & Costs", "📈 Sales Dashboard", "📋 Recommendations"
+    tab_ads, tab_products, tab_sales = st.tabs([
+        "📣 Ads", "📦 Products & Costs", "📈 Sales Dashboard"
     ])
     tab_admin = None
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — ANALYSIS
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_analysis:
-    st.markdown("# 📊 Amazon Ads Placement Analyzer")
-    st.markdown(
-        f"<p style='color:{T['text_secondary']};font-size:0.95rem;'>"
-        f"Upload your 30-day placement reports. Get scores, bid recommendations, alerts, and AI comments.</p>",
-        unsafe_allow_html=True
-    )
-
-    if products_exist_db():
-        cost_map = get_cost_map_db()
-        st.success(f"✅ Product cost data loaded — break-even ROAS calculated dynamically for {len(cost_map)} products.")
-    else:
-        st.warning("⚠️ No product cost data found. Using default ROAS target. Go to **Products & Costs** tab to set up.")
-        cost_map = {}
-
-    st.divider()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        sp_file = st.file_uploader("📦 Sponsored Products — Placement Report (.xlsx)", type=["xlsx"], key="sp")
-    with col2:
-        sb_file = st.file_uploader("🏷️ Sponsored Brands — Campaign Placement Report (.xlsx)", type=["xlsx"], key="sb")
-
-    st.divider()
-
-    # ── Analysis parameters ───────────────────────────────────────────────────
-    pc1, pc2, pc3 = st.columns(3)
-    with pc1:
-        target_roas = st.number_input(
-            "Default Target ROAS",
-            min_value=1.0, max_value=20.0, value=float(TARGET_ROAS), step=0.5,
-            help="Used for campaigns without a matching ASIN in Products & Costs."
-        )
-    with pc2:
-        low_impr = st.number_input(
-            "Low Impressions Alert (Top)",
-            min_value=100, max_value=50000, value=LOW_IMPR_THRESHOLD, step=100,
-        )
-    with pc3:
-        min_margin_pct = st.number_input(
-            "Minimum Profit Margin %",
-            min_value=5, max_value=80, value=25, step=5,
-            help="Bid recommendations will never exceed this margin floor."
-        ) / 100
-
-    if sp_file and sb_file:
-        if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
-
-            with st.spinner("Loading and analyzing data..."):
-                sp_path = os.path.join(SESSION_DIR, "sp_report.xlsx")
-                sb_path = os.path.join(SESSION_DIR, "sb_report.xlsx")
-                with open(sp_path, "wb") as f: f.write(sp_file.read())
-                with open(sb_path, "wb") as f: f.write(sb_file.read())
-                detected_marketplace = detect_marketplace_from_xlsx(sp_path)
-                try:
-                    results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct, detected_marketplace)
-                finally:
-                    for p in [sp_path, sb_path]:
-                        if os.path.exists(p): os.unlink(p)
-
-            # ── Auto-save recommendations to DB ──────────────────────────────
-            today_str   = str(date.today())
-            review_str  = str(date.today() + timedelta(days=14))
-            saved_count = 0
-            cost_map_for_asin = cost_map  # already loaded above
-            for r in results:
-                asin = next(
-                    (a for a in cost_map_for_asin if a.upper() in r.campaign.upper()),
-                    None
-                )
-                for pl_rec in r.bid_recs_data:
-                    save_recommendation({
-                        "date_given":             today_str,
-                        "asin":                   asin,
-                        "marketplace":            r.marketplace,
-                        "campaign_name":          r.campaign,
-                        "placement_type":         pl_rec["placement_type"],
-                        "campaign_type":          r.ad_type,
-                        "current_multiplier":     None,
-                        "recommended_action":     pl_rec["recommended_action"],
-                        "recommended_multiplier": pl_rec["recommended_multiplier"],
-                        "reasoning":              pl_rec["reasoning"],
-                        "window_days":            14,
-                        "review_date":            review_str,
-                        "score":                  r.score,
-                    })
-                    saved_count += 1
-            if saved_count:
-                st.success(f"✅ {saved_count} placement recommendations auto-saved to history.")
-
-            if api_key:
-                st.markdown("### 🤖 Generating AI Comments...")
-                progress_bar = st.progress(0)
-                status_text  = st.empty()
-
-                def on_progress(i, total, camp):
-                    progress_bar.progress(i / total if total > 0 else 0)
-                    status_text.markdown(
-                        f"<span style='color:{T['text_secondary']};font-size:0.8rem;'>({i}/{total}) {camp}</span>",
-                        unsafe_allow_html=True
-                    )
-
-                results = generate_comments(results, api_key, target_roas, progress_callback=on_progress)
-                progress_bar.progress(1.0)
-                status_text.markdown(f"<span style='color:{T['score_hi']};font-size:0.8rem;'>✓ Comments ready</span>", unsafe_allow_html=True)
-            else:
-                st.info("ℹ️ No API key — skipping AI comments.")
-
-            st.divider()
-            st.caption(f"🌍 Marketplace auto-detected: **{detected_marketplace}**")
-            st.markdown("### 📈 Summary")
-
-            sp_count  = sum(1 for r in results if r.ad_type == "SP")
-            sb_count  = sum(1 for r in results if r.ad_type == "SB")
-            hi_count  = sum(1 for r in results if r.score >= 80)
-            alert_cnt = sum(1 for r in results if r.alert)
-
-            mc1, mc2, mc3, mc4 = st.columns(4)
-            for col, val, label in [
-                (mc1, sp_count, "SP Campaigns"),
-                (mc2, sb_count, "SB Campaigns"),
-                (mc3, hi_count, "Score ≥ 80"),
-                (mc4, alert_cnt, "🚨 Alerts"),
-            ]:
-                col.markdown(
-                    f'<div class="metric-card"><p class="metric-val">{val}</p>'
-                    f'<p class="metric-label">{label}</p></div>',
-                    unsafe_allow_html=True
-                )
-
-            alerts = [r for r in results if r.alert]
-            if alerts:
-                st.divider()
-                st.markdown("### 🚨 Campaigns Requiring Immediate Attention")
-                for r in alerts[:10]:
-                    score_cls = "score-hi" if r.score >= 70 else "score-mid"
-                    tag = '<span class="tag-sp">SP</span>' if r.ad_type == "SP" else '<span class="tag-sb">SB</span>'
-                    auto_tag = '<span class="tag-auto">AUTO</span>' if r.targeting == "Auto" else ""
-                    st.markdown(
-                        f'<div class="alert-box">{tag} {auto_tag} '
-                        f'<strong>{r.campaign}</strong> — '
-                        f'Score: <span class="{score_cls}">{r.score}</span> — {r.alert}<br>'
-                        f'<span style="color:{T["text_secondary"]};font-size:0.8rem;">Bid rec: {r.bid_rec}</span>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-
-            st.divider()
-            st.markdown("### 🏆 All Campaigns — Ranked by Score")
-
-            table_data = []
-            for r in results:
-                table_data.append({
-                    "Marketplace": r.marketplace,
-                    "Campaign": r.campaign, "Type": r.ad_type, "Targeting": r.targeting,
-                    "Score": r.score, "Label": r.score_label,
-                    "Top ROAS": round(r.top.roas, 2) if r.top.roas else None,
-                    "Rest ROAS": round(r.rest.roas, 2) if r.rest.roas else None,
-                    "Top Impr.": r.top.impressions, "Bid Rec": r.bid_rec,
-                    "Alert": "🚨" if r.alert else "",
-                })
-
-            st.dataframe(
-                pd.DataFrame(table_data),
-                use_container_width=True, hide_index=True,
-                column_config={
-                    "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d"),
-                    "Top Impr.": st.column_config.NumberColumn(format="%d"),
-                }
-            )
-
-            st.divider()
-            st.markdown("### 📥 Download Excel Report")
-            with st.spinner("Building Excel..."):
-                excel_bytes = build_excel(results)
-
-            st.download_button(
-                label="⬇️ Download Amazon_Ads_Analysis.xlsx",
-                data=excel_bytes,
-                file_name="Amazon_Ads_Analysis.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True,
-            )
+# Analysis content moved into Ads tab below
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — PRODUCTS & COSTS (per marketplace, DB-backed)
@@ -876,202 +690,395 @@ with tab_sales:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — RECOMMENDATIONS HISTORY
+# TAB — ADS
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_recs:
-    st.markdown("# 📋 Recommendations History")
-    st.markdown(
-        f"<p style='color:{T['text_secondary']};'>Track placement bid recommendations over time "
-        f"and record outcomes after the review window.</p>",
-        unsafe_allow_html=True
-    )
-    st.divider()
+with tab_ads:
+    _placement_tab, = st.tabs(["📍 Placement"])
 
-    # ── Log a Recommendation (manual or pre-filled from table) ────────────────
-    _pf = st.session_state.get("rec_prefill", {})
-    _place_opts  = ["Top of Search", "Rest of Search", "Product Pages"]
-    _action_opts = ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"]
-    _type_opts   = ["SP", "SB"]
-    _mkt_opts    = ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"]
+    with _placement_tab:
+        _recs_view, _analysis_view = st.tabs(["📋 Recommendations", "📊 Analysis"])
 
-    def _safe_int(val, default=0):
-        """Convert val to int safely, returning default for None/NaN/invalid."""
-        try:
-            v = float(val)
-            import math
-            return default if math.isnan(v) else int(v)
-        except (TypeError, ValueError):
-            return default
-
-    _expander_label = "📋 Edit & Log (pre-filled from selection)" if _pf else "➕ Log a Recommendation"
-    with st.expander(_expander_label, expanded=bool(_pf)):
-        if _pf:
-            st.info(f"Pre-filled from rec #{int(_pf.get('id', 0))} — adjust as needed before saving.")
-            if st.button("✖ Clear pre-fill", key="clear_prefill"):
-                st.session_state.pop("rec_prefill", None)
-                st.rerun()
-
-        with st.form("rec_form", clear_on_submit=True):
-            rc1, rc2 = st.columns(2)
-            with rc1:
-                r_date  = st.date_input("Date Given", value=date.today())
-                r_asin  = st.text_input("ASIN (optional)",
-                                        value=str(_pf.get("asin") or ""),
-                                        placeholder="B0XXXXXXXX")
-                r_camp  = st.text_input("Campaign Name",
-                                        value=str(_pf.get("campaign_name") or ""))
-                _place_idx = _place_opts.index(_pf["placement_type"]) \
-                    if _pf.get("placement_type") in _place_opts else 0
-                r_place = st.selectbox("Placement", _place_opts, index=_place_idx)
-            with rc2:
-                _type_idx = _type_opts.index(_pf["campaign_type"]) \
-                    if _pf.get("campaign_type") in _type_opts else 0
-                r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx)
-                r_cur_mul = st.number_input("Current Multiplier %", min_value=0, max_value=900,
-                                            value=_safe_int(_pf.get("current_multiplier")))
-                _action_idx = next(
-                    (i for i, a in enumerate(_action_opts)
-                     if a.lower() == str(_pf.get("recommended_action") or "").lower()), 0)
-                r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx)
-                r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900,
-                                            value=_safe_int(_pf.get("recommended_multiplier")))
-
-            _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
-                if _pf.get("marketplace") in _mkt_opts else 0
-            r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx, key="rec_mkt")
-            r_reasoning = st.text_area("Reasoning / Notes",
-                                       value=str(_pf.get("reasoning") or ""))
-            r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14))
-
-            if st.form_submit_button("💾 Save Recommendation", type="primary"):
-                save_recommendation({
-                    "date_given":             str(r_date),
-                    "asin":                   r_asin.strip().upper() or None,
-                    "marketplace":            r_mkt,
-                    "campaign_name":          r_camp,
-                    "placement_type":         r_place,
-                    "campaign_type":          r_type,
-                    "current_multiplier":     r_cur_mul,
-                    "recommended_action":     r_action,
-                    "recommended_multiplier": r_rec_mul,
-                    "reasoning":              r_reasoning,
-                    "window_days":            14,
-                    "review_date":            str(r_review),
-                    "source":                 "manual",
-                })
-                st.session_state.pop("rec_prefill", None)
-                st.success("✅ Recommendation saved.")
-                st.rerun()
-
-    st.divider()
-
-    # ── Filter + list ─────────────────────────────────────────────────────────
-    rhf1, rhf2, rhf3 = st.columns(3)
-    with rhf1:
-        rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
-        rh_market = None if rh_market == "all" else rh_market
-    with rhf2:
-        rh_source = st.selectbox("Source", ["All", "Manual only", "Auto only"], key="rh_source")
-    with rhf3:
-        show_pending = st.checkbox("Show only pending review", value=False)
-
-    recs_df = get_recommendations_history(marketplace=rh_market)
-
-    # Apply source filter
-    if not recs_df.empty and rh_source != "All":
-        _src_val = "manual" if rh_source == "Manual only" else "auto"
-        recs_df = recs_df[recs_df["source"].fillna("auto") == _src_val]
-
-    # Sort: highest score first, then newest date
-    if not recs_df.empty:
-        recs_df["score"] = pd.to_numeric(recs_df["score"], errors="coerce").fillna(0)
-        recs_df = recs_df.sort_values(["score", "date_given"], ascending=[False, False]).reset_index(drop=True)
-
-    if recs_df.empty:
-        st.info("No recommendations logged yet. Run an analysis to generate them.")
-    else:
-        if show_pending:
-            today_str = str(date.today())
-            recs_df = recs_df[
-                (recs_df["review_date"].fillna("") <= today_str) &
-                (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
-            ]
-
-        def _fmt_change(row):
-            action = str(row.get("recommended_action") or "").strip()
-            mult   = row.get("recommended_multiplier")
-            try:
-                pct = int(round(float(mult)))
-            except (TypeError, ValueError):
-                pct = None
-            if action.lower() == "increase" and pct is not None:
-                return f"+{pct}%"
-            elif action.lower() == "decrease" and pct is not None:
-                return f"-{pct}%"
-            elif action.lower() == "no change":
-                return "0%"
-            return action or "—"
-
-        recs_display = recs_df.copy()
-        recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
-
-        display_cols = [
-            "id", "date_given", "source", "score", "asin", "marketplace", "campaign_name",
-            "placement_type", "campaign_type", "change",
-            "reasoning", "review_date", "outcome"
-        ]
-        existing_cols = [c for c in display_cols if c in recs_display.columns]
-
-        st.markdown(
-            f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
-            "💡 Select a row then click <strong>Clone &amp; Edit</strong> to adjust and re-log it.</p>",
-            unsafe_allow_html=True,
-        )
-        _sel = st.dataframe(
-            recs_display[existing_cols],
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            column_config={
-                "change":    st.column_config.TextColumn("Change",    width=90),
-                "reasoning": st.column_config.TextColumn("Reasoning", width=400),
-            },
-            key="recs_table_sel",
-        )
-
-        # Clone & Edit — scrolls user back up to the form
-        _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
-        if _sel_rows:
-            _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
-            _camp_preview = str(_sel_data.get("campaign_name") or "")[:50]
-            _place_preview = str(_sel_data.get("placement_type") or "")
+        with _recs_view:
+            # ── RECOMMENDATIONS content ───────────────────────────────────────
+            st.markdown("# 📋 Recommendations History")
             st.markdown(
-                f"<p style='font-size:0.82rem;color:{T['text_secondary']};margin:4px 0;'>"
-                f"Selected: <strong>{_camp_preview}</strong> · {_place_preview}</p>",
-                unsafe_allow_html=True,
+                f"<p style='color:{T['text_secondary']};'>Track placement bid recommendations over time "
+                f"and record outcomes after the review window.</p>",
+                unsafe_allow_html=True
             )
-            if st.button("📋 Clone & Edit", type="primary"):
-                st.session_state["rec_prefill"] = _sel_data
-                st.rerun()
+            st.divider()
 
-        # ── Record outcome ────────────────────────────────────────────────────
-        st.divider()
-        st.markdown("### ✅ Record Outcome")
-        oc1, oc2, oc3 = st.columns([1, 3, 1])
-        with oc1:
-            outcome_id = st.number_input("Rec ID", min_value=1, step=1)
-        with oc2:
-            outcome_text = st.text_input("Outcome", placeholder="e.g. ROAS improved from 2.1 to 3.4")
-        with oc3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("💾 Save Outcome"):
-                if outcome_text.strip():
-                    update_recommendation_outcome(int(outcome_id), outcome_text.strip())
-                    st.success("✅ Outcome recorded.")
-                    st.rerun()
-                else:
-                    st.warning("Enter an outcome first.")
+            # ── Log a Recommendation (manual or pre-filled from table) ────────────────
+            _pf = st.session_state.get("rec_prefill", {})
+            _place_opts  = ["Top of Search", "Rest of Search", "Product Pages"]
+            _action_opts = ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"]
+            _type_opts   = ["SP", "SB"]
+            _mkt_opts    = ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"]
+
+            def _safe_int(val, default=0):
+                """Convert val to int safely, returning default for None/NaN/invalid."""
+                try:
+                    v = float(val)
+                    import math
+                    return default if math.isnan(v) else int(v)
+                except (TypeError, ValueError):
+                    return default
+
+            _expander_label = "📋 Edit & Log (pre-filled from selection)" if _pf else "➕ Log a Recommendation"
+            with st.expander(_expander_label, expanded=bool(_pf)):
+                if _pf:
+                    st.info(f"Pre-filled from rec #{int(_pf.get('id', 0))} — adjust as needed before saving.")
+                    if st.button("✖ Clear pre-fill", key="clear_prefill"):
+                        st.session_state.pop("rec_prefill", None)
+                        st.rerun()
+
+                with st.form("rec_form", clear_on_submit=True):
+                    rc1, rc2 = st.columns(2)
+                    with rc1:
+                        r_date  = st.date_input("Date Given", value=date.today())
+                        r_asin  = st.text_input("ASIN (optional)",
+                                                value=str(_pf.get("asin") or ""),
+                                                placeholder="B0XXXXXXXX")
+                        r_camp  = st.text_input("Campaign Name",
+                                                value=str(_pf.get("campaign_name") or ""))
+                        _place_idx = _place_opts.index(_pf["placement_type"]) \
+                            if _pf.get("placement_type") in _place_opts else 0
+                        r_place = st.selectbox("Placement", _place_opts, index=_place_idx)
+                    with rc2:
+                        _type_idx = _type_opts.index(_pf["campaign_type"]) \
+                            if _pf.get("campaign_type") in _type_opts else 0
+                        r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx)
+                        r_cur_mul = st.number_input("Current Multiplier %", min_value=0, max_value=900,
+                                                    value=_safe_int(_pf.get("current_multiplier")))
+                        _action_idx = next(
+                            (i for i, a in enumerate(_action_opts)
+                             if a.lower() == str(_pf.get("recommended_action") or "").lower()), 0)
+                        r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx)
+                        r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900,
+                                                    value=_safe_int(_pf.get("recommended_multiplier")))
+
+                    _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
+                        if _pf.get("marketplace") in _mkt_opts else 0
+                    r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx, key="rec_mkt")
+                    r_reasoning = st.text_area("Reasoning / Notes",
+                                               value=str(_pf.get("reasoning") or ""))
+                    r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14))
+
+                    if st.form_submit_button("💾 Save Recommendation", type="primary"):
+                        save_recommendation({
+                            "date_given":             str(r_date),
+                            "asin":                   r_asin.strip().upper() or None,
+                            "marketplace":            r_mkt,
+                            "campaign_name":          r_camp,
+                            "placement_type":         r_place,
+                            "campaign_type":          r_type,
+                            "current_multiplier":     r_cur_mul,
+                            "recommended_action":     r_action,
+                            "recommended_multiplier": r_rec_mul,
+                            "reasoning":              r_reasoning,
+                            "window_days":            14,
+                            "review_date":            str(r_review),
+                            "source":                 "manual",
+                        })
+                        st.session_state.pop("rec_prefill", None)
+                        st.success("✅ Recommendation saved.")
+                        st.rerun()
+
+            st.divider()
+
+            # ── Filter + list ─────────────────────────────────────────────────────────
+            rhf1, rhf2, rhf3 = st.columns(3)
+            with rhf1:
+                rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
+                rh_market = None if rh_market == "all" else rh_market
+            with rhf2:
+                rh_source = st.selectbox("Source", ["All", "Manual only", "Auto only"], key="rh_source")
+            with rhf3:
+                show_pending = st.checkbox("Show only pending review", value=False)
+
+            recs_df = get_recommendations_history(marketplace=rh_market)
+
+            # Apply source filter
+            if not recs_df.empty and rh_source != "All":
+                _src_val = "manual" if rh_source == "Manual only" else "auto"
+                recs_df = recs_df[recs_df["source"].fillna("auto") == _src_val]
+
+            # Sort: highest score first, then newest date
+            if not recs_df.empty:
+                recs_df["score"] = pd.to_numeric(recs_df["score"], errors="coerce").fillna(0)
+                recs_df = recs_df.sort_values(["score", "date_given"], ascending=[False, False]).reset_index(drop=True)
+
+            if recs_df.empty:
+                st.info("No recommendations logged yet. Run an analysis to generate them.")
+            else:
+                if show_pending:
+                    today_str = str(date.today())
+                    recs_df = recs_df[
+                        (recs_df["review_date"].fillna("") <= today_str) &
+                        (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
+                    ]
+
+                def _fmt_change(row):
+                    action = str(row.get("recommended_action") or "").strip()
+                    mult   = row.get("recommended_multiplier")
+                    try:
+                        pct = int(round(float(mult)))
+                    except (TypeError, ValueError):
+                        pct = None
+                    if action.lower() == "increase" and pct is not None:
+                        return f"+{pct}%"
+                    elif action.lower() == "decrease" and pct is not None:
+                        return f"-{pct}%"
+                    elif action.lower() == "no change":
+                        return "0%"
+                    return action or "—"
+
+                recs_display = recs_df.copy()
+                recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
+
+                display_cols = [
+                    "id", "date_given", "source", "score", "asin", "marketplace", "campaign_name",
+                    "placement_type", "campaign_type", "change",
+                    "reasoning", "review_date", "outcome"
+                ]
+                existing_cols = [c for c in display_cols if c in recs_display.columns]
+
+                st.markdown(
+                    f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
+                    "💡 Select a row then click <strong>Clone &amp; Edit</strong> to adjust and re-log it.</p>",
+                    unsafe_allow_html=True,
+                )
+                _sel = st.dataframe(
+                    recs_display[existing_cols],
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    column_config={
+                        "change":    st.column_config.TextColumn("Change",    width=90),
+                        "reasoning": st.column_config.TextColumn("Reasoning", width=400),
+                    },
+                    key="recs_table_sel",
+                )
+
+                # Clone & Edit — scrolls user back up to the form
+                _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
+                if _sel_rows:
+                    _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
+                    _camp_preview = str(_sel_data.get("campaign_name") or "")[:50]
+                    _place_preview = str(_sel_data.get("placement_type") or "")
+                    st.markdown(
+                        f"<p style='font-size:0.82rem;color:{T['text_secondary']};margin:4px 0;'>"
+                        f"Selected: <strong>{_camp_preview}</strong> · {_place_preview}</p>",
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("📋 Clone & Edit", type="primary"):
+                        st.session_state["rec_prefill"] = _sel_data
+                        st.rerun()
+
+                # ── Record outcome ────────────────────────────────────────────────────
+                st.divider()
+                st.markdown("### ✅ Record Outcome")
+                oc1, oc2, oc3 = st.columns([1, 3, 1])
+                with oc1:
+                    outcome_id = st.number_input("Rec ID", min_value=1, step=1)
+                with oc2:
+                    outcome_text = st.text_input("Outcome", placeholder="e.g. ROAS improved from 2.1 to 3.4")
+                with oc3:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("💾 Save Outcome"):
+                        if outcome_text.strip():
+                            update_recommendation_outcome(int(outcome_id), outcome_text.strip())
+                            st.success("✅ Outcome recorded.")
+                            st.rerun()
+                        else:
+                            st.warning("Enter an outcome first.")
+
+        with _analysis_view:
+            # ── ANALYSIS content ──────────────────────────────────────────────
+            st.markdown("# 📊 Amazon Ads Placement Analyzer")
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.95rem;'>"
+                f"Upload your 30-day placement reports. Get scores, bid recommendations, alerts, and AI comments.</p>",
+                unsafe_allow_html=True
+            )
+
+            if products_exist_db():
+                cost_map = get_cost_map_db()
+                st.success(f"✅ Product cost data loaded — break-even ROAS calculated dynamically for {len(cost_map)} products.")
+            else:
+                st.warning("⚠️ No product cost data found. Using default ROAS target. Go to **Products & Costs** tab to set up.")
+                cost_map = {}
+
+            st.divider()
+
+            col1, col2 = st.columns(2)
+            with col1:
+                sp_file = st.file_uploader("📦 Sponsored Products — Placement Report (.xlsx)", type=["xlsx"], key="sp")
+            with col2:
+                sb_file = st.file_uploader("🏷️ Sponsored Brands — Campaign Placement Report (.xlsx)", type=["xlsx"], key="sb")
+
+            st.divider()
+
+            # ── Analysis parameters ───────────────────────────────────────────────────
+            pc1, pc2, pc3 = st.columns(3)
+            with pc1:
+                target_roas = st.number_input(
+                    "Default Target ROAS",
+                    min_value=1.0, max_value=20.0, value=float(TARGET_ROAS), step=0.5,
+                    help="Used for campaigns without a matching ASIN in Products & Costs."
+                )
+            with pc2:
+                low_impr = st.number_input(
+                    "Low Impressions Alert (Top)",
+                    min_value=100, max_value=50000, value=LOW_IMPR_THRESHOLD, step=100,
+                )
+            with pc3:
+                min_margin_pct = st.number_input(
+                    "Minimum Profit Margin %",
+                    min_value=5, max_value=80, value=25, step=5,
+                    help="Bid recommendations will never exceed this margin floor."
+                ) / 100
+
+            if sp_file and sb_file:
+                if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
+
+                    with st.spinner("Loading and analyzing data..."):
+                        sp_path = os.path.join(SESSION_DIR, "sp_report.xlsx")
+                        sb_path = os.path.join(SESSION_DIR, "sb_report.xlsx")
+                        with open(sp_path, "wb") as f: f.write(sp_file.read())
+                        with open(sb_path, "wb") as f: f.write(sb_file.read())
+                        detected_marketplace = detect_marketplace_from_xlsx(sp_path)
+                        try:
+                            results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct, detected_marketplace)
+                        finally:
+                            for p in [sp_path, sb_path]:
+                                if os.path.exists(p): os.unlink(p)
+
+                    # ── Auto-save recommendations to DB ──────────────────────────────
+                    today_str   = str(date.today())
+                    review_str  = str(date.today() + timedelta(days=14))
+                    saved_count = 0
+                    cost_map_for_asin = cost_map  # already loaded above
+                    for r in results:
+                        asin = next(
+                            (a for a in cost_map_for_asin if a.upper() in r.campaign.upper()),
+                            None
+                        )
+                        for pl_rec in r.bid_recs_data:
+                            save_recommendation({
+                                "date_given":             today_str,
+                                "asin":                   asin,
+                                "marketplace":            r.marketplace,
+                                "campaign_name":          r.campaign,
+                                "placement_type":         pl_rec["placement_type"],
+                                "campaign_type":          r.ad_type,
+                                "current_multiplier":     None,
+                                "recommended_action":     pl_rec["recommended_action"],
+                                "recommended_multiplier": pl_rec["recommended_multiplier"],
+                                "reasoning":              pl_rec["reasoning"],
+                                "window_days":            14,
+                                "review_date":            review_str,
+                                "score":                  r.score,
+                            })
+                            saved_count += 1
+                    if saved_count:
+                        st.success(f"✅ {saved_count} placement recommendations auto-saved to history.")
+
+                    if api_key:
+                        st.markdown("### 🤖 Generating AI Comments...")
+                        progress_bar = st.progress(0)
+                        status_text  = st.empty()
+
+                        def on_progress(i, total, camp):
+                            progress_bar.progress(i / total if total > 0 else 0)
+                            status_text.markdown(
+                                f"<span style='color:{T['text_secondary']};font-size:0.8rem;'>({i}/{total}) {camp}</span>",
+                                unsafe_allow_html=True
+                            )
+
+                        results = generate_comments(results, api_key, target_roas, progress_callback=on_progress)
+                        progress_bar.progress(1.0)
+                        status_text.markdown(f"<span style='color:{T['score_hi']};font-size:0.8rem;'>✓ Comments ready</span>", unsafe_allow_html=True)
+                    else:
+                        st.info("ℹ️ No API key — skipping AI comments.")
+
+                    st.divider()
+                    st.caption(f"🌍 Marketplace auto-detected: **{detected_marketplace}**")
+                    st.markdown("### 📈 Summary")
+
+                    sp_count  = sum(1 for r in results if r.ad_type == "SP")
+                    sb_count  = sum(1 for r in results if r.ad_type == "SB")
+                    hi_count  = sum(1 for r in results if r.score >= 80)
+                    alert_cnt = sum(1 for r in results if r.alert)
+
+                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    for col, val, label in [
+                        (mc1, sp_count, "SP Campaigns"),
+                        (mc2, sb_count, "SB Campaigns"),
+                        (mc3, hi_count, "Score ≥ 80"),
+                        (mc4, alert_cnt, "🚨 Alerts"),
+                    ]:
+                        col.markdown(
+                            f'<div class="metric-card"><p class="metric-val">{val}</p>'
+                            f'<p class="metric-label">{label}</p></div>',
+                            unsafe_allow_html=True
+                        )
+
+                    alerts = [r for r in results if r.alert]
+                    if alerts:
+                        st.divider()
+                        st.markdown("### 🚨 Campaigns Requiring Immediate Attention")
+                        for r in alerts[:10]:
+                            score_cls = "score-hi" if r.score >= 70 else "score-mid"
+                            tag = '<span class="tag-sp">SP</span>' if r.ad_type == "SP" else '<span class="tag-sb">SB</span>'
+                            auto_tag = '<span class="tag-auto">AUTO</span>' if r.targeting == "Auto" else ""
+                            st.markdown(
+                                f'<div class="alert-box">{tag} {auto_tag} '
+                                f'<strong>{r.campaign}</strong> — '
+                                f'Score: <span class="{score_cls}">{r.score}</span> — {r.alert}<br>'
+                                f'<span style="color:{T["text_secondary"]};font-size:0.8rem;">Bid rec: {r.bid_rec}</span>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+
+                    st.divider()
+                    st.markdown("### 🏆 All Campaigns — Ranked by Score")
+
+                    table_data = []
+                    for r in results:
+                        table_data.append({
+                            "Marketplace": r.marketplace,
+                            "Campaign": r.campaign, "Type": r.ad_type, "Targeting": r.targeting,
+                            "Score": r.score, "Label": r.score_label,
+                            "Top ROAS": round(r.top.roas, 2) if r.top.roas else None,
+                            "Rest ROAS": round(r.rest.roas, 2) if r.rest.roas else None,
+                            "Top Impr.": r.top.impressions, "Bid Rec": r.bid_rec,
+                            "Alert": "🚨" if r.alert else "",
+                        })
+
+                    st.dataframe(
+                        pd.DataFrame(table_data),
+                        use_container_width=True, hide_index=True,
+                        column_config={
+                            "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%d"),
+                            "Top Impr.": st.column_config.NumberColumn(format="%d"),
+                        }
+                    )
+
+                    st.divider()
+                    st.markdown("### 📥 Download Excel Report")
+                    with st.spinner("Building Excel..."):
+                        excel_bytes = build_excel(results)
+
+                    st.download_button(
+                        label="⬇️ Download Amazon_Ads_Analysis.xlsx",
+                        data=excel_bytes,
+                        file_name="Amazon_Ads_Analysis.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                        use_container_width=True,
+                    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — ADMIN  (admin role only)
