@@ -23,7 +23,7 @@ from products import (
 # One-time migration from CSV to DB on startup
 if products_exist() and not products_exist_db():
     migrate_csv_to_db()
-from db.database import init_db
+from db.database import init_db, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
 from db.importer import import_orders_csv, save_recommendation, update_recommendation_outcome
 from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
@@ -223,6 +223,12 @@ if not st.session_state.get("authentication_status"):
 
 authentication_status = st.session_state.get("authentication_status")
 current_username      = st.session_state.get("username", "")
+
+# Force-logout check — admin can end any user's session from the Admin tab
+if current_username and check_and_clear_force_logout(current_username):
+    authenticator.logout()
+    st.warning("⚠️ Your session was ended by an administrator. Please log in again.")
+    st.stop()
 
 # Determine role from secrets
 _current_role = st.secrets["auth"]["credentials"]["usernames"].get(
@@ -1025,3 +1031,102 @@ if tab_admin is not None:
                 conn.close()
                 st.success(f"✅ Deleted {log_count:,} change log entries.")
                 st.rerun()
+
+        # ── Session Management ────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🔌 Session Management")
+        st.markdown(
+            f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
+            "End a team member's active session. They will be logged out on their next page load.</p>",
+            unsafe_allow_html=True,
+        )
+
+        _all_users = list(st.secrets["auth"]["credentials"]["usernames"].keys())
+        _team_users = [u for u in _all_users if u != current_username]  # can't end your own session here
+        _pending_logout = list_force_logout_users()
+
+        if _team_users:
+            _sess_cols = st.columns(len(_team_users))
+            for _col, _uname in zip(_sess_cols, _team_users):
+                _uinfo = st.secrets["auth"]["credentials"]["usernames"][_uname]
+                _is_pending = _uname in _pending_logout
+                with _col:
+                    st.markdown(
+                        f"<div style='border:1px solid {T['card_border']};border-radius:8px;"
+                        f"padding:0.75rem 1rem;background:{T['card_bg']};'>"
+                        f"<strong>{_uinfo['name']}</strong><br>"
+                        f"<span style='font-size:0.75rem;color:{T['text_secondary']};'>{_uinfo['role']}</span><br>"
+                        + (f"<span style='font-size:0.72rem;color:{T['score_lo']};'>⏳ Pending logout</span>" if _is_pending else "")
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                    if _is_pending:
+                        if st.button(f"↩️ Cancel", key=f"cancel_logout_{_uname}"):
+                            _c = _get_conn()
+                            with _c:
+                                _c.execute("DELETE FROM force_logout WHERE username=?", (_uname,))
+                            _c.close()
+                            st.rerun()
+                    else:
+                        if st.button(f"🔌 End Session", key=f"end_session_{_uname}"):
+                            flag_force_logout(_uname)
+                            st.success(f"✅ {_uinfo['name']}'s session will end on next page load.")
+                            st.rerun()
+
+        # ── Password Reset ────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🔑 Reset Password")
+        st.markdown(
+            f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
+            "Set a new password for any team member. Takes effect immediately on next login.</p>",
+            unsafe_allow_html=True,
+        )
+
+        import bcrypt as _bcrypt
+
+        def _update_secrets_password(username: str, new_hash: str) -> bool:
+            """Rewrite secrets.toml replacing only the target user's hashed_password line."""
+            import os as _os
+            _path = _os.path.join(_os.path.dirname(__file__), ".streamlit", "secrets.toml")
+            if not _os.path.exists(_path):
+                return False
+            lines = open(_path).readlines()
+            in_block = False
+            new_lines = []
+            for line in lines:
+                if f"[auth.credentials.usernames.{username}]" in line:
+                    in_block = True
+                elif line.strip().startswith("[") and in_block:
+                    in_block = False
+                if in_block and line.strip().startswith("hashed_password"):
+                    line = f'hashed_password  = "{new_hash}"\n'
+                new_lines.append(line)
+            with open(_path, "w") as f:
+                f.writelines(new_lines)
+            return True
+
+        _pw_user = st.selectbox("User", _all_users,
+                                format_func=lambda u: st.secrets["auth"]["credentials"]["usernames"][u]["name"],
+                                key="pw_reset_user")
+        _pw1, _pw2 = st.columns(2)
+        with _pw1:
+            _new_pw = st.text_input("New Password", type="password", key="pw_reset_new")
+        with _pw2:
+            _confirm_pw = st.text_input("Confirm Password", type="password", key="pw_reset_confirm")
+
+        if st.button("🔑 Reset Password", type="primary"):
+            if not _new_pw:
+                st.error("Enter a new password.")
+            elif _new_pw != _confirm_pw:
+                st.error("Passwords do not match.")
+            elif len(_new_pw) < 8:
+                st.error("Password must be at least 8 characters.")
+            else:
+                _new_hash = _bcrypt.hashpw(_new_pw.encode(), _bcrypt.gensalt()).decode()
+                _ok = _update_secrets_password(_pw_user, _new_hash)
+                if _ok:
+                    _uname_display = st.secrets["auth"]["credentials"]["usernames"][_pw_user]["name"]
+                    st.success(f"✅ Password for {_uname_display} updated. They can log in with the new password immediately.")
+                else:
+                    st.error("Could not find secrets.toml on this server. Update the file manually.")

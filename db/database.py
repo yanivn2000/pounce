@@ -93,10 +93,48 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_recs_date      ON recommendations(date_given);
             CREATE INDEX IF NOT EXISTS idx_recs_asin      ON recommendations(asin);
             CREATE INDEX IF NOT EXISTS idx_changelog_asin ON change_log(asin, log_date);
+
+            CREATE TABLE IF NOT EXISTS force_logout (
+                username     TEXT PRIMARY KEY,
+                requested_at TEXT DEFAULT (datetime('now'))
+            );
         """)
     _migrate_product_costs(conn)
     _migrate_recommendations_score(conn)
     conn.close()
+
+
+def flag_force_logout(username: str):
+    """Mark a user to be logged out on their next page load."""
+    conn = get_conn()
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO force_logout (username) VALUES (?)", (username,)
+        )
+    conn.close()
+
+
+def check_and_clear_force_logout(username: str) -> bool:
+    """Return True (and clear the flag) if this user has been force-logged out."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM force_logout WHERE username = ?", (username,)
+    ).fetchone()
+    if row:
+        with conn:
+            conn.execute("DELETE FROM force_logout WHERE username = ?", (username,))
+        conn.close()
+        return True
+    conn.close()
+    return False
+
+
+def list_force_logout_users() -> list[str]:
+    """Return usernames currently flagged for force logout."""
+    conn = get_conn()
+    rows = conn.execute("SELECT username FROM force_logout").fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 
 def _migrate_recommendations_score(conn: sqlite3.Connection):
