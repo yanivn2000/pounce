@@ -716,11 +716,33 @@ with tab_sales:
 
             pct_indexed = pct  # shares integer index with matrix
 
+            # ── Latest change log per ASIN ────────────────────────────────────
+            from db.database import get_conn as _gcl
+            _cl_conn = _gcl()
+            _lc_rows = _cl_conn.execute("""
+                SELECT asin, log_date, change_type, notes
+                FROM change_log
+                WHERE id IN (SELECT MAX(id) FROM change_log GROUP BY asin)
+            """).fetchall()
+            _cl_conn.close()
+            _last_change_map = {}
+            for _r in _lc_rows:
+                _note = (str(_r["notes"] or "")).strip()[:35]
+                _note_part = f" · {_note}" if _note else ""
+                _last_change_map[str(_r["asin"])] = f"{_r['log_date']} · {_r['change_type']}{_note_part}"
+
             # Freeze asin + title by setting them as the DataFrame index
             display = matrix.set_index(["asin", "title"])
 
             # Pre-format cell values: numbers with commas, ⚑ appended for changed cells
             display_marked = display.copy().astype(object)
+
+            # Insert "Last Change" as the first data column (before date columns)
+            display_marked.insert(0, "Last Change", [
+                _last_change_map.get(str(asin), "—")
+                for asin, _ in display_marked.index
+            ])
+
             for col in date_cols:
                 col_idx = display_marked.columns.get_loc(col)
                 for pos, (asin, title) in enumerate(display_marked.index):
@@ -759,8 +781,9 @@ with tab_sales:
 
             styled = display_marked.style.apply(_color_matrix, axis=None)
             col_cfg = {
-                "asin":  st.column_config.TextColumn("ASIN",  width=120),
-                "title": st.column_config.TextColumn("Title", width=240),
+                "asin":        st.column_config.TextColumn("ASIN",        width=120),
+                "title":       st.column_config.TextColumn("Title",       width=200),
+                "Last Change": st.column_config.TextColumn("Last Change", width=220),
             }
             st.dataframe(styled, use_container_width=True, column_config=col_cfg)
 
