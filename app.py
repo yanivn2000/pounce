@@ -116,25 +116,6 @@ with st.sidebar:
         help="Required to generate AI comments. Leave blank to skip.",
     )
 
-    st.markdown("### Analysis Parameters")
-    target_roas = st.number_input(
-        "Default Target ROAS",
-        min_value=1.0, max_value=20.0,
-        value=float(TARGET_ROAS), step=0.5,
-        help="Used for campaigns without a matching ASIN in Products & Costs."
-    )
-    low_impr = st.number_input(
-        "Low Impressions Alert (Top)",
-        min_value=100, max_value=50000,
-        value=LOW_IMPR_THRESHOLD, step=100,
-    )
-    min_margin_pct = st.number_input(
-        "Minimum Profit Margin %",
-        min_value=5, max_value=80,
-        value=25, step=5,
-        help="Bid recommendations will never exceed this margin floor. Default 25%."
-    ) / 100
-
     st.divider()
     products_status = "✅ Loaded" if products_exist_db() else "⚠️ Not set up"
     st.markdown(f"**Product Costs:** {products_status}")
@@ -175,6 +156,26 @@ with tab_analysis:
         sb_file = st.file_uploader("🏷️ Sponsored Brands — Campaign Placement Report (.xlsx)", type=["xlsx"], key="sb")
 
     st.divider()
+
+    # ── Analysis parameters ───────────────────────────────────────────────────
+    pc1, pc2, pc3 = st.columns(3)
+    with pc1:
+        target_roas = st.number_input(
+            "Default Target ROAS",
+            min_value=1.0, max_value=20.0, value=float(TARGET_ROAS), step=0.5,
+            help="Used for campaigns without a matching ASIN in Products & Costs."
+        )
+    with pc2:
+        low_impr = st.number_input(
+            "Low Impressions Alert (Top)",
+            min_value=100, max_value=50000, value=LOW_IMPR_THRESHOLD, step=100,
+        )
+    with pc3:
+        min_margin_pct = st.number_input(
+            "Minimum Profit Margin %",
+            min_value=5, max_value=80, value=25, step=5,
+            help="Bid recommendations will never exceed this margin floor."
+        ) / 100
 
     if sp_file and sb_file:
         if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
