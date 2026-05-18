@@ -1372,6 +1372,28 @@ with tab_ads:
 
                     st.markdown("")
 
+                    # ── Critical filter ───────────────────────────────────
+                    _n_risk  = sum(1 for _r in results if _r.mode == "isolation")
+                    _n_opp   = sum(1 for _r in results if _r.is_critical and _r.mode == "optimization")
+                    _n_crit  = _n_risk + _n_opp
+
+                    _crit_col, _crit_info = st.columns([3, 7])
+                    with _crit_col:
+                        _show_critical = st.checkbox(
+                            f"🚨 Critical only  ({_n_crit})",
+                            value=False,
+                            key="show_critical_only",
+                            help="Show only campaigns losing money (🔴 Isolation) or high-confidence opportunities (🟢 score ≥ 70)"
+                        )
+                    with _crit_info:
+                        if _n_crit:
+                            st.caption(
+                                f"🔴 **{_n_risk}** losing money &nbsp;·&nbsp; "
+                                f"🟢 **{_n_opp}** high-opportunity"
+                            )
+
+                    _display_results = [_r for _r in results if _r.is_critical] if _show_critical else results
+
                     _MODE_COLORS = {
                         "isolation":    ("#FFC7CE", "🔴 ISOLATION"),
                         "optimization": ("#C6EFCE", "🟢 OPTIMIZATION"),
@@ -1384,7 +1406,7 @@ with tab_ads:
                         "keep":      "#F2F2F2",
                     }
 
-                    for _r in results:
+                    for _r in _display_results:
                         _algo   = _r.placement_algorithm or {}
                         _mode   = _r.mode or "no_data"
                         _mc, _ml = _MODE_COLORS.get(_mode, ("#D9D9D9", _mode.upper()))

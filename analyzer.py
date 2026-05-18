@@ -79,6 +79,7 @@ class CampaignResult:
     mode: str = ''                 # 'learning' | 'isolation' | 'optimization' | 'no_data'
     base_bid_change_pct: int = 0   # e.g. -40 means reduce all keyword bids 40%
     placement_algorithm: dict = field(default_factory=dict)  # full algo result dict
+    is_critical: bool = False      # True = urgent action (risk or opportunity)
 
 
 def _safe(v):
@@ -688,6 +689,19 @@ def analyze(sp_path: str, sb_path: str,
     return results
 
 
+def _is_critical(mode: str, score: int) -> bool:
+    """
+    A campaign is critical if immediate action could significantly move the needle
+    — either because money is being lost (isolation) or because high-confidence
+    performance means real upside is being left on the table (optimization ≥ 70).
+    """
+    if mode == "isolation":
+        return True
+    if mode == "optimization" and score >= 70:
+        return True
+    return False
+
+
 def analyze_with_products(sp_path: str, sb_path: str,
                            target_roas: float = TARGET_ROAS,
                            low_impr: int = LOW_IMPR_THRESHOLD,
@@ -778,6 +792,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
             mode=algo_result.get('mode', ''),
             base_bid_change_pct=algo_result.get('base_bid_change_pct', 0),
             placement_algorithm=algo_result,
+            is_critical=_is_critical(algo_result.get('mode', ''), sc),
         )
         results.append(r)
 
@@ -821,6 +836,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
             mode=algo_result.get('mode', ''),
             base_bid_change_pct=algo_result.get('base_bid_change_pct', 0),
             placement_algorithm=algo_result,
+            is_critical=_is_critical(algo_result.get('mode', ''), sc),
         )
         results.append(r)
 
