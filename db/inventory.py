@@ -459,15 +459,9 @@ def get_inventory_alerts(overview: pd.DataFrame) -> list[dict]:
                                 "market": mkt, "days": days,
                                 "msg": f"🟡 {days}d left — plan & fund purchase now"})
 
-        # Aging: >90 days in any FBA + low velocity
-        for fba_loc, mkt in [("FBA_US", "amazon.com"), ("FBA_CA", "amazon.ca"), ("FBA_UK", "amazon.co.uk")]:
-            dcol = f"days_{fba_loc.lower()}"
-            days = row.get(dcol)
-            fba_units = row.get(fba_loc, 0)
-            if days and days > ALERT_AGING and fba_units > 50:
-                alerts.append({"level": "aging", "asin": asin, "title": title,
-                                "market": mkt, "days": days,
-                                "msg": f"📦 {fba_units} units aging ({days}d stock) in {fba_loc} — consider deal/coupon"})
+        # Aging alert removed — days-of-stock calculation produces false positives
+        # for new/seasonal products. Will be re-added using Amazon's actual
+        # Inventory Age report (warehouse time per unit) when uploaded.
 
     # Note: imbalance/overstocked alert removed — inventory cannot be moved between marketplaces
 
