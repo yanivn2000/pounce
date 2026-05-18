@@ -449,9 +449,15 @@ def _optimization_mode(placements: list, profitable: list,
                        breakeven_roas: float) -> dict:
     """All placements profitable — shift more budget toward top performers."""
     if not profitable:
+        # Still stamp every placement with required keys so downstream code is safe
+        processed = [{**p,
+            "recommended_action":     "Keep",
+            "recommended_multiplier": int(round(p.get("current_adj", 0) * 100)),
+            "reasoning":              "⚠️ Insufficient data — keep current multiplier.",
+        } for p in placements]
         return {"mode": "no_data", "base_bid_change_pct": 0,
-                "placements": placements, "score": 0,
-                "reasoning": "No profitable placements with sufficient data."}
+                "placements": processed, "score": 0,
+                "reasoning": "⚫ No placements have enough data yet (need 500+ impressions)."}
 
     total_gap = sum(p['roas_gap'] for p in profitable)
     result_placements = []
@@ -701,13 +707,13 @@ def analyze_with_products(sp_path: str, sb_path: str,
         # Use new algorithm placements as bid_recs_data (fallback to legacy)
         algo_placements = algo_result.get('placements', [])
         bid_data_final  = [{
-            "placement_type":         p['label'],
-            "recommended_action":     p['recommended_action'],
-            "recommended_multiplier": p['recommended_multiplier'],
-            "reasoning":              p['reasoning'],
-            "spend":                  p['spend'],
-            "roas":                   p['roas'],
-            "orders":                 p['purchases'],
+            "placement_type":         p.get('label', '—'),
+            "recommended_action":     p.get('recommended_action', 'Keep'),
+            "recommended_multiplier": p.get('recommended_multiplier', 0),
+            "reasoning":              p.get('reasoning', ''),
+            "spend":                  p.get('spend', 0),
+            "roas":                   p.get('roas', 0),
+            "orders":                 p.get('purchases', 0),
         } for p in algo_placements] if algo_placements else bid_data
 
         r = CampaignResult(
