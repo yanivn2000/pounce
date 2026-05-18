@@ -37,6 +37,7 @@ def detect_marketplace_from_xlsx(path: str) -> str:
         pass
     return "amazon.com"
 
+
 PLACEMENT_MAP = {
     'Top of Search on Amazon': 'Top',
     'Rest of search on Amazon': 'Rest',
@@ -69,11 +70,15 @@ class CampaignResult:
     score: int = 0
     score_label: str = ''
     bid_rec: str = ''
-    bid_recs_data: list = field(default_factory=list)  # structured per-placement recs
+    bid_recs_data: list = field(default_factory=list)   # structured per-placement recs
     alert: str = ''
     comment: str = ''       # filled by Claude API
     total_roas: float = 0.0
     marketplace: str = 'amazon.com'
+    # ── New placement algorithm fields ────────────────────────────────────
+    mode: str = ''                 # 'learning' | 'isolation' | 'optimization' | 'no_data'
+    base_bid_change_pct: int = 0   # e.g. -40 means reduce all keyword bids 40%
+    placement_algorithm: dict = field(default_factory=dict)  # full algo result dict
 
 
 def _safe(v):
@@ -96,7 +101,7 @@ def load_and_aggregate(path: str, sales_col: str) -> pd.DataFrame:
     if 'Placement' not in df.columns or df.empty:
         return pd.DataFrame(columns=['Campaign', 'PL', 'Impressions',
                                      'Clicks', 'Spend', 'Sales', 'Orders',
-                                     'CTR', 'CPC', 'ROAS', 'ACOS'])
+                                     'CTR', 'CPC', 'ROAS', 'ACOS', 'BidAdj'])
 
     df = df.rename(columns={'Campaign Name': 'Campaign'})
 
@@ -111,11 +116,17 @@ def load_and_aggregate(path: str, sales_col: str) -> pd.DataFrame:
         else:
             raise ValueError(f"Could not find Sales column. Available: {list(df.columns)}")
 
+    # Orders: try "7 Day Total Orders #" first, then "Purchases" (placement report format)
     order_cols = [c for c in df.columns if 'Orders' in c and 'Day' in c and '#' in c]
     if order_cols:
         df = df.rename(columns={order_cols[0]: 'Orders'})
-    else:
-        df['Orders'] = 0
+
+    if 'Orders' not in df.columns or df['Orders'].sum() == 0:
+        purchase_col = next((c for c in df.columns if c.lower() == 'purchases'), None)
+        if purchase_col:
+            df = df.rename(columns={purchase_col: 'Orders'})
+        elif 'Orders' not in df.columns:
+            df['Orders'] = 0
 
     df['Placement'] = df['Placement'].str.strip()
     df['PL'] = df['Placement'].map(PLACEMENT_MAP)
@@ -132,6 +143,21 @@ def load_and_aggregate(path: str, sales_col: str) -> pd.DataFrame:
     g['CPC']  = np.where(g['Clicks'] > 0, g['Spend'] / g['Clicks'], np.nan)
     g['ROAS'] = np.where(g['Spend'] > 0, g['Sales'] / g['Spend'], np.nan)
     g['ACOS'] = np.where(g['Sales'] > 0, g['Spend'] / g['Sales'], np.nan)
+
+    # Capture current Bid Adjustment per placement (e.g. "200%" → 2.0)
+    bid_adj_col = next((c for c in df.columns if 'bid adjustment' in c.lower()), None)
+    if bid_adj_col:
+        df['_BidAdj'] = pd.to_numeric(
+            df[bid_adj_col].astype(str).str.replace('%', '').str.strip(),
+            errors='coerce'
+        ).fillna(0) / 100
+        g_ba = df.groupby(['Campaign', 'PL'])['_BidAdj'].first().reset_index()
+        g = g.merge(g_ba, on=['Campaign', 'PL'], how='left')
+        g = g.rename(columns={'_BidAdj': 'BidAdj'})
+    else:
+        g['BidAdj'] = 0.0
+    g['BidAdj'] = g['BidAdj'].fillna(0.0)
+
     return g
 
 
@@ -189,8 +215,8 @@ def score_campaign(sub: pd.DataFrame, target_roas: float = TARGET_ROAS) -> int:
         elif ratio >= 0.9: s += 3
 
     # CTR at Top (10 pts)
-    if top_ctr >= 0.02:   s += 10
-    elif top_ctr >= 0.01: s += 6
+    if top_ctr >= 0.02:    s += 10
+    elif top_ctr >= 0.01:  s += 6
     elif top_ctr >= 0.005: s += 3
 
     # Volume (5 pts)
@@ -219,8 +245,8 @@ def calc_max_roas_for_margin(avg_price: float, landed_cost: float,
     """
     if avg_price <= 0:
         return None
-    fba_pct    = fba_fee / avg_price
-    max_acos   = 1 - min_margin_pct - amazon_fee_pct - fba_pct
+    fba_pct  = fba_fee / avg_price
+    max_acos = 1 - min_margin_pct - amazon_fee_pct - fba_pct
     if max_acos <= 0:
         return None
     return round(1 / max_acos, 2)
@@ -238,10 +264,8 @@ def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
                        cost_data: dict = None,
                        avg_price: float = 0.0) -> tuple[str, list[dict]]:
     """
-    Recommend bid adjustments per placement.
+    Legacy bid recommendation — kept for backward compatibility.
     Returns (display_string, structured_list).
-    structured_list has one dict per placement with spend > 0:
-      {placement_type, recommended_action, recommended_multiplier, reasoning, spend, roas, orders}
     """
     parts = []
     structured = []
@@ -249,7 +273,6 @@ def bid_recommendation(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
     total_sales = sub['Sales'].sum()
     avg_roas = total_sales / total_spend if total_spend > 0 else 0
 
-    # Calculate margin floor ROAS
     margin_floor_roas = None
     if cost_data and avg_price > 0:
         margin_floor_roas = calc_max_roas_for_margin(
@@ -333,17 +356,230 @@ def alert_message(sub: pd.DataFrame, sc: int,
     return ""
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NEW PLACEMENT BID ALGORITHM
+# ══════════════════════════════════════════════════════════════════════════════
+
+_MIN_IMPRESSIONS_THRESHOLD = 500
+_MIN_PURCHASES_CONFIDENCE  = 30
+
+
+def _placement_confidence(purchases: int, impressions: int) -> float:
+    """0.0–1.0 confidence. Returns 0.0 if impressions below threshold."""
+    if impressions < _MIN_IMPRESSIONS_THRESHOLD:
+        return 0.0
+    return min(1.0, purchases / _MIN_PURCHASES_CONFIDENCE)
+
+
+def _confidence_score_cap(confidence: float) -> int:
+    if confidence == 0.0: return 0   # no data
+    if confidence < 0.17: return 3   # <5 purchases
+    if confidence < 0.50: return 5   # 5–15 purchases
+    if confidence < 1.00: return 7   # 15–30 purchases
+    return 10                        # 30+ purchases
+
+
+def _isolation_mode(placements: list, profitable: list, losing: list,
+                    breakeven_roas: float) -> dict:
+    """Starve losing placements; protect & boost profitable ones."""
+    worst_roas    = min(p['roas'] for p in losing)
+    deficit_ratio = worst_roas / breakeven_roas if breakeven_roas > 0 else 0
+
+    if deficit_ratio >= 0.75:   reduction_pct = 20
+    elif deficit_ratio >= 0.50: reduction_pct = 40
+    elif deficit_ratio >= 0.25: reduction_pct = 60
+    else:                       reduction_pct = 75
+
+    reduction_factor = 1 - (reduction_pct / 100)
+    total_gap = sum(p['roas_gap'] for p in profitable) if profitable else 1
+
+    result_placements = []
+    for p in placements:
+        if p['status'] == 'profitable':
+            # Maintain effective bid after base reduction, then boost by ROAS weight
+            raw_mult    = (1 + p['current_adj']) / reduction_factor - 1
+            weight      = p['roas_gap'] / total_gap if total_gap > 0 else 1.0
+            boosted     = raw_mult * (0.9 + 0.2 * weight)
+            new_pct     = min(900, int(round(boosted * 100)))
+            current_pct = int(round(p['current_adj'] * 100))
+            if p['confidence'] < 0.5:
+                new_pct = min(new_pct, current_pct + 50)  # cap low-confidence increase
+            action = "Increase" if new_pct > current_pct else "Keep"
+            reason = (
+                f"PROFITABLE (ROAS {p['roas']:.2f} vs breakeven {breakeven_roas:.2f}). "
+                f"Raise from {current_pct}% → {new_pct}% to maintain effective bid "
+                f"while base is reduced {reduction_pct}%."
+            )
+            if p['confidence'] < 0.5:
+                reason += f" ⚠️ Low confidence ({p['purchases']} purchases) — capped."
+
+        elif p['status'] == 'losing':
+            new_pct = 0
+            action  = "Reduce to 0%"
+            reason  = (
+                f"LOSING (ROAS {p['roas']:.2f} vs breakeven {breakeven_roas:.2f}). "
+                f"Set to 0% — starved by base bid reduction."
+            )
+        else:  # no_data
+            new_pct = int(round(p['current_adj'] * 100))
+            action  = "Keep"
+            reason  = f"⚠️ Insufficient impressions (<{_MIN_IMPRESSIONS_THRESHOLD}) — keep current."
+
+        result_placements.append({**p,
+            "recommended_action":     action,
+            "recommended_multiplier": new_pct,
+            "reasoning":              reason,
+        })
+
+    avg_conf = sum(p['confidence'] for p in placements) / len(placements)
+    severity = max(0, min(7, int((1 - deficit_ratio) * 7)))
+    score    = min(10, max(1, severity + int(avg_conf * 3)))
+
+    worst_pl = min(losing, key=lambda p: p['roas'])
+    summary  = (
+        f"🔴 ISOLATION MODE — {len(losing)} placement(s) below breakeven ROAS ({breakeven_roas:.2f}). "
+        f"Worst: {worst_pl['label']} ROAS {worst_pl['roas']:.2f} (deficit {deficit_ratio:.0%}). "
+        f"Reduce all keyword bids by {reduction_pct}%."
+    )
+    return {"mode": "isolation", "base_bid_change_pct": -reduction_pct,
+            "placements": result_placements, "score": score, "reasoning": summary}
+
+
+def _optimization_mode(placements: list, profitable: list,
+                       breakeven_roas: float) -> dict:
+    """All placements profitable — shift more budget toward top performers."""
+    if not profitable:
+        return {"mode": "no_data", "base_bid_change_pct": 0,
+                "placements": placements, "score": 0,
+                "reasoning": "No profitable placements with sufficient data."}
+
+    total_gap = sum(p['roas_gap'] for p in profitable)
+    result_placements = []
+
+    for p in placements:
+        if p['status'] == 'profitable':
+            weight      = p['roas_gap'] / total_gap if total_gap > 0 else 1.0 / len(profitable)
+            current_pct = int(round(p['current_adj'] * 100))
+            if p['confidence'] < 0.17:   max_inc = 15
+            elif p['confidence'] < 0.50: max_inc = 25
+            else:                        max_inc = 50
+            increase = min(int(weight * 50), max_inc)
+            new_pct  = min(900, current_pct + increase)
+            action   = "Increase" if increase > 0 else "Keep"
+            reason   = (
+                f"PROFITABLE (ROAS {p['roas']:.2f}, +{p['roas_gap']:.2f} above breakeven). "
+                f"Weight {weight:.0%}. Increase {current_pct}% → {new_pct}%."
+            )
+            if p['confidence'] < 0.5:
+                reason += f" ⚠️ Low confidence ({p['purchases']} purchases) — conservative."
+        else:
+            new_pct = int(round(p['current_adj'] * 100))
+            action  = "Keep"
+            reason  = "⚠️ Insufficient data — keep current multiplier."
+
+        result_placements.append({**p,
+            "recommended_action":     action,
+            "recommended_multiplier": new_pct,
+            "reasoning":              reason,
+        })
+
+    avg_conf = sum(p['confidence'] for p in placements) / len(placements)
+    avg_gap  = sum(p['roas_gap'] for p in profitable) / len(profitable)
+    roas_sc  = min(5, int(avg_gap / breakeven_roas * 5)) if breakeven_roas > 0 else 3
+    score    = min(10, max(1, roas_sc + int(avg_conf * 5)))
+
+    best    = max(profitable, key=lambda p: p['roas'])
+    summary = (
+        f"🟢 OPTIMIZATION MODE — all placements above breakeven ({breakeven_roas:.2f}). "
+        f"Best: {best['label']} ROAS {best['roas']:.2f}. Shifting budget toward top performers."
+    )
+    return {"mode": "optimization", "base_bid_change_pct": 0,
+            "placements": result_placements, "score": score, "reasoning": summary}
+
+
+def placement_bid_algorithm(sub: pd.DataFrame, breakeven_roas: float,
+                             is_new_product: bool = False) -> dict:
+    """
+    3-mode placement bid algorithm.
+    Modes: learning (new product gate) | isolation | optimization | no_data
+    sub must be indexed by PL and include BidAdj column (0-based float, 2.0 = 200%).
+    Returns dict: mode, base_bid_change_pct, placements, score, reasoning.
+    """
+    if is_new_product:
+        return {"mode": "learning", "base_bid_change_pct": 0, "placements": [],
+                "score": 0,
+                "reasoning": "🚼 Product in launch phase. Algorithm suppressed. "
+                             "Re-evaluate after 30+ reviews."}
+
+    placements = []
+    for pl in ['Top', 'Rest', 'Product']:
+        if pl not in sub.index:
+            continue
+        r           = sub.loc[pl]
+        impressions = int(r.get('Impressions', 0) or 0)
+        purchases   = int(r.get('Orders', 0) or 0)
+        spend       = float(r.get('Spend', 0) or 0)
+        sales       = float(r.get('Sales', 0) or 0)
+        roas_raw    = r.get('ROAS', None)
+        roas        = float(roas_raw) if (roas_raw is not None and not pd.isna(roas_raw)) else 0.0
+        bid_raw     = r.get('BidAdj', 0)
+        bid_adj     = float(bid_raw) if (bid_raw is not None and not pd.isna(bid_raw)) else 0.0
+
+        if spend == 0:
+            continue
+
+        confidence = _placement_confidence(purchases, impressions)
+        roas_gap   = round(roas - breakeven_roas, 4)
+
+        if impressions < _MIN_IMPRESSIONS_THRESHOLD:
+            status = 'no_data'
+        elif roas_gap > 0:
+            status = 'profitable'
+        else:
+            status = 'losing'
+
+        placements.append({
+            "pl":          pl,
+            "label":       _PL_LABEL[pl],
+            "impressions": impressions,
+            "purchases":   purchases,
+            "spend":       round(spend, 2),
+            "sales":       round(sales, 2),
+            "roas":        round(roas, 2),
+            "roas_gap":    roas_gap,
+            "current_adj": bid_adj,
+            "confidence":  round(confidence, 2),
+            "score_cap":   _confidence_score_cap(confidence),
+            "status":      status,
+        })
+
+    if not placements:
+        return {"mode": "no_data", "base_bid_change_pct": 0, "placements": [],
+                "score": 0, "reasoning": "No placement spend data available."}
+
+    profitable = [p for p in placements if p['status'] == 'profitable']
+    losing     = [p for p in placements if p['status'] == 'losing']
+
+    if losing:
+        return _isolation_mode(placements, profitable, losing, breakeven_roas)
+    else:
+        return _optimization_mode(placements, profitable, breakeven_roas)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ENTRY POINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
 def analyze(sp_path: str, sb_path: str,
             target_roas: float = TARGET_ROAS,
             low_impr: int = LOW_IMPR_THRESHOLD) -> list[CampaignResult]:
     """
-    Main entry point.
+    Main entry point (no product costs).
     Returns a list of CampaignResult (comment field left empty — filled by Claude).
     """
     sp_grp = load_and_aggregate(sp_path, '7 Day Total Sales')
     sb_grp = load_and_aggregate(sb_path, '14 Day Total Sales')
 
-    # Detect Auto campaigns in SP
     df_sp = pd.read_excel(sp_path)
     df_sp.columns = df_sp.columns.str.strip()
     sp_types = {
@@ -408,10 +644,11 @@ def analyze_with_products(sp_path: str, sb_path: str,
                            min_margin_pct: float = 0.25,
                            marketplace: str = 'amazon.com') -> list[CampaignResult]:
     """
-    Same as analyze() but uses per-ASIN break-even ROAS when available.
+    Main entry point with per-ASIN product costs and new placement algorithm.
+    cost_map = {asin: {product_cost, shipping_cost, customs_cost, fba_fee,
+                       landed_cost, is_new_product}}
     Price is calculated dynamically from report: Total Sales / Total Orders.
     Falls back to global target_roas for campaigns without ASIN match.
-    cost_map = {asin: {product_cost, shipping_cost, customs_cost, fba_fee, landed_cost}}
     """
     if cost_map is None:
         cost_map = {}
@@ -419,18 +656,12 @@ def analyze_with_products(sp_path: str, sb_path: str,
     AMAZON_FEE_PCT = 0.15
 
     def get_avg_price(sub: pd.DataFrame) -> float:
-        """Calculate average price per order from report data."""
         total_sales  = sub['Sales'].sum()
         total_orders = sub['Orders'].sum()
-        if total_orders > 0:
-            return total_sales / total_orders
-        return 0.0
+        return total_sales / total_orders if total_orders > 0 else 0.0
 
     def get_campaign_data(campaign_name: str, avg_price: float) -> tuple[float, dict | None]:
-        """
-        Returns (campaign_target_roas, cost_data_or_none).
-        Matches ASIN in campaign name to break-even ROAS using dynamic price.
-        """
+        """Returns (breakeven_roas, cost_data_or_none)."""
         if cost_map and avg_price > 0:
             for asin, costs in cost_map.items():
                 if asin.upper() in campaign_name.upper():
@@ -462,6 +693,23 @@ def analyze_with_products(sp_path: str, sb_path: str,
         total_spend            = sub['Spend'].sum()
         total_sales            = sub['Sales'].sum()
         bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
+
+        # New placement algorithm
+        is_new      = cost_data.get('is_new_product', False) if cost_data else False
+        algo_result = placement_bid_algorithm(sub, camp_target, is_new_product=is_new)
+
+        # Use new algorithm placements as bid_recs_data (fallback to legacy)
+        algo_placements = algo_result.get('placements', [])
+        bid_data_final  = [{
+            "placement_type":         p['label'],
+            "recommended_action":     p['recommended_action'],
+            "recommended_multiplier": p['recommended_multiplier'],
+            "reasoning":              p['reasoning'],
+            "spend":                  p['spend'],
+            "roas":                   p['roas'],
+            "orders":                 p['purchases'],
+        } for p in algo_placements] if algo_placements else bid_data
+
         r = CampaignResult(
             campaign=camp,
             ad_type='SP',
@@ -472,10 +720,13 @@ def analyze_with_products(sp_path: str, sb_path: str,
             score=sc,
             score_label=score_label(sc),
             bid_rec=bid_str,
-            bid_recs_data=bid_data,
+            bid_recs_data=bid_data_final,
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
             marketplace=marketplace,
+            mode=algo_result.get('mode', ''),
+            base_bid_change_pct=algo_result.get('base_bid_change_pct', 0),
+            placement_algorithm=algo_result,
         )
         results.append(r)
 
@@ -487,6 +738,21 @@ def analyze_with_products(sp_path: str, sb_path: str,
         total_spend            = sub['Spend'].sum()
         total_sales            = sub['Sales'].sum()
         bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
+
+        is_new      = cost_data.get('is_new_product', False) if cost_data else False
+        algo_result = placement_bid_algorithm(sub, camp_target, is_new_product=is_new)
+
+        algo_placements = algo_result.get('placements', [])
+        bid_data_final  = [{
+            "placement_type":         p['label'],
+            "recommended_action":     p['recommended_action'],
+            "recommended_multiplier": p['recommended_multiplier'],
+            "reasoning":              p['reasoning'],
+            "spend":                  p['spend'],
+            "roas":                   p['roas'],
+            "orders":                 p['purchases'],
+        } for p in algo_placements] if algo_placements else bid_data
+
         r = CampaignResult(
             campaign=camp,
             ad_type='SB',
@@ -497,10 +763,13 @@ def analyze_with_products(sp_path: str, sb_path: str,
             score=sc,
             score_label=score_label(sc),
             bid_rec=bid_str,
-            bid_recs_data=bid_data,
+            bid_recs_data=bid_data_final,
             alert=alert_message(sub, sc, low_impr),
             total_roas=total_sales / total_spend if total_spend > 0 else 0,
             marketplace=marketplace,
+            mode=algo_result.get('mode', ''),
+            base_bid_change_pct=algo_result.get('base_bid_change_pct', 0),
+            placement_algorithm=algo_result,
         )
         results.append(r)
 
