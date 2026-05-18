@@ -371,9 +371,13 @@ with tab_inv:
                 return "background-color:#1a7f3722;color:#1a7f37"
 
             _show_cols = [c for c in _display_cols if c in _overview.columns]
-            _styled_inv = _overview[_show_cols].style.applymap(
-                _color_days, subset=[c for c in ["Days US", "Days CA", "Days UK"] if c in _show_cols]
-            )
+            _days_subset = [c for c in ["Days US", "Days CA", "Days UK"] if c in _show_cols]
+            _styler = _overview[_show_cols].style
+            if _days_subset:
+                # pandas ≥2.1 uses .map(), older uses .applymap()
+                _map_fn = getattr(_styler, "map", None) or getattr(_styler, "applymap")
+                _styler = _map_fn(_color_days, subset=_days_subset)
+            _styled_inv = _styler
             st.dataframe(_styled_inv, use_container_width=True, hide_index=True,
                          column_config={
                              "ASIN":    st.column_config.TextColumn(width=120),
