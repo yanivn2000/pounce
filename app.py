@@ -1437,8 +1437,9 @@ with tab_ads:
                             else f"⬆️ Increase base bids {_base}%"
                         )
                         _paused_badge = " &nbsp;⏸ PAUSED" if _r.is_paused else ""
+                        _end_txt = f" &nbsp;|&nbsp; 📅 {_r.end_date}" if _r.end_date else ""
                         _exp_label = (
-                            f"{_ml}{_paused_badge} &nbsp;|&nbsp; {_r.campaign} &nbsp;|&nbsp; {_base_txt} &nbsp;|&nbsp; Score: {_sc}/10"
+                            f"{_ml}{_paused_badge} &nbsp;|&nbsp; {_r.campaign} &nbsp;|&nbsp; {_base_txt} &nbsp;|&nbsp; Score: {_sc}/10{_end_txt}"
                         )
                         with st.expander(_exp_label, expanded=(_mode == "isolation")):
                             st.markdown(
