@@ -378,8 +378,11 @@ with tab_inv:
             )
 
             def _color_days(val):
-                if val == "" or val is None:
-                    return ""
+                try:
+                    if pd.isna(val):
+                        return ""
+                except (TypeError, ValueError):
+                    pass
                 try:
                     v = float(val)
                 except (TypeError, ValueError):
