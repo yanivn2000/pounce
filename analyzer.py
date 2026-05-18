@@ -474,10 +474,10 @@ def _optimization_mode(placements: list, profitable: list,
             action   = "Increase" if increase > 0 else "Keep"
             reason   = (
                 f"PROFITABLE (ROAS {p['roas']:.2f}, +{p['roas_gap']:.2f} above breakeven). "
-                f"Weight {weight:.0%}. Increase {current_pct}% → {new_pct}%."
+                f"Increase {current_pct}% → {new_pct}%."
             )
             if p['confidence'] < 0.5:
-                reason += f" ⚠️ Low confidence ({p['purchases']} purchases) — conservative."
+                reason += f" ⚠️ Low confidence ({p['purchases']} purchases) — conservative increase."
         else:
             new_pct = int(round(p['current_adj'] * 100))
             action  = "Keep"
