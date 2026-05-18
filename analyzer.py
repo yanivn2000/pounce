@@ -245,6 +245,22 @@ def score_campaign(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
                 penalty       = round(deficit * spend_weight * 30)
                 s             = max(0, s - penalty)
 
+    # ── Confidence dampening ───────────────────────────────────────────────
+    # ROAS from fewer than 30 purchases is statistically unreliable — a high
+    # ROAS on 4 orders could easily be noise.  Scale the score down so low-data
+    # campaigns never look as trustworthy as well-tested ones.
+    #
+    #   total purchases  |  dampen factor  |  example raw→adjusted
+    #   0                |  0.40           |  90 → 36
+    #   10               |  0.60           |  90 → 54
+    #   20               |  0.80           |  90 → 72
+    #   30+              |  1.00           |  90 → 90  (no change)
+    total_orders = int(sub['Orders'].sum()) if 'Orders' in sub.columns else 0
+    if total_orders < _MIN_PURCHASES_CONFIDENCE:
+        confidence = total_orders / _MIN_PURCHASES_CONFIDENCE      # 0.0 – <1.0
+        dampen     = 0.40 + 0.60 * confidence                      # 0.40 – <1.0
+        s          = round(s * dampen)
+
     return min(s, 100)
 
 
