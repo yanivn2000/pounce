@@ -849,7 +849,7 @@ with tab_ads:
 
                 st.markdown(
                     f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
-                    "💡 Select a row then click <strong>Clone &amp; Edit</strong> to adjust and re-log it.</p>",
+                    "💡 Select a row to <strong>Clone &amp; Edit</strong> or <strong>Record Outcome</strong>.</p>",
                     unsafe_allow_html=True,
                 )
                 _sel = st.dataframe(
@@ -865,38 +865,48 @@ with tab_ads:
                     key="recs_table_sel",
                 )
 
-                # Clone & Edit — scrolls user back up to the form
+                # Action bar — appears when a row is selected
                 _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
                 if _sel_rows:
                     _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
-                    _camp_preview = str(_sel_data.get("campaign_name") or "")[:50]
+                    _camp_preview  = str(_sel_data.get("campaign_name") or "")[:55]
                     _place_preview = str(_sel_data.get("placement_type") or "")
+                    _existing_outcome = str(_sel_data.get("outcome") or "")
+
                     st.markdown(
-                        f"<p style='font-size:0.82rem;color:{T['text_secondary']};margin:4px 0;'>"
-                        f"Selected: <strong>{_camp_preview}</strong> · {_place_preview}</p>",
+                        f"<div style='background:{T['card_bg']};border:1px solid {T['card_border']};"
+                        f"border-radius:8px;padding:0.6rem 1rem;margin:6px 0;font-size:0.85rem;'>"
+                        f"<strong>#{int(_sel_data.get('id', 0))}</strong> &nbsp;·&nbsp; "
+                        f"{_camp_preview} &nbsp;·&nbsp; {_place_preview}"
+                        + (f"&nbsp;&nbsp;<span style='color:{T['score_hi']};'>✅ Outcome already recorded</span>" if _existing_outcome else "")
+                        + "</div>",
                         unsafe_allow_html=True,
                     )
-                    if st.button("📋 Clone & Edit", type="primary"):
-                        st.session_state["rec_prefill"] = _sel_data
-                        st.rerun()
 
-                # ── Record outcome ────────────────────────────────────────────────────
-                st.divider()
-                st.markdown("### ✅ Record Outcome")
-                oc1, oc2, oc3 = st.columns([1, 3, 1])
-                with oc1:
-                    outcome_id = st.number_input("Rec ID", min_value=1, step=1)
-                with oc2:
-                    outcome_text = st.text_input("Outcome", placeholder="e.g. ROAS improved from 2.1 to 3.4")
-                with oc3:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("💾 Save Outcome"):
-                        if outcome_text.strip():
-                            update_recommendation_outcome(int(outcome_id), outcome_text.strip())
-                            st.success("✅ Outcome recorded.")
+                    _act1, _act2 = st.columns(2)
+
+                    with _act1:
+                        st.markdown("**📋 Clone & Edit**")
+                        if st.button("Clone & Edit → open form above", key="clone_btn"):
+                            st.session_state["rec_prefill"] = _sel_data
                             st.rerun()
-                        else:
-                            st.warning("Enter an outcome first.")
+
+                    with _act2:
+                        st.markdown("**✅ Record Outcome**")
+                        with st.form("outcome_form"):
+                            _oc_text = st.text_input(
+                                "What happened?",
+                                value=_existing_outcome,
+                                placeholder="e.g. ROAS improved from 2.1 to 3.4",
+                                label_visibility="collapsed",
+                            )
+                            if st.form_submit_button("💾 Save Outcome", type="primary"):
+                                if _oc_text.strip():
+                                    update_recommendation_outcome(int(_sel_data["id"]), _oc_text.strip())
+                                    st.success("✅ Outcome saved.")
+                                    st.rerun()
+                                else:
+                                    st.warning("Enter an outcome first.")
 
         with _analysis_view:
             # ── ANALYSIS content ──────────────────────────────────────────────
