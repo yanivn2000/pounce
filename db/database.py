@@ -153,8 +153,11 @@ def _migrate_recommendations_end_date(conn: sqlite3.Connection):
     """Add end_date column to recommendations if missing."""
     cols = [r[1] for r in conn.execute("PRAGMA table_info(recommendations)").fetchall()]
     if "end_date" not in cols:
-        conn.execute("ALTER TABLE recommendations ADD COLUMN end_date TEXT")
-        conn.commit()
+        try:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN end_date TEXT")
+            conn.commit()
+        except Exception:
+            pass  # column already exists (race condition or prior partial migration)
 
 
 def flag_force_logout(username: str):
