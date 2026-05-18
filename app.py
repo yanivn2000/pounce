@@ -1057,7 +1057,7 @@ with tab_ads:
             st.divider()
 
             # ── Filter + list ─────────────────────────────────────────────────────────
-            rhf1, rhf2, rhf3 = st.columns(3)
+            rhf1, rhf2, rhf3, rhf4 = st.columns(4)
             with rhf1:
                 rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
                 rh_market = None if rh_market == "all" else rh_market
@@ -1065,6 +1065,13 @@ with tab_ads:
                 rh_source = st.selectbox("Source", ["All", "Manual only", "Auto only"], key="rh_source")
             with rhf3:
                 show_pending = st.checkbox("Show only pending review", value=False)
+            with rhf4:
+                show_critical_recs = st.checkbox(
+                    "🚨 Critical only",
+                    value=False,
+                    key="rh_critical",
+                    help="🔴 Losing money (ROAS < breakeven)  ·  🟢 High-opportunity (score ≥ 70)"
+                )
 
             recs_df = get_recommendations_history(marketplace=rh_market)
 
@@ -1087,6 +1094,13 @@ with tab_ads:
                         (recs_df["review_date"].fillna("") <= today_str) &
                         (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
                     ]
+
+                # Critical filter: LOSING placement (risk) or score ≥ 70 (opportunity)
+                if show_critical_recs:
+                    _rsn_col = recs_df["reasoning"].fillna("").str.upper()
+                    _is_losing = _rsn_col.str.startswith("LOSING")
+                    _is_oppty  = recs_df["score"] >= 70
+                    recs_df = recs_df[_is_losing | _is_oppty]
 
                 def _fmt_change(row):
                     action = str(row.get("recommended_action") or "").strip()
