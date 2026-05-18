@@ -362,13 +362,16 @@ with tab_inv:
             _show_cols = [c for c in _display_cols if c in _overview.columns]
 
             # ── Totals row ────────────────────────────────────────────────────
-            _num_cols = [c for c in _show_cols if c not in ("ASIN", "Title", "Days US", "Days CA", "Days UK")]
+            _skip = {"ASIN", "Title", "asin", "title", "Days US", "Days CA", "Days UK"}
+            _num_cols = [c for c in _show_cols
+                         if c not in _skip and pd.api.types.is_numeric_dtype(_overview[c])]
             _total_row = {c: "" for c in _show_cols}
-            _total_row["ASIN"]  = "TOTAL"
-            _total_row["Title"] = ""
+            # Mark the TOTAL row — handle both lowercase and display-case column names
+            for _id_col in ("asin", "ASIN"):
+                if _id_col in _total_row:
+                    _total_row[_id_col] = "TOTAL"
             for c in _num_cols:
-                _total_row[c] = int(_overview[c].fillna(0).sum()) if c != "Value $" \
-                    else int(_overview["Value $"].fillna(0).sum())
+                _total_row[c] = int(_overview[c].fillna(0).sum())
             _display_df = pd.concat(
                 [_overview[_show_cols], pd.DataFrame([_total_row])],
                 ignore_index=True
@@ -391,7 +394,7 @@ with tab_inv:
 
             def _color_total_row(row):
                 """Bold + light grey background on the TOTAL row."""
-                if row.get("ASIN") == "TOTAL":
+                if row.get("ASIN") == "TOTAL" or row.get("asin") == "TOTAL":
                     return ["background-color:#f0f0f0;font-weight:700"] * len(row)
                 return [""] * len(row)
 
