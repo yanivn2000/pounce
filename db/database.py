@@ -160,6 +160,7 @@ def init_db():
     _migrate_recommendations_end_date(conn)
     _migrate_fba_fees(conn)
     _migrate_fx_rates(conn)
+    _migrate_recommendations_dedup_index(conn)
     conn.close()
 
 
@@ -188,6 +189,32 @@ def _migrate_recommendations_end_date(conn: sqlite3.Connection):
             conn.commit()
         except Exception:
             pass  # column already exists (race condition or prior partial migration)
+
+
+def _migrate_recommendations_dedup_index(conn: sqlite3.Connection):
+    """
+    Add a unique index on (date_given, campaign_name, placement_type, marketplace)
+    so re-uploading the same placement report overwrites rather than duplicates.
+    Uses CREATE UNIQUE INDEX IF NOT EXISTS — safe to call repeatedly.
+    Existing duplicate rows are removed first (keep lowest id per group).
+    """
+    try:
+        # Remove duplicates before creating the index (keep earliest row per group)
+        conn.execute("""
+            DELETE FROM recommendations
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM recommendations
+                GROUP BY date_given, campaign_name, placement_type, marketplace
+            )
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_recs_dedup
+            ON recommendations(date_given, campaign_name, placement_type, marketplace)
+        """)
+        conn.commit()
+    except Exception:
+        pass
 
 
 def flag_force_logout(username: str):

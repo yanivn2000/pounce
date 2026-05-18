@@ -153,7 +153,7 @@ def save_recommendation(rec: dict) -> int:
     conn = get_conn()
     with conn:
         cur = conn.execute("""
-            INSERT INTO recommendations
+            INSERT OR REPLACE INTO recommendations
                 (date_given, asin, marketplace, campaign_name, placement_type,
                  campaign_type, current_multiplier, recommended_action,
                  recommended_multiplier, reasoning, window_days, review_date, score, source,
