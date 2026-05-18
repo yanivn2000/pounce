@@ -294,7 +294,9 @@ with tab_inv:
     # ── OVERVIEW ─────────────────────────────────────────────────────────────
     with _inv_overview_tab:
         st.markdown("# 📦 Inventory Overview")
-        _cost_map_inv = get_cost_map_db()
+        _cost_map_raw = get_cost_map_db()
+        # get_inventory_overview expects {asin: landed_cost} not the full cost dict
+        _cost_map_inv = {asin: v.get("landed_cost", 0) for asin, v in _cost_map_raw.items()}
         _avg_sales    = get_avg_daily_sales(days=30)
         _overview     = get_inventory_overview(_cost_map_inv, _avg_sales)
 
