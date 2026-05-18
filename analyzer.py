@@ -735,7 +735,9 @@ def analyze_with_products(sp_path: str, sb_path: str,
                            low_impr: int = LOW_IMPR_THRESHOLD,
                            cost_map: dict = None,
                            min_margin_pct: float = 0.25,
-                           marketplace: str = 'amazon.com') -> list[CampaignResult]:
+                           marketplace: str = 'amazon.com',
+                           fba_fees_map: dict = None,
+                           fx_rate: float = 1.0) -> list[CampaignResult]:
     """
     Main entry point with per-ASIN product costs and new placement algorithm.
     cost_map = {asin: {product_cost, shipping_cost, customs_cost, fba_fee,
@@ -758,11 +760,18 @@ def analyze_with_products(sp_path: str, sb_path: str,
         if cost_map and avg_price > 0:
             for asin, costs in cost_map.items():
                 if asin.upper() in campaign_name.upper():
-                    landed_cost = costs['landed_cost']
-                    fba_fee     = costs['fba_fee']
-                    amazon_fee  = avg_price * AMAZON_FEE_PCT
-                    margin      = avg_price - landed_cost - fba_fee - amazon_fee
-                    be_roas     = round(avg_price / margin, 2) if margin > 0 else target_roas
+                    landed_cost_usd = costs['landed_cost']          # product+ship+customs in USD
+                    landed_local    = landed_cost_usd * fx_rate      # convert to local currency
+
+                    # FBA pick & pack from imported fees, fallback to product_costs.fba_fee
+                    fba_data  = (fba_fees_map or {}).get(asin.upper(), {})
+                    pick_pack = fba_data.get('pick_pack_fee') or costs.get('fba_fee', 0)
+
+                    # Referral fee: use imported value if available, else 15% of avg_price
+                    referral  = fba_data.get('referral_fee') or (avg_price * AMAZON_FEE_PCT)
+
+                    margin   = avg_price - landed_local - pick_pack - referral
+                    be_roas  = round(avg_price / margin, 2) if margin > 0 else target_roas
                     return be_roas, costs
         return target_roas, None
 

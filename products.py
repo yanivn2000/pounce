@@ -118,7 +118,7 @@ def products_exist() -> bool:
 
 # ── DB-backed product costs (per marketplace) ─────────────────────────────────
 
-DB_COLUMNS = ["ASIN", "Product Name", "Product Cost", "Shipping Cost", "Customs Cost", "FBA Fee", "New Product"]
+DB_COLUMNS = ["ASIN", "Product Name", "Product Cost", "Shipping Cost", "Customs Cost", "New Product"]
 
 
 def load_products_db() -> pd.DataFrame:
@@ -127,7 +127,7 @@ def load_products_db() -> pd.DataFrame:
     df = pd.read_sql_query(
         "SELECT asin AS ASIN, product_name AS 'Product Name', "
         "product_cost AS 'Product Cost', shipping_cost AS 'Shipping Cost', "
-        "customs_cost AS 'Customs Cost', fba_fee AS 'FBA Fee', "
+        "customs_cost AS 'Customs Cost', "
         "COALESCE(is_new_product, 0) AS 'New Product' "
         "FROM product_costs ORDER BY asin",
         conn
@@ -181,21 +181,34 @@ def delete_product_db(asin: str):
 
 
 def get_cost_map_db() -> dict:
-    """Returns {ASIN: {product_cost, shipping_cost, customs_cost, fba_fee, landed_cost, is_new_product}}"""
-    df = load_products_db()
+    """Returns {ASIN: {product_cost, shipping_cost, customs_cost, fba_fee, landed_cost, is_new_product}}
+    fba_fee is kept as a DB fallback even though it's no longer shown in the UI.
+    """
+    from db.database import get_conn
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT asin, product_name, product_cost, shipping_cost, customs_cost, "
+        "COALESCE(fba_fee, 0) AS fba_fee, COALESCE(is_new_product, 0) AS is_new_product "
+        "FROM product_costs ORDER BY asin"
+    ).fetchall()
+    conn.close()
     result = {}
-    for _, row in df.iterrows():
-        asin = str(row.get("ASIN", "")).strip()
-        if asin:
-            lc = calc_landed_cost(row)
-            result[asin] = {
-                "product_cost":   float(row.get("Product Cost") or 0),
-                "shipping_cost":  float(row.get("Shipping Cost") or 0),
-                "customs_cost":   float(row.get("Customs Cost") or 0),
-                "fba_fee":        float(row.get("FBA Fee") or 0),
-                "landed_cost":    lc,
-                "is_new_product": bool(row.get("New Product", False)),
-            }
+    for r in rows:
+        asin = str(r["asin"] or "").strip()
+        if not asin:
+            continue
+        pc  = float(r["product_cost"]  or 0)
+        sc  = float(r["shipping_cost"] or 0)
+        cc  = float(r["customs_cost"]  or 0)
+        fba = float(r["fba_fee"]       or 0)
+        result[asin] = {
+            "product_cost":   pc,
+            "shipping_cost":  sc,
+            "customs_cost":   cc,
+            "fba_fee":        fba,
+            "landed_cost":    pc + sc + cc,
+            "is_new_product": bool(r["is_new_product"]),
+        }
     return result
 
 

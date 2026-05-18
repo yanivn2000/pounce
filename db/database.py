@@ -124,12 +124,42 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_inv_asin     ON inventory_snapshots(asin);
             CREATE INDEX IF NOT EXISTS idx_inv_location ON inventory_snapshots(location);
             CREATE INDEX IF NOT EXISTS idx_inv_date     ON inventory_snapshots(snapshot_date);
+
+            CREATE TABLE IF NOT EXISTS fba_fees (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                asin          TEXT NOT NULL,
+                marketplace   TEXT NOT NULL,
+                pick_pack_fee REAL DEFAULT 0,
+                referral_fee  REAL DEFAULT 0,
+                currency      TEXT DEFAULT 'USD',
+                updated_at    TEXT DEFAULT (datetime('now')),
+                UNIQUE(asin, marketplace)
+            );
+
+            CREATE TABLE IF NOT EXISTS fx_rates (
+                marketplace TEXT PRIMARY KEY,
+                rate        REAL NOT NULL DEFAULT 1.0,
+                note        TEXT,
+                updated_at  TEXT DEFAULT (datetime('now'))
+            );
+
+            INSERT OR IGNORE INTO fx_rates (marketplace, rate, note) VALUES
+                ('amazon.com',    1.00, 'USD baseline'),
+                ('amazon.co.uk',  0.79, 'GBP — update regularly'),
+                ('amazon.ca',     1.36, 'CAD — update regularly'),
+                ('amazon.com.au', 1.53, 'AUD — update regularly'),
+                ('amazon.de',     0.92, 'EUR — update regularly'),
+                ('amazon.fr',     0.92, 'EUR — update regularly'),
+                ('amazon.es',     0.92, 'EUR — update regularly'),
+                ('amazon.it',     0.92, 'EUR — update regularly');
         """)
     _migrate_product_costs(conn)
     _migrate_recommendations_score(conn)
     _migrate_recommendations_source(conn)
     _migrate_product_costs_new_product(conn)
     _migrate_recommendations_end_date(conn)
+    _migrate_fba_fees(conn)
+    _migrate_fx_rates(conn)
     conn.close()
 
 
@@ -199,6 +229,66 @@ def _migrate_recommendations_score(conn: sqlite3.Connection):
     if "score" not in cols:
         conn.execute("ALTER TABLE recommendations ADD COLUMN score INTEGER")
         conn.commit()
+
+
+def _migrate_fba_fees(conn: sqlite3.Connection):
+    """Ensure fba_fees table exists (created in executescript; safe no-op)."""
+    try:
+        conn.execute("SELECT 1 FROM fba_fees LIMIT 1")
+    except Exception:
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS fba_fees (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asin          TEXT NOT NULL,
+                    marketplace   TEXT NOT NULL,
+                    pick_pack_fee REAL DEFAULT 0,
+                    referral_fee  REAL DEFAULT 0,
+                    currency      TEXT DEFAULT 'USD',
+                    updated_at    TEXT DEFAULT (datetime('now')),
+                    UNIQUE(asin, marketplace)
+                )
+            """)
+            conn.commit()
+        except Exception:
+            pass
+
+
+def _migrate_fx_rates(conn: sqlite3.Connection):
+    """Ensure fx_rates table and seed rows exist (safe no-op if already present)."""
+    try:
+        conn.execute("SELECT 1 FROM fx_rates LIMIT 1")
+    except Exception:
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS fx_rates (
+                    marketplace TEXT PRIMARY KEY,
+                    rate        REAL NOT NULL DEFAULT 1.0,
+                    note        TEXT,
+                    updated_at  TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.commit()
+        except Exception:
+            pass
+    # Always attempt seed — INSERT OR IGNORE is safe
+    try:
+        conn.executemany(
+            "INSERT OR IGNORE INTO fx_rates (marketplace, rate, note) VALUES (?,?,?)",
+            [
+                ('amazon.com',    1.00, 'USD baseline'),
+                ('amazon.co.uk',  0.79, 'GBP — update regularly'),
+                ('amazon.ca',     1.36, 'CAD — update regularly'),
+                ('amazon.com.au', 1.53, 'AUD — update regularly'),
+                ('amazon.de',     0.92, 'EUR — update regularly'),
+                ('amazon.fr',     0.92, 'EUR — update regularly'),
+                ('amazon.es',     0.92, 'EUR — update regularly'),
+                ('amazon.it',     0.92, 'EUR — update regularly'),
+            ]
+        )
+        conn.commit()
+    except Exception:
+        pass
 
 
 def _migrate_product_costs(conn: sqlite3.Connection):

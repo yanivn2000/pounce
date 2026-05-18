@@ -31,6 +31,10 @@ from db.inventory import (
     get_latest_inventory, LOCATIONS, FBA_LOCATIONS,
 )
 from db.importer import import_orders_csv, save_recommendation, update_recommendation_outcome
+from db.fba_fees import (
+    import_fee_preview_csv, get_fba_fees_map, get_all_fba_fees_df,
+    get_fx_rates, get_fx_rates_df, save_fx_rate,
+)
 from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
     get_change_log, get_marketplaces, get_order_date_range, count_orders,
@@ -504,6 +508,75 @@ with tab_inv:
             st.success(f"✅ {_n} rows imported.")
             for w in _w: st.warning(w)
 
+        st.divider()
+
+        # ── FBA Fee Preview ───────────────────────────────────────────────────
+        st.markdown("### 💰 FBA Fee Preview")
+        st.markdown(
+            f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>"
+            f"Download from Seller Central → Reports → Fulfillment → Fee Preview. "
+            f"Imports pick &amp; pack and referral fees per ASIN.</p>",
+            unsafe_allow_html=True,
+        )
+        _fee_mkt_options = [
+            "amazon.com", "amazon.co.uk", "amazon.ca",
+            "amazon.com.au", "amazon.de", "amazon.fr", "amazon.es", "amazon.it",
+        ]
+        _fee_mkt = st.selectbox(
+            "Marketplace for fee import", _fee_mkt_options, key="fee_preview_market"
+        )
+        _fee_file = st.file_uploader(
+            "Fee Preview CSV", type=["csv", "txt"], key="fee_preview_upload"
+        )
+        if _fee_file and st.button("Import Fee Preview", key="btn_fee_preview"):
+            _n_fees, _w_fees = import_fee_preview_csv(_fee_file, _fee_mkt)
+            if _w_fees:
+                for w in _w_fees:
+                    st.warning(w)
+            else:
+                st.success(f"✅ {_n_fees} ASINs imported for {_fee_mkt}.")
+                st.rerun()
+
+        _fba_fees_df = get_all_fba_fees_df()
+        if not _fba_fees_df.empty:
+            with st.expander("📋 Current FBA Fees", expanded=False):
+                st.dataframe(_fba_fees_df, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ── FX Rates ──────────────────────────────────────────────────────────
+        st.markdown("### 💱 Exchange Rates (USD → local)")
+        st.markdown(
+            f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>"
+            f"Rate = local currency units per 1 USD. Used to convert your USD product costs "
+            f"to local currency before the break-even margin calculation.</p>",
+            unsafe_allow_html=True,
+        )
+        _fx_df = get_fx_rates_df()
+        if not _fx_df.empty:
+            _fx_edited = st.data_editor(
+                _fx_df,
+                use_container_width=True,
+                hide_index=True,
+                disabled=["marketplace", "updated_at"],
+                column_config={
+                    "marketplace": st.column_config.TextColumn("Marketplace"),
+                    "rate":        st.column_config.NumberColumn("Rate (local / USD)", format="%.4f", min_value=0.0001),
+                    "note":        st.column_config.TextColumn("Note"),
+                    "updated_at":  st.column_config.TextColumn("Updated"),
+                },
+                key="fx_rates_editor",
+            )
+            if st.button("💾 Save FX Rates", key="btn_save_fx"):
+                for _, _fx_row in _fx_edited.iterrows():
+                    save_fx_rate(
+                        _fx_row["marketplace"],
+                        float(_fx_row["rate"] or 1.0),
+                        str(_fx_row.get("note") or ""),
+                    )
+                st.success("✅ FX rates saved.")
+                st.rerun()
+
     # ── MANUAL ENTRY ──────────────────────────────────────────────────────────
     with _inv_manual_tab:
         st.markdown("# ✏️ Manual Inventory Entry")
@@ -553,7 +626,8 @@ with tab_products:
     )
     st.markdown(
         f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
-        f"<strong>Break-even ROAS</strong> = Price ÷ (Price − Landed Cost − FBA Fee − Amazon 15%)</p>",
+        f"<strong>Break-even ROAS</strong> = Price ÷ (Price − Landed Cost − FBA Fee − Referral Fee). "
+        f"FBA fees are imported per marketplace from the Fee Preview report (Inventory tab).</p>",
         unsafe_allow_html=True
     )
     st.divider()
@@ -617,7 +691,6 @@ with tab_products:
             "Product Cost":  st.column_config.NumberColumn("Product Cost $", format="$%.2f", min_value=0.0),
             "Shipping Cost": st.column_config.NumberColumn("Shipping Cost $", format="$%.2f", min_value=0.0),
             "Customs Cost":  st.column_config.NumberColumn("Customs Cost $", format="$%.2f", min_value=0.0),
-            "FBA Fee":       st.column_config.NumberColumn("FBA Fee $", format="$%.2f", min_value=0.0),
             "New Product":   st.column_config.CheckboxColumn(
                 "🚼 New Product",
                 help="Check if this product is in launch phase (<60 days / <30 reviews). "
@@ -636,17 +709,14 @@ with tab_products:
         )
         preview_rows = []
         for _, row in edited_df.iterrows():
-            lc  = calc_landed_cost(row)
-            fba = float(row.get("FBA Fee") or 0)
+            lc = calc_landed_cost(row)
             preview_rows.append({
-                "ASIN":             str(row.get("ASIN") or ""),
-                "Product":          str(row.get("Product Name") or ""),
-                "Product Cost":     f"${float(row.get('Product Cost') or 0):.2f}",
-                "Shipping Cost":    f"${float(row.get('Shipping Cost') or 0):.2f}",
-                "Customs Cost":     f"${float(row.get('Customs Cost') or 0):.2f}",
-                "Landed Cost":      f"${lc:.2f}",
-                "FBA Fee":          f"${fba:.2f}",
-                "Total Fixed Cost": f"${lc + fba:.2f}",
+                "ASIN":          str(row.get("ASIN") or ""),
+                "Product":       str(row.get("Product Name") or ""),
+                "Product Cost":  f"${float(row.get('Product Cost') or 0):.2f}",
+                "Shipping Cost": f"${float(row.get('Shipping Cost') or 0):.2f}",
+                "Customs Cost":  f"${float(row.get('Customs Cost') or 0):.2f}",
+                "Landed Cost":   f"${lc:.2f}",
             })
         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
@@ -1259,7 +1329,15 @@ with tab_ads:
                         with open(sb_path, "wb") as f: f.write(sb_file.read())
                         detected_marketplace = detect_marketplace_from_xlsx(sp_path)
                         try:
-                            results = analyze_with_products(sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct, detected_marketplace)
+                            _fx_rates = get_fx_rates()
+                            _fx_rate  = _fx_rates.get(detected_marketplace, 1.0)
+                            _fba_map  = get_fba_fees_map(detected_marketplace)
+                            results = analyze_with_products(
+                                sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct,
+                                detected_marketplace,
+                                fba_fees_map=_fba_map,
+                                fx_rate=_fx_rate,
+                            )
                         finally:
                             for p in [sp_path, sb_path]:
                                 if os.path.exists(p): os.unlink(p)
