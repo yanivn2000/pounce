@@ -504,12 +504,16 @@ def _optimization_mode(placements: list, profitable: list,
 
 
 def placement_bid_algorithm(sub: pd.DataFrame, breakeven_roas: float,
-                             is_new_product: bool = False) -> dict:
+                             is_new_product: bool = False,
+                             campaign_name: str = "") -> dict:
     """
     3-mode placement bid algorithm.
     Modes: learning (new product gate) | isolation | optimization | no_data
     sub must be indexed by PL and include BidAdj column (0-based float, 2.0 = 200%).
     Returns dict: mode, base_bid_change_pct, placements, score, reasoning.
+
+    Brand campaigns (name contains 'BRAND') only support Top of Search
+    bid adjustment in Amazon's UI — Product Pages is excluded automatically.
     """
     if is_new_product:
         return {"mode": "learning", "base_bid_change_pct": 0, "placements": [],
@@ -517,8 +521,12 @@ def placement_bid_algorithm(sub: pd.DataFrame, breakeven_roas: float,
                 "reasoning": "🚼 Product in launch phase. Algorithm suppressed. "
                              "Re-evaluate after 30+ reviews."}
 
+    is_brand = "BRAND" in campaign_name.upper()
+    # For Brand campaigns Amazon only exposes Top of Search as an adjustable placement
+    eligible_placements = ['Top'] if is_brand else ['Top', 'Rest', 'Product']
+
     placements = []
-    for pl in ['Top', 'Rest', 'Product']:
+    for pl in eligible_placements:
         if pl not in sub.index:
             continue
         r           = sub.loc[pl]
@@ -702,7 +710,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
 
         # New placement algorithm
         is_new      = cost_data.get('is_new_product', False) if cost_data else False
-        algo_result = placement_bid_algorithm(sub, camp_target, is_new_product=is_new)
+        algo_result = placement_bid_algorithm(sub, camp_target, is_new_product=is_new, campaign_name=camp)
 
         # Use new algorithm placements as bid_recs_data (fallback to legacy)
         algo_placements = algo_result.get('placements', [])
@@ -746,7 +754,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
         bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
 
         is_new      = cost_data.get('is_new_product', False) if cost_data else False
-        algo_result = placement_bid_algorithm(sub, camp_target, is_new_product=is_new)
+        algo_result = placement_bid_algorithm(sub, camp_target, is_new_product=is_new, campaign_name=camp)
 
         algo_placements = algo_result.get('placements', [])
         bid_data_final  = [{
