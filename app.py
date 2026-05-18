@@ -1308,6 +1308,102 @@ with tab_ads:
                         }
                     )
 
+                    # ── Placement Algorithm Results ───────────────────────────────────
+                    st.divider()
+                    st.markdown("### 📍 Placement Algorithm")
+
+                    _algo_counts = {"isolation": 0, "optimization": 0, "learning": 0, "no_data": 0}
+                    for _r in results:
+                        _m = _r.mode or "no_data"
+                        _algo_counts[_m] = _algo_counts.get(_m, 0) + 1
+
+                    _ac1, _ac2, _ac3, _ac4 = st.columns(4)
+                    for _col, _mode, _label, _color in [
+                        (_ac1, "isolation",    "🔴 Isolation",    "#FFC7CE"),
+                        (_ac2, "optimization", "🟢 Optimization", "#C6EFCE"),
+                        (_ac3, "learning",     "🚼 Learning",     "#FFEB9C"),
+                        (_ac4, "no_data",      "⚫ No Data",      "#D9D9D9"),
+                    ]:
+                        _cnt = _algo_counts.get(_mode, 0)
+                        _col.markdown(
+                            f'<div style="background:{_color};border-radius:8px;padding:10px;text-align:center;">'
+                            f'<p style="font-size:1.6rem;font-weight:700;margin:0;">{_cnt}</p>'
+                            f'<p style="font-size:0.8rem;margin:0;">{_label}</p></div>',
+                            unsafe_allow_html=True
+                        )
+
+                    st.markdown("")
+
+                    _MODE_COLORS = {
+                        "isolation":    ("#FFC7CE", "🔴 ISOLATION"),
+                        "optimization": ("#C6EFCE", "🟢 OPTIMIZATION"),
+                        "learning":     ("#FFEB9C", "🚼 LEARNING"),
+                        "no_data":      ("#D9D9D9", "⚫ NO DATA"),
+                    }
+                    _ACTION_COLORS = {
+                        "increase":  "#C6EFCE",
+                        "reduce":    "#FCE4D6",
+                        "keep":      "#F2F2F2",
+                    }
+
+                    for _r in results:
+                        _algo   = _r.placement_algorithm or {}
+                        _mode   = _r.mode or "no_data"
+                        _mc, _ml = _MODE_COLORS.get(_mode, ("#D9D9D9", _mode.upper()))
+                        _base   = _algo.get("base_bid_change_pct", 0)
+                        _rsn    = _algo.get("reasoning", "")
+                        _pls    = _algo.get("placements", [])
+                        _sc     = _algo.get("score", 0)
+
+                        _base_txt = (
+                            f"⬇️ Reduce all keyword bids **{abs(_base)}%**" if _base < 0
+                            else "No base bid change" if _base == 0
+                            else f"⬆️ Increase base bids {_base}%"
+                        )
+                        _exp_label = (
+                            f"{_ml} &nbsp;|&nbsp; {_r.campaign} &nbsp;|&nbsp; {_base_txt} &nbsp;|&nbsp; Score: {_sc}/10"
+                        )
+                        with st.expander(_exp_label, expanded=(_mode == "isolation")):
+                            st.markdown(
+                                f'<div style="background:{_mc};border-radius:6px;padding:8px 12px;'
+                                f'font-size:0.85rem;">{_rsn}</div>',
+                                unsafe_allow_html=True
+                            )
+                            if _pls:
+                                st.markdown("")
+                                _pl_cols = st.columns(len(_pls))
+                                for _ci, _p in enumerate(_pls):
+                                    with _pl_cols[_ci]:
+                                        _act = (_p.get("recommended_action") or "").lower()
+                                        _abg = (
+                                            "#C6EFCE" if "increase" in _act
+                                            else "#FCE4D6" if "reduce" in _act
+                                            else "#F2F2F2"
+                                        )
+                                        _conf_pct = int(_p.get("confidence", 0) * 100)
+                                        _conf_bar = "🟢" if _conf_pct >= 67 else "🟡" if _conf_pct >= 33 else "🔴"
+                                        st.markdown(
+                                            f'<div style="border:1px solid #ddd;border-radius:8px;padding:10px;">'
+                                            f'<p style="font-weight:700;font-size:0.9rem;margin:0 0 6px;">{_p["label"]}</p>'
+                                            f'<table style="width:100%;font-size:0.8rem;border-collapse:collapse;">'
+                                            f'<tr><td style="color:#666;">ROAS</td><td style="text-align:right;font-weight:600;">{_p.get("roas", 0):.2f}</td></tr>'
+                                            f'<tr><td style="color:#666;">Current %</td><td style="text-align:right;">{int(round(_p.get("current_adj",0)*100))}%</td></tr>'
+                                            f'<tr><td style="color:#666;">Confidence</td><td style="text-align:right;">{_conf_bar} {_conf_pct}%</td></tr>'
+                                            f'<tr><td style="color:#666;">Purchases</td><td style="text-align:right;">{_p.get("purchases", 0)}</td></tr>'
+                                            f'</table>'
+                                            f'<div style="margin-top:8px;background:{_abg};border-radius:5px;padding:6px 8px;'
+                                            f'font-size:0.82rem;font-weight:700;text-align:center;">'
+                                            f'{_p.get("recommended_action","—")} → {_p.get("recommended_multiplier","—")}%'
+                                            f'</div>'
+                                            f'<p style="font-size:0.72rem;color:#555;margin-top:6px;">{_p.get("reasoning","")}</p>'
+                                            f'</div>',
+                                            unsafe_allow_html=True
+                                        )
+                            elif _mode == "learning":
+                                st.info("🚼 No placement recommendations during launch phase.")
+                            else:
+                                st.caption("No placement data available.")
+
                     st.divider()
                     st.markdown("### 📥 Download Excel Report")
                     with st.spinner("Building Excel..."):
