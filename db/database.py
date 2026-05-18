@@ -98,6 +98,32 @@ def init_db():
                 username     TEXT PRIMARY KEY,
                 requested_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS inventory_snapshots (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_date   TEXT NOT NULL,
+                asin            TEXT NOT NULL,
+                sku             TEXT,
+                title           TEXT,
+                location        TEXT NOT NULL,
+                units_available INTEGER DEFAULT 0,
+                units_inbound   INTEGER DEFAULT 0,
+                units_reserved  INTEGER DEFAULT 0,
+                source          TEXT DEFAULT 'upload',
+                created_at      TEXT DEFAULT (datetime('now')),
+                UNIQUE(asin, location, snapshot_date)
+            );
+
+            CREATE TABLE IF NOT EXISTS sku_asin_map (
+                sku     TEXT PRIMARY KEY,
+                asin    TEXT NOT NULL,
+                title   TEXT,
+                source  TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_inv_asin     ON inventory_snapshots(asin);
+            CREATE INDEX IF NOT EXISTS idx_inv_location ON inventory_snapshots(location);
+            CREATE INDEX IF NOT EXISTS idx_inv_date     ON inventory_snapshots(snapshot_date);
         """)
     _migrate_product_costs(conn)
     _migrate_recommendations_score(conn)

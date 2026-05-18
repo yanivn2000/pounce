@@ -23,7 +23,13 @@ from products import (
 # One-time migration from CSV to DB on startup
 if products_exist() and not products_exist_db():
     migrate_csv_to_db()
-from db.database import init_db, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
+from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
+from db.inventory import (
+    import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
+    upsert_manual_inventory, save_sku_mapping,
+    get_inventory_overview, get_avg_daily_sales, get_inventory_alerts,
+    get_latest_inventory, LOCATIONS, FBA_LOCATIONS,
+)
 from db.importer import import_orders_csv, save_recommendation, update_recommendation_outcome
 from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
@@ -266,16 +272,232 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_ads, tab_sales, tab_profit, tab_admin = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "💰 Profit", "⚙️ Admin"
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_admin = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "💰 Profit", "⚙️ Admin"
     ])
 else:
-    tab_ads, tab_sales, tab_profit = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "💰 Profit"
+    tab_ads, tab_sales, tab_inv, tab_profit = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "💰 Profit"
     ])
     tab_admin = None
 
 # Analysis content moved into Ads tab below
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — INVENTORY
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_inv:
+    _inv_overview_tab, _inv_upload_tab, _inv_manual_tab = st.tabs([
+        "📊 Overview", "📤 Upload Data", "✏️ Manual Entry"
+    ])
+
+    # ── OVERVIEW ─────────────────────────────────────────────────────────────
+    with _inv_overview_tab:
+        st.markdown("# 📦 Inventory Overview")
+        _cost_map_inv = get_cost_map_db()
+        _avg_sales    = get_avg_daily_sales(days=30)
+        _overview     = get_inventory_overview(_cost_map_inv, _avg_sales)
+
+        if _overview.empty:
+            st.info("No inventory data yet. Go to **Upload Data** or **Manual Entry** to add stock.")
+        else:
+            # ── Alerts ───────────────────────────────────────────────────────
+            _alerts = get_inventory_alerts(_overview)
+            if _alerts:
+                _crit  = [a for a in _alerts if a["level"] == "critical"]
+                _urg   = [a for a in _alerts if a["level"] == "urgent"]
+                _plan  = [a for a in _alerts if a["level"] == "plan"]
+                _other = [a for a in _alerts if a["level"] not in ("critical","urgent","plan")]
+
+                if _crit:
+                    with st.expander(f"🔴 CRITICAL — {len(_crit)} stock-out risks", expanded=True):
+                        for a in _crit:
+                            st.markdown(f"**{a['title']}** (`{a['asin']}`) · {a['market']} · {a['msg']}")
+                if _urg:
+                    with st.expander(f"🟠 URGENT — {len(_urg)} need production now", expanded=True):
+                        for a in _urg:
+                            st.markdown(f"**{a['title']}** (`{a['asin']}`) · {a['market']} · {a['msg']}")
+                if _plan:
+                    with st.expander(f"🟡 PLAN — {len(_plan)} approaching reorder point"):
+                        for a in _plan:
+                            st.markdown(f"**{a['title']}** (`{a['asin']}`) · {a['market']} · {a['msg']}")
+                if _other:
+                    with st.expander(f"ℹ️ Other alerts ({len(_other)})"):
+                        for a in _other:
+                            st.markdown(f"**{a['title']}** (`{a['asin']}`) · {a['msg']}")
+
+            st.divider()
+
+            # ── Summary matrix ────────────────────────────────────────────────
+            _loc_labels = {k: v["label"] for k, v in LOCATIONS.items()}
+            _display_cols = ["asin", "title"]
+            _rename = {"asin": "ASIN", "title": "Title"}
+
+            for loc in LOCATIONS:
+                if loc in _overview.columns:
+                    col_name = _loc_labels[loc]
+                    _overview[col_name] = _overview[loc].fillna(0).astype(int)
+                    _display_cols.append(col_name)
+                    _rename[col_name] = col_name
+
+            _overview["Total"] = _overview["total_available"].fillna(0).astype(int)
+            _overview["Value $"] = _overview["value_usd"].fillna(0).round(0).astype(int)
+            _display_cols += ["Total", "Value $"]
+
+            # Days columns with colour
+            _day_col_map = {
+                "days_fba_us": "Days US",
+                "days_fba_ca": "Days CA",
+                "days_fba_uk": "Days UK",
+            }
+            for raw_col, label in _day_col_map.items():
+                if raw_col in _overview.columns:
+                    _overview[label] = _overview[raw_col]
+                    _display_cols.append(label)
+
+            def _color_days(val):
+                try:
+                    v = float(val)
+                except (TypeError, ValueError):
+                    return ""
+                if v < 45:
+                    return "background-color:#cf222e22;color:#cf222e;font-weight:700"
+                elif v < 90:
+                    return "background-color:#fb8f0022;color:#b45309;font-weight:700"
+                elif v < 135:
+                    return "background-color:#fff3b0;color:#7d4e00;font-weight:600"
+                return "background-color:#1a7f3722;color:#1a7f37"
+
+            _show_cols = [c for c in _display_cols if c in _overview.columns]
+            _styled_inv = _overview[_show_cols].style.applymap(
+                _color_days, subset=[c for c in ["Days US", "Days CA", "Days UK"] if c in _show_cols]
+            )
+            st.dataframe(_styled_inv, use_container_width=True, hide_index=True,
+                         column_config={
+                             "ASIN":    st.column_config.TextColumn(width=120),
+                             "Title":   st.column_config.TextColumn(width=200),
+                             "Value $": st.column_config.NumberColumn(format="$%d"),
+                         })
+
+            st.markdown(
+                "<p style='font-size:0.78rem;color:#888;'>"
+                "🔴 &lt;45 days (critical) · 🟠 &lt;90 days (start production) · "
+                "🟡 &lt;135 days (plan purchase) · 🟢 OK · "
+                "Days = FBA live + inbound + AWD/3PL ÷ avg daily sales (last 30 days)</p>",
+                unsafe_allow_html=True,
+            )
+
+    # ── UPLOAD DATA ───────────────────────────────────────────────────────────
+    with _inv_upload_tab:
+        st.markdown("# 📤 Upload Inventory Data")
+        _snap_date_upload = str(st.date_input("Snapshot date", value=date.today(), key="inv_snap_date"))
+        st.divider()
+
+        # FBA uploads
+        st.markdown("### 🏭 FBA Reports")
+        st.markdown(f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>Download from Seller Central → Reports → Fulfillment → Manage FBA Inventory.</p>", unsafe_allow_html=True)
+        _fba_c1, _fba_c2, _fba_c3 = st.columns(3)
+        for _col, _loc, _label in [(_fba_c1, "FBA_US", "🇺🇸 FBA United States"),
+                                    (_fba_c2, "FBA_CA", "🇨🇦 FBA Canada"),
+                                    (_fba_c3, "FBA_UK", "🇬🇧 FBA United Kingdom")]:
+            with _col:
+                _f = st.file_uploader(_label, type=["csv", "txt"], key=f"fba_{_loc}")
+                if _f and st.button(f"Import {_label}", key=f"btn_fba_{_loc}"):
+                    _n, _w = import_fba_csv(_f, _loc, _snap_date_upload)
+                    st.success(f"✅ {_n} ASINs imported.")
+                    for w in _w: st.warning(w)
+
+        st.divider()
+
+        # AWD upload
+        st.markdown("### 📦 AWD Report")
+        st.markdown(f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>Download from Amazon Warehousing & Distribution console. Auto-splits US vs CN.</p>", unsafe_allow_html=True)
+        _awd_f = st.file_uploader("AWD Inventory Report", type=["csv", "txt", "xlsx"], key="awd_upload")
+        if _awd_f and st.button("Import AWD", key="btn_awd"):
+            _n, _w = import_awd_csv(_awd_f, _snap_date_upload)
+            st.success(f"✅ {_n} location-rows imported.")
+            for w in _w: st.warning(w)
+
+        st.divider()
+
+        # SPM / 3PL UK upload
+        st.markdown("### 🏢 3PL UK — SPM")
+        st.markdown(f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>Upload the SPM stock report CSV. SKUs are mapped to ASINs below.</p>", unsafe_allow_html=True)
+        _spm_f = st.file_uploader("SPM Stock Report", type=["csv", "txt"], key="spm_upload")
+        if _spm_f and st.button("Import SPM", key="btn_spm"):
+            _n, _w, _unmapped = import_spm_csv(_spm_f, _snap_date_upload)
+            if _n:
+                st.success(f"✅ {_n} SKUs imported.")
+            for w in _w: st.warning(w)
+            if _unmapped:
+                st.warning(f"⚠️ {len(_unmapped)} SKUs not mapped to ASINs: {', '.join(_unmapped)}")
+                st.info("Map them in the **SKU → ASIN Mapping** section below.")
+            st.rerun()
+
+        # SKU → ASIN mapping
+        with st.expander("🔗 SKU → ASIN Mapping (for SPM)"):
+            _conn_map = get_conn()
+            _map_df = pd.read_sql_query("SELECT sku, asin, title FROM sku_asin_map WHERE source != 'FBA_US' OR source IS NULL ORDER BY sku", _conn_map)
+            _conn_map.close()
+            if not _map_df.empty:
+                st.dataframe(_map_df, use_container_width=True, hide_index=True)
+            st.markdown("**Add / update mapping:**")
+            _mc1, _mc2 = st.columns(2)
+            with _mc1:
+                _map_sku = st.text_input("SPM SKU", placeholder="GIFFTED_032")
+            with _mc2:
+                _map_asin = st.text_input("ASIN", placeholder="B0XXXXXXXX")
+            if st.button("💾 Save Mapping"):
+                if _map_sku and _map_asin:
+                    save_sku_mapping(_map_sku.strip(), _map_asin.strip().upper())
+                    st.success(f"✅ {_map_sku} → {_map_asin}")
+                    st.rerun()
+
+        st.divider()
+
+        # WH CN upload
+        st.markdown("### 🇨🇳 China Warehouse (WH_CN)")
+        _wh_dl_data = "asin,units,title\nB0XXXXXXXX,100,My Product Name\n"
+        st.download_button("⬇️ Download template", data=_wh_dl_data,
+                           file_name="wh_cn_template.csv", mime="text/csv")
+        _whcn_f = st.file_uploader("WH_CN CSV (asin, units)", type=["csv"], key="whcn_upload")
+        if _whcn_f and st.button("Import WH_CN", key="btn_whcn"):
+            _n, _w = import_whcn_csv(_whcn_f, _snap_date_upload)
+            st.success(f"✅ {_n} rows imported.")
+            for w in _w: st.warning(w)
+
+    # ── MANUAL ENTRY ──────────────────────────────────────────────────────────
+    with _inv_manual_tab:
+        st.markdown("# ✏️ Manual Inventory Entry")
+        st.markdown(f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>For Production (unallocated units) and any ad-hoc corrections.</p>", unsafe_allow_html=True)
+        st.divider()
+
+        # Production entry
+        st.markdown("### 🏗️ Production (unallocated)")
+        _prod_inv = get_latest_inventory()
+        _prod_inv = _prod_inv[_prod_inv["location"] == "PRODUCTION"] if not _prod_inv.empty else pd.DataFrame()
+
+        if not _prod_inv.empty:
+            st.dataframe(_prod_inv[["asin", "title", "units_available", "snapshot_date"]].rename(
+                columns={"units_available": "Units", "snapshot_date": "Last updated"}
+            ), use_container_width=True, hide_index=True)
+
+        with st.form("production_form"):
+            _pr1, _pr2, _pr3 = st.columns([2, 1, 1])
+            with _pr1:
+                _prod_asin = st.text_input("ASIN", placeholder="B0XXXXXXXX")
+            with _pr2:
+                _prod_units = st.number_input("Units in production", min_value=0, step=1)
+            with _pr3:
+                _prod_date = st.date_input("As of date", value=date.today(), key="prod_date")
+            if st.form_submit_button("💾 Save", type="primary"):
+                if _prod_asin.strip():
+                    upsert_manual_inventory(_prod_asin.strip().upper(), "PRODUCTION",
+                                            int(_prod_units), str(_prod_date))
+                    st.success("✅ Saved.")
+                    st.rerun()
+                else:
+                    st.warning("Enter an ASIN.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — PROFIT
