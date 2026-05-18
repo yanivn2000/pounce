@@ -184,7 +184,13 @@ def _build_placement(sub: pd.DataFrame, pl: str) -> PlacementMetrics:
     )
 
 
-def score_campaign(sub: pd.DataFrame, target_roas: float = TARGET_ROAS) -> int:
+def score_campaign(sub: pd.DataFrame, target_roas: float = TARGET_ROAS,
+                   breakeven_roas: float = None) -> int:
+    """
+    Score 0–100. breakeven_roas (from product costs) is used to penalise
+    placements that are actively losing money weighted by their spend share.
+    Falls back to target_roas if breakeven not available.
+    """
     top_roas   = _get(sub, 'Top', 'ROAS') or 0
     rest_roas  = _get(sub, 'Rest', 'ROAS') or 0
     top_orders = _get(sub, 'Top', 'Orders') or 0
@@ -192,19 +198,20 @@ def score_campaign(sub: pd.DataFrame, target_roas: float = TARGET_ROAS) -> int:
     total_spend = sub['Spend'].sum()
     total_sales = sub['Sales'].sum()
     total_roas  = total_sales / total_spend if total_spend > 0 else 0
+    be          = breakeven_roas if breakeven_roas else target_roas
 
     s = 0
 
     # Overall ROAS (35 pts)
     if total_roas >= 6:   s += 35
     elif total_roas >= 4: s += 25
-    elif total_roas >= target_roas: s += 15
+    elif total_roas >= be: s += 15
 
     # Top ROAS (35 pts)
     if top_roas >= 8:   s += 35
     elif top_roas >= 6: s += 28
     elif top_roas >= 4: s += 20
-    elif top_roas >= target_roas: s += 10
+    elif top_roas >= be: s += 10
 
     # Top vs Rest advantage (15 pts)
     if top_roas > 0 and rest_roas > 0:
@@ -223,6 +230,20 @@ def score_campaign(sub: pd.DataFrame, target_roas: float = TARGET_ROAS) -> int:
     if top_orders >= 10:  s += 5
     elif top_orders >= 5: s += 3
     elif top_orders >= 1: s += 1
+
+    # ── Breakeven penalty ─────────────────────────────────────────────────
+    # Deduct points for each placement actively losing money (ROAS < breakeven),
+    # weighted by that placement's share of total spend.
+    # Max penalty: 30 pts (enough to demote a misleadingly high-scoring campaign).
+    if total_spend > 0 and be > 0:
+        for pl in ['Top', 'Rest', 'Product']:
+            pl_roas  = _get(sub, pl, 'ROAS') or 0
+            pl_spend = _get(sub, pl, 'Spend') or 0
+            if pl_roas > 0 and pl_roas < be and pl_spend > 0:
+                spend_weight  = pl_spend / total_spend        # 0–1
+                deficit       = 1 - (pl_roas / be)            # 0–1 (deeper = worse)
+                penalty       = round(deficit * spend_weight * 30)
+                s             = max(0, s - penalty)
 
     return min(s, 100)
 
@@ -703,7 +724,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
         sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
         avg_price              = get_avg_price(sub)
         camp_target, cost_data = get_campaign_data(camp, avg_price)
-        sc                     = score_campaign(sub, camp_target)
+        sc                     = score_campaign(sub, camp_target, breakeven_roas=camp_target)
         total_spend            = sub['Spend'].sum()
         total_sales            = sub['Sales'].sum()
         bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
@@ -748,7 +769,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
         sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
         avg_price              = get_avg_price(sub)
         camp_target, cost_data = get_campaign_data(camp, avg_price)
-        sc                     = score_campaign(sub, camp_target)
+        sc                     = score_campaign(sub, camp_target, breakeven_roas=camp_target)
         total_spend            = sub['Spend'].sum()
         total_sales            = sub['Sales'].sum()
         bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
