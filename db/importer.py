@@ -6,6 +6,7 @@ Amazon order report columns (varies slightly by marketplace):
   sales-channel, quantity, item-price, item-tax, shipping-price, currency, order-status
 """
 
+import json
 import pandas as pd
 import sqlite3
 from db.database import get_conn
@@ -157,8 +158,8 @@ def save_recommendation(rec: dict) -> int:
                 (date_given, asin, marketplace, campaign_name, placement_type,
                  campaign_type, current_multiplier, recommended_action,
                  recommended_multiplier, reasoning, window_days, review_date, score, source,
-                 end_date)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 end_date, debug_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             rec.get("date_given"),
             rec.get("asin"),
@@ -175,6 +176,7 @@ def save_recommendation(rec: dict) -> int:
             rec.get("score"),
             rec.get("source", "auto"),
             rec.get("end_date"),
+            json.dumps(rec.get("debug") or {}),
         ))
         row_id = cur.lastrowid
     conn.close()

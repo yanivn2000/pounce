@@ -755,8 +755,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
         total_orders = sub['Orders'].sum()
         return total_sales / total_orders if total_orders > 0 else 0.0
 
-    def get_campaign_data(campaign_name: str, avg_price: float) -> tuple[float, dict | None]:
-        """Returns (breakeven_roas, cost_data_or_none)."""
+    def get_campaign_data(campaign_name: str, avg_price: float) -> tuple[float, dict | None, dict]:
+        """Returns (breakeven_roas, cost_data_or_none, debug_info)."""
         if cost_map and avg_price > 0:
             for asin, costs in cost_map.items():
                 if asin.upper() in campaign_name.upper():
@@ -765,15 +765,38 @@ def analyze_with_products(sp_path: str, sb_path: str,
 
                     # FBA pick & pack from imported fees, fallback to product_costs.fba_fee
                     fba_data  = (fba_fees_map or {}).get(asin.upper(), {})
-                    pick_pack = fba_data.get('pick_pack_fee') or costs.get('fba_fee', 0)
+                    pick_pack_fee_preview = fba_data.get('pick_pack_fee')
+                    pick_pack = pick_pack_fee_preview if pick_pack_fee_preview else costs.get('fba_fee', 0)
+                    pick_pack_source = "fee_preview" if pick_pack_fee_preview else ("manual" if costs.get('fba_fee', 0) else "none")
 
                     # Referral fee: use imported value if available, else 15% of avg_price
-                    referral  = fba_data.get('referral_fee') or (avg_price * AMAZON_FEE_PCT)
+                    referral_fee_preview = fba_data.get('referral_fee')
+                    referral  = referral_fee_preview if referral_fee_preview else (avg_price * AMAZON_FEE_PCT)
+                    referral_source = "fee_preview" if referral_fee_preview else "15%_of_price"
 
-                    margin   = avg_price - landed_local - pick_pack - referral
+                    total_costs_local = landed_local + pick_pack + referral
+                    margin   = avg_price - total_costs_local
                     be_roas  = round(avg_price / margin, 2) if margin > 0 else target_roas
-                    return be_roas, costs
-        return target_roas, None
+
+                    debug_info = {
+                        "avg_price":          round(float(avg_price), 4),
+                        "product_cost_usd":   round(float(costs.get('product_cost', 0)), 4),
+                        "shipping_cost_usd":  round(float(costs.get('shipping_cost', 0)), 4),
+                        "customs_cost_usd":   round(float(costs.get('customs_cost', 0)), 4),
+                        "landed_cost_usd":    round(float(landed_cost_usd), 4),
+                        "fx_rate":            round(float(fx_rate), 6),
+                        "landed_local":       round(float(landed_local), 4),
+                        "pick_pack_fee":      round(float(pick_pack), 4),
+                        "pick_pack_source":   pick_pack_source,
+                        "referral_fee":       round(float(referral), 4),
+                        "referral_source":    referral_source,
+                        "total_costs_local":  round(float(total_costs_local), 4),
+                        "margin_local":       round(float(margin), 4),
+                        "breakeven_roas":     float(be_roas),
+                        "marketplace":        marketplace,
+                    }
+                    return be_roas, costs, debug_info
+        return target_roas, None, {}
 
     sp_grp = load_and_aggregate(sp_path, '7 Day Total Sales')
     sb_grp = load_and_aggregate(sb_path, '14 Day Total Sales')
@@ -798,14 +821,14 @@ def analyze_with_products(sp_path: str, sb_path: str,
     for camp in sp_grp['Campaign'].unique():
         sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(
             columns=['Campaign', 'is_paused', 'end_date'], errors='ignore')
-        avg_price              = get_avg_price(sub)
-        camp_target, cost_data = get_campaign_data(camp, avg_price)
-        paused                 = bool(_sp_paused.get(camp, False))
-        camp_end_date          = _sp_end_date.get(camp, '')
-        sc                     = score_campaign(sub, camp_target, breakeven_roas=camp_target)
-        total_spend            = sub['Spend'].sum()
-        total_sales            = sub['Sales'].sum()
-        bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
+        avg_price                        = get_avg_price(sub)
+        camp_target, cost_data, camp_debug = get_campaign_data(camp, avg_price)
+        paused                           = bool(_sp_paused.get(camp, False))
+        camp_end_date                    = _sp_end_date.get(camp, '')
+        sc                               = score_campaign(sub, camp_target, breakeven_roas=camp_target)
+        total_spend                      = sub['Spend'].sum()
+        total_sales                      = sub['Sales'].sum()
+        bid_str, bid_data                = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
 
         # New placement algorithm
         is_new      = cost_data.get('is_new_product', False) if cost_data else False
@@ -821,6 +844,14 @@ def analyze_with_products(sp_path: str, sb_path: str,
             "spend":                  p.get('spend', 0),
             "roas":                   p.get('roas', 0),
             "orders":                 p.get('purchases', 0),
+            "debug": {
+                **camp_debug,
+                "placement_roas":      p.get('roas', 0),
+                "placement_spend":     p.get('spend', 0),
+                "placement_purchases": p.get('purchases', 0),
+                "confidence":          p.get('confidence', 0),
+                "current_multiplier":  p.get('current_adj', 0),
+            },
         } for p in algo_placements] if algo_placements else bid_data
 
         r = CampaignResult(
@@ -856,14 +887,14 @@ def analyze_with_products(sp_path: str, sb_path: str,
     for camp in sb_grp['Campaign'].unique():
         sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(
             columns=['Campaign', 'is_paused', 'end_date'], errors='ignore')
-        avg_price              = get_avg_price(sub)
-        camp_target, cost_data = get_campaign_data(camp, avg_price)
-        paused                 = bool(_sb_paused.get(camp, False))
-        camp_end_date          = _sb_end_date.get(camp, '')
-        sc                     = score_campaign(sub, camp_target, breakeven_roas=camp_target)
-        total_spend            = sub['Spend'].sum()
-        total_sales            = sub['Sales'].sum()
-        bid_str, bid_data      = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
+        avg_price                          = get_avg_price(sub)
+        camp_target, cost_data, camp_debug = get_campaign_data(camp, avg_price)
+        paused                             = bool(_sb_paused.get(camp, False))
+        camp_end_date                      = _sb_end_date.get(camp, '')
+        sc                                 = score_campaign(sub, camp_target, breakeven_roas=camp_target)
+        total_spend                        = sub['Spend'].sum()
+        total_sales                        = sub['Sales'].sum()
+        bid_str, bid_data                  = bid_recommendation(sub, camp_target, min_margin_pct, cost_data, avg_price)
 
         is_new      = cost_data.get('is_new_product', False) if cost_data else False
         algo_result = placement_bid_algorithm(sub, camp_target, is_new_product=is_new, campaign_name=camp)
@@ -877,6 +908,14 @@ def analyze_with_products(sp_path: str, sb_path: str,
             "spend":                  p['spend'],
             "roas":                   p['roas'],
             "orders":                 p['purchases'],
+            "debug": {
+                **camp_debug,
+                "placement_roas":      p.get('roas', 0),
+                "placement_spend":     p.get('spend', 0),
+                "placement_purchases": p.get('purchases', 0),
+                "confidence":          p.get('confidence', 0),
+                "current_multiplier":  p.get('current_adj', 0),
+            },
         } for p in algo_placements] if algo_placements else bid_data
 
         r = CampaignResult(

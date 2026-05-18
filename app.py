@@ -8,6 +8,7 @@ import streamlit_authenticator as stauth
 import tempfile
 import os
 import uuid
+import json
 import pandas as pd
 import io
 from datetime import date, timedelta
@@ -1267,6 +1268,78 @@ with tab_ads:
                                 else:
                                     st.warning("Enter an outcome first.")
 
+                    # ── Debug cost breakdown panel ─────────────────────────────────
+                    _dbg_raw = _sel_data.get("debug_json") or ""
+                    if _dbg_raw and _dbg_raw not in ("{}", "null", ""):
+                        try:
+                            _dbg = json.loads(_dbg_raw)
+                        except Exception:
+                            _dbg = {}
+                        if _dbg:
+                            with st.expander("🔍 Cost Breakdown (Debug)", expanded=False):
+                                _mkt = _dbg.get("marketplace", "")
+                                _cur = (
+                                    "£" if "co.uk" in _mkt
+                                    else "€" if any(x in _mkt for x in [".de", ".fr", ".es", ".it"])
+                                    else "CA$" if ".ca" in _mkt
+                                    else "$"
+                                )
+
+                                st.markdown("**How the breakeven ROAS was calculated:**")
+
+                                _rows = []
+                                avg_p = _dbg.get("avg_price", 0)
+                                if avg_p:
+                                    _rows.append({"Item": "Avg Sale Price", "Value": f"{_cur}{avg_p:.2f}", "Notes": "from placement report"})
+
+                                lc_usd = _dbg.get("landed_cost_usd", 0)
+                                fx     = _dbg.get("fx_rate", 1.0)
+                                ll     = _dbg.get("landed_local", 0)
+                                if lc_usd:
+                                    pc = _dbg.get("product_cost_usd", 0)
+                                    sc = _dbg.get("shipping_cost_usd", 0)
+                                    cc = _dbg.get("customs_cost_usd", 0)
+                                    _rows.append({"Item": "  Product Cost",  "Value": f"${pc:.2f} USD", "Notes": ""})
+                                    _rows.append({"Item": "  Shipping Cost", "Value": f"${sc:.2f} USD", "Notes": ""})
+                                    _rows.append({"Item": "  Customs Cost",  "Value": f"${cc:.2f} USD", "Notes": ""})
+                                    _rows.append({"Item": "Landed Cost (converted)", "Value": f"{_cur}{ll:.2f}", "Notes": f"${lc_usd:.2f} x {fx:.4f} FX rate"})
+
+                                pp     = _dbg.get("pick_pack_fee", 0)
+                                pp_src = _dbg.get("pick_pack_source", "")
+                                _rows.append({"Item": "Pick & Pack", "Value": f"{_cur}{pp:.2f}", "Notes": pp_src})
+
+                                rf     = _dbg.get("referral_fee", 0)
+                                rf_src = _dbg.get("referral_source", "")
+                                _rows.append({"Item": "Referral Fee", "Value": f"{_cur}{rf:.2f}", "Notes": rf_src})
+
+                                tc  = _dbg.get("total_costs_local", 0)
+                                mg  = _dbg.get("margin_local", 0)
+                                be  = _dbg.get("breakeven_roas", 0)
+                                pr  = _dbg.get("placement_roas", 0)
+                                sp  = _dbg.get("placement_spend", 0)
+                                pur = _dbg.get("placement_purchases", 0)
+                                cf  = _dbg.get("confidence", 0)
+
+                                _rows.append({"Item": "----------------", "Value": "", "Notes": ""})
+                                _rows.append({"Item": "Total Costs",    "Value": f"{_cur}{tc:.2f}", "Notes": ""})
+                                _rows.append({"Item": "Margin",         "Value": f"{_cur}{mg:.2f}", "Notes": f"{(mg / avg_p * 100):.1f}% of price" if avg_p else ""})
+                                _rows.append({"Item": "Breakeven ROAS", "Value": f"{be:.2f}x",      "Notes": "min ROAS to cover costs"})
+                                _rows.append({"Item": "----------------", "Value": "", "Notes": ""})
+                                _rows.append({"Item": "Placement ROAS", "Value": f"{pr:.2f}x",      "Notes": "Profitable" if pr >= be else "Losing"})
+                                _rows.append({"Item": "Spend",          "Value": f"{_cur}{sp:.2f}", "Notes": ""})
+                                _rows.append({"Item": "Purchases",      "Value": str(int(pur)),     "Notes": f"confidence: {int(cf * 100)}%"})
+
+                                st.dataframe(
+                                    pd.DataFrame(_rows),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        "Item":  st.column_config.TextColumn(width=200),
+                                        "Value": st.column_config.TextColumn(width=150),
+                                        "Notes": st.column_config.TextColumn(width=300),
+                                    },
+                                )
+
         with _analysis_view:
             # ── ANALYSIS content ──────────────────────────────────────────────
             st.markdown("# 📊 Amazon Ads Placement Analyzer")
@@ -1364,6 +1437,7 @@ with tab_ads:
                                 "review_date":            review_str,
                                 "score":                  r.score,
                                 "end_date":               r.end_date or None,
+                                "debug":                  pl_rec.get("debug", {}),
                             })
                             saved_count += 1
                     if saved_count:

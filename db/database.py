@@ -161,6 +161,7 @@ def init_db():
     _migrate_fba_fees(conn)
     _migrate_fx_rates(conn)
     _migrate_recommendations_dedup_index(conn)
+    _migrate_recommendations_debug_json(conn)
     conn.close()
 
 
@@ -314,6 +315,17 @@ def _migrate_fx_rates(conn: sqlite3.Connection):
             ]
         )
         conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_recommendations_debug_json(conn: sqlite3.Connection):
+    """Add debug_json column to recommendations if missing."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(recommendations)").fetchall()]
+        if "debug_json" not in cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN debug_json TEXT")
+            conn.commit()
     except Exception:
         pass
 
