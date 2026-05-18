@@ -580,6 +580,12 @@ with tab_products:
             "Shipping Cost": st.column_config.NumberColumn("Shipping Cost $", format="$%.2f", min_value=0.0),
             "Customs Cost":  st.column_config.NumberColumn("Customs Cost $", format="$%.2f", min_value=0.0),
             "FBA Fee":       st.column_config.NumberColumn("FBA Fee $", format="$%.2f", min_value=0.0),
+            "New Product":   st.column_config.CheckboxColumn(
+                "🚼 New Product",
+                help="Check if this product is in launch phase (<60 days / <30 reviews). "
+                     "Algorithm will suppress aggressive bid changes and flag as low-confidence.",
+                default=False,
+            ),
         }
     )
 

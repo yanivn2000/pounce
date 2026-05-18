@@ -128,7 +128,16 @@ def init_db():
     _migrate_product_costs(conn)
     _migrate_recommendations_score(conn)
     _migrate_recommendations_source(conn)
+    _migrate_product_costs_new_product(conn)
     conn.close()
+
+
+def _migrate_product_costs_new_product(conn: sqlite3.Connection):
+    """Add is_new_product column to product_costs if missing."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(product_costs)").fetchall()]
+    if "is_new_product" not in cols:
+        conn.execute("ALTER TABLE product_costs ADD COLUMN is_new_product INTEGER DEFAULT 0")
+        conn.commit()
 
 
 def _migrate_recommendations_source(conn: sqlite3.Connection):

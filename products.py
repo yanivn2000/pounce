@@ -118,7 +118,7 @@ def products_exist() -> bool:
 
 # ── DB-backed product costs (per marketplace) ─────────────────────────────────
 
-DB_COLUMNS = ["ASIN", "Product Name", "Product Cost", "Shipping Cost", "Customs Cost", "FBA Fee"]
+DB_COLUMNS = ["ASIN", "Product Name", "Product Cost", "Shipping Cost", "Customs Cost", "FBA Fee", "New Product"]
 
 
 def load_products_db() -> pd.DataFrame:
@@ -127,11 +127,13 @@ def load_products_db() -> pd.DataFrame:
     df = pd.read_sql_query(
         "SELECT asin AS ASIN, product_name AS 'Product Name', "
         "product_cost AS 'Product Cost', shipping_cost AS 'Shipping Cost', "
-        "customs_cost AS 'Customs Cost', fba_fee AS 'FBA Fee' "
+        "customs_cost AS 'Customs Cost', fba_fee AS 'FBA Fee', "
+        "COALESCE(is_new_product, 0) AS 'New Product' "
         "FROM product_costs ORDER BY asin",
         conn
     )
     conn.close()
+    df["New Product"] = df["New Product"].astype(bool)
     return df
 
 
@@ -143,18 +145,21 @@ def save_products_db(df: pd.DataFrame):
             asin = str(row.get("ASIN", "")).strip().upper()
             if not asin:
                 continue
+            is_new = 1 if row.get("New Product") else 0
             conn.execute("""
                 INSERT INTO product_costs
                     (asin, product_name, product_cost,
-                     shipping_cost, customs_cost, fba_fee, updated_at)
-                VALUES (?,?,?,?,?,?,datetime('now'))
+                     shipping_cost, customs_cost, fba_fee,
+                     is_new_product, updated_at)
+                VALUES (?,?,?,?,?,?,?,datetime('now'))
                 ON CONFLICT(asin) DO UPDATE SET
-                    product_name  = excluded.product_name,
-                    product_cost  = excluded.product_cost,
-                    shipping_cost = excluded.shipping_cost,
-                    customs_cost  = excluded.customs_cost,
-                    fba_fee       = excluded.fba_fee,
-                    updated_at    = datetime('now')
+                    product_name    = excluded.product_name,
+                    product_cost    = excluded.product_cost,
+                    shipping_cost   = excluded.shipping_cost,
+                    customs_cost    = excluded.customs_cost,
+                    fba_fee         = excluded.fba_fee,
+                    is_new_product  = excluded.is_new_product,
+                    updated_at      = datetime('now')
             """, (
                 asin,
                 str(row.get("Product Name") or ""),
@@ -162,6 +167,7 @@ def save_products_db(df: pd.DataFrame):
                 float(row.get("Shipping Cost") or 0),
                 float(row.get("Customs Cost") or 0),
                 float(row.get("FBA Fee") or 0),
+                is_new,
             ))
     conn.close()
 
@@ -175,7 +181,7 @@ def delete_product_db(asin: str):
 
 
 def get_cost_map_db() -> dict:
-    """Returns {ASIN: {product_cost, shipping_cost, customs_cost, fba_fee, landed_cost}}"""
+    """Returns {ASIN: {product_cost, shipping_cost, customs_cost, fba_fee, landed_cost, is_new_product}}"""
     df = load_products_db()
     result = {}
     for _, row in df.iterrows():
@@ -183,11 +189,12 @@ def get_cost_map_db() -> dict:
         if asin:
             lc = calc_landed_cost(row)
             result[asin] = {
-                "product_cost":  float(row.get("Product Cost") or 0),
-                "shipping_cost": float(row.get("Shipping Cost") or 0),
-                "customs_cost":  float(row.get("Customs Cost") or 0),
-                "fba_fee":       float(row.get("FBA Fee") or 0),
-                "landed_cost":   lc,
+                "product_cost":   float(row.get("Product Cost") or 0),
+                "shipping_cost":  float(row.get("Shipping Cost") or 0),
+                "customs_cost":   float(row.get("Customs Cost") or 0),
+                "fba_fee":        float(row.get("FBA Fee") or 0),
+                "landed_cost":    lc,
+                "is_new_product": bool(row.get("New Product", False)),
             }
     return result
 
