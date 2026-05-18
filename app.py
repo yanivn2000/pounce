@@ -1535,13 +1535,25 @@ if tab_admin is not None:
 
         with col_r:
             st.markdown("#### Recommendations")
-            confirm_recs = st.checkbox("Yes, delete all recommendations", key="confirm_recs")
-            if st.button("🗑️ Delete All Recommendations", type="primary", disabled=not confirm_recs):
+            del_scope = st.radio(
+                "Scope",
+                ["All", "Auto only", "Manual only"],
+                horizontal=True,
+                key="del_rec_scope",
+                label_visibility="collapsed",
+            )
+            confirm_recs = st.checkbox("Yes, delete selected recommendations", key="confirm_recs")
+            if st.button("🗑️ Delete Recommendations", type="primary", disabled=not confirm_recs):
                 conn = _get_conn()
                 with conn:
-                    conn.execute("DELETE FROM recommendations")
+                    if del_scope == "Auto only":
+                        conn.execute("DELETE FROM recommendations WHERE source = 'auto'")
+                    elif del_scope == "Manual only":
+                        conn.execute("DELETE FROM recommendations WHERE source = 'manual'")
+                    else:
+                        conn.execute("DELETE FROM recommendations")
                 conn.close()
-                st.success(f"✅ Deleted {rec_count:,} recommendations.")
+                st.success(f"✅ Deleted recommendations ({del_scope.lower()}).")
                 st.rerun()
 
         with col_c:
