@@ -13,11 +13,29 @@ _PICK_PACK_COLS = [
 _REFERRAL_COL  = "estimated-referral-fee-per-unit"
 _ASIN_COL      = "asin"
 _CURRENCY_COL  = "currency"
+_STORE_COL     = "amazon-store"   # e.g. "US", "CA", "UK"
+
+# Map amazon-store codes → internal marketplace strings
+_STORE_MAP = {
+    "US": "amazon.com",
+    "CA": "amazon.ca",
+    "UK": "amazon.co.uk",
+    "GB": "amazon.co.uk",
+    "DE": "amazon.de",
+    "FR": "amazon.fr",
+    "ES": "amazon.es",
+    "IT": "amazon.it",
+    "AU": "amazon.com.au",
+    "MX": "amazon.com.mx",
+    "JP": "amazon.co.jp",
+    "IN": "amazon.in",
+}
 
 
-def import_fee_preview_csv(file_obj, marketplace: str) -> tuple[int, list[str]]:
+def import_fee_preview_csv(file_obj) -> tuple[int, list[str]]:
     """
     Parse an Amazon Fee Preview CSV and upsert into fba_fees.
+    Marketplace is read from the 'amazon-store' column in the file.
     Returns (rows_saved, warnings_list).
     """
     raw = file_obj.read()
@@ -34,27 +52,39 @@ def import_fee_preview_csv(file_obj, marketplace: str) -> tuple[int, list[str]]:
         text = raw
 
     df = pd.read_csv(io.StringIO(text), dtype=str)
-    df.columns = df.columns.str.strip().str.lower()
+    # Strip BOM from first column name (e.g. "?sku" → "sku") and normalise all
+    df.columns = [c.lstrip("﻿?").strip().lower() for c in df.columns]
 
     warnings = []
+
+    if _ASIN_COL not in df.columns:
+        return 0, ["No 'asin' column found in file."]
+
+    if _STORE_COL not in df.columns:
+        return 0, [f"No '{_STORE_COL}' column found. Available: {list(df.columns)}"]
 
     # Find pick & pack column
     pick_col = next((c for c in _PICK_PACK_COLS if c in df.columns), None)
     if not pick_col:
         return 0, [f"Could not find pick & pack column. Available: {list(df.columns)}"]
 
-    if _ASIN_COL not in df.columns:
-        return 0, ["No 'asin' column found in file."]
-
     referral_col_present = _REFERRAL_COL in df.columns
     currency_col_present = _CURRENCY_COL in df.columns
 
     conn = get_conn()
     saved = 0
+    skipped_stores = set()
+
     with conn:
         for _, row in df.iterrows():
             asin = str(row.get(_ASIN_COL, "")).strip().upper()
             if not asin or asin == "NAN":
+                continue
+
+            store_code  = str(row.get(_STORE_COL, "")).strip().upper()
+            marketplace = _STORE_MAP.get(store_code)
+            if not marketplace:
+                skipped_stores.add(store_code)
                 continue
 
             try:
@@ -86,6 +116,8 @@ def import_fee_preview_csv(file_obj, marketplace: str) -> tuple[int, list[str]]:
             saved += 1
 
     conn.close()
+    if skipped_stores:
+        warnings.append(f"Skipped unknown store codes: {', '.join(sorted(skipped_stores))}")
     return saved, warnings
 
 

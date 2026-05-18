@@ -515,26 +515,20 @@ with tab_inv:
         st.markdown(
             f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>"
             f"Download from Seller Central → Reports → Fulfillment → Fee Preview. "
-            f"Imports pick &amp; pack and referral fees per ASIN.</p>",
+            f"Marketplace is read automatically from the <code>amazon-store</code> column — "
+            f"one upload covers all marketplaces in the file.</p>",
             unsafe_allow_html=True,
-        )
-        _fee_mkt_options = [
-            "amazon.com", "amazon.co.uk", "amazon.ca",
-            "amazon.com.au", "amazon.de", "amazon.fr", "amazon.es", "amazon.it",
-        ]
-        _fee_mkt = st.selectbox(
-            "Marketplace for fee import", _fee_mkt_options, key="fee_preview_market"
         )
         _fee_file = st.file_uploader(
             "Fee Preview CSV", type=["csv", "txt"], key="fee_preview_upload"
         )
         if _fee_file and st.button("Import Fee Preview", key="btn_fee_preview"):
-            _n_fees, _w_fees = import_fee_preview_csv(_fee_file, _fee_mkt)
+            _n_fees, _w_fees = import_fee_preview_csv(_fee_file)
             if _w_fees:
                 for w in _w_fees:
                     st.warning(w)
-            else:
-                st.success(f"✅ {_n_fees} ASINs imported for {_fee_mkt}.")
+            if _n_fees:
+                st.success(f"✅ {_n_fees} ASIN/marketplace fee rows imported.")
                 st.rerun()
 
         _fba_fees_df = get_all_fba_fees_df()
