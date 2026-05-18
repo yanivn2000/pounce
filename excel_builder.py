@@ -31,6 +31,19 @@ SCORE_HI  = PatternFill("solid", fgColor="C6EFCE")
 SCORE_MID = PatternFill("solid", fgColor="FFEB9C")
 SCORE_LO  = PatternFill("solid", fgColor="FFC7CE")
 
+# Algorithm sheet palette
+MODE_ISO  = PatternFill("solid", fgColor="FFC7CE")   # red  — isolation
+MODE_OPT  = PatternFill("solid", fgColor="C6EFCE")   # green — optimization
+MODE_LRN  = PatternFill("solid", fgColor="FFEB9C")   # yellow — learning
+MODE_NOD  = PatternFill("solid", fgColor="D9D9D9")   # grey — no data
+ACT_INC   = PatternFill("solid", fgColor="E2EFDA")   # green — increase
+ACT_RED   = PatternFill("solid", fgColor="FCE4D6")   # red   — reduce
+ACT_KEEP  = PatternFill("solid", fgColor="F2F2F2")   # grey  — keep
+H_ALGO    = PatternFill("solid", fgColor="1F3864")   # dark blue header
+H_ALGO_T  = PatternFill("solid", fgColor="2E75B6")   # top header
+H_ALGO_R  = PatternFill("solid", fgColor="4472C4")   # rest header
+H_ALGO_P  = PatternFill("solid", fgColor="7BAFD4")   # product header
+
 WF = Font(name="Arial", bold=True, color="FFFFFF", size=10)
 BF = Font(name="Arial", bold=True, size=10)
 NF = Font(name="Arial", size=9)
@@ -197,6 +210,121 @@ def _make_summary_sheet(ws, sp_rows: list[CampaignResult], sb_rows: list[Campaig
     ws.freeze_panes = "C2"
 
 
+def _mode_fill(mode: str) -> PatternFill:
+    return {"isolation": MODE_ISO, "optimization": MODE_OPT,
+            "learning": MODE_LRN}.get(mode, MODE_NOD)
+
+
+def _action_fill(action: str) -> PatternFill:
+    a = (action or "").lower()
+    if "increase" in a:   return ACT_INC
+    if "reduce" in a:     return ACT_RED
+    return ACT_KEEP
+
+
+def _mode_label(mode: str) -> str:
+    return {"isolation":   "🔴 ISOLATION",
+            "optimization":"🟢 OPTIMIZATION",
+            "learning":    "🚼 LEARNING",
+            "no_data":     "⚫ NO DATA"}.get(mode, mode.upper() if mode else "—")
+
+
+def _make_algo_sheet(ws, rows: list[CampaignResult]):
+    """
+    Placement Algorithm sheet.
+    Layout (20 columns):
+      A: Campaign | B: Mode | C: Base Bid Δ% | D: Score | E: Overall Reasoning
+      F-J : Top of Search   (Current% | ROAS | Confidence | Rec% | Action)
+      K-O : Rest of Search  (same 5)
+      P-T : Product Pages   (same 5)
+    """
+    PL_HDRS  = ["Current %", "ROAS", "Confidence", "Rec %", "Action"]
+    PL_FILLS = [H_ALGO_T, H_ALGO_R, H_ALGO_P]
+    PL_NAMES = ["Top of Search", "Rest of Search", "Product Pages"]
+    PL_KEYS  = ["Top of Search", "Rest of Search", "Product Pages"]
+
+    # ── Row 1: group headers ──────────────────────────────────────────────
+    ws.merge_cells("A1:E1")
+    _cell(ws, 1, 1, "Campaign & Algorithm", WF, H_ALGO, C)
+    for i, (name, fill) in enumerate(zip(PL_NAMES, PL_FILLS)):
+        start = 6 + i * 5
+        end   = start + 4
+        ws.merge_cells(f"{get_column_letter(start)}1:{get_column_letter(end)}1")
+        _cell(ws, 1, start, name, WF, fill, C)
+
+    # ── Row 2: column headers ─────────────────────────────────────────────
+    info_hdrs = ["Campaign", "Mode", "Base Bid Change", "Score (1-10)", "Algorithm Reasoning"]
+    for ci, h in enumerate(info_hdrs):
+        _cell(ws, 2, ci + 1, h, WF, H_ALGO, C)
+    for i, fill in enumerate(PL_FILLS):
+        for j, h in enumerate(PL_HDRS):
+            _cell(ws, 2, 6 + i * 5 + j, h, WF, fill, C)
+
+    # ── Data rows ─────────────────────────────────────────────────────────
+    for ri, r in enumerate(rows):
+        er  = ri + 3
+        bg  = ALT if ri % 2 == 0 else WHITE
+        algo = r.placement_algorithm or {}
+        mode = algo.get("mode", "")
+        mf   = _mode_fill(mode)
+        base_change = algo.get("base_bid_change_pct", 0)
+        score       = algo.get("score", 0)
+        reasoning   = algo.get("reasoning", "")
+        placements  = {p["label"]: p for p in algo.get("placements", [])}
+
+        _cell(ws, er, 1, r.campaign,              BF, bg,  L)
+        _cell(ws, er, 2, _mode_label(mode),        NF, mf,  C)
+
+        # Base bid change cell — red text if negative
+        bc_val  = f"{'−' if base_change < 0 else ''}{abs(base_change)}%" if base_change != 0 else "No change"
+        bc_font = Font(name="Arial", size=9, bold=True,
+                       color="C00000" if base_change < 0 else "375623")
+        c = ws.cell(row=er, column=3, value=bc_val)
+        c.font = bc_font; c.fill = mf; c.alignment = C; c.border = BRD
+
+        _cell(ws, er, 4, score if score else "—",  Font(name="Arial",bold=True,size=11),
+              _score_fill(score * 10) if score else MODE_NOD, C)
+        _cell(ws, er, 5, reasoning,                NF, bg, L)
+
+        # Per-placement columns
+        for i, pl_label in enumerate(PL_KEYS):
+            p = placements.get(pl_label)
+            base_col = 6 + i * 5
+            if p:
+                current_pct = f"{int(round(p.get('current_adj', 0) * 100))}%"
+                rec_pct     = f"{p.get('recommended_multiplier', 0)}%"
+                roas_val    = p.get('roas', 0)
+                conf_val    = p.get('confidence', 0)
+                action      = p.get('recommended_action', '—')
+                af          = _action_fill(action)
+
+                _cell(ws, er, base_col,     current_pct,             NF, bg, C)
+                _cell(ws, er, base_col + 1, roas_val,                NF, bg, C, "0.00")
+                _cell(ws, er, base_col + 2, f"{conf_val:.0%}",       NF, bg, C)
+                _cell(ws, er, base_col + 3, rec_pct,
+                      Font(name="Arial", bold=True, size=9), af, C)
+                _cell(ws, er, base_col + 4, action,                  NF, af, C)
+            else:
+                for j in range(5):
+                    _cell(ws, er, base_col + j, "—", NF, bg, C)
+
+    # ── Column widths ─────────────────────────────────────────────────────
+    ws.column_dimensions["A"].width = 40
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 12
+    ws.column_dimensions["E"].width = 55
+    for col in range(6, 21):
+        ltr = get_column_letter(col)
+        ws.column_dimensions[ltr].width = 13 if (col - 6) % 5 == 4 else 11
+
+    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[2].height = 22
+    for r in range(3, len(rows) + 3):
+        ws.row_dimensions[r].height = 55
+    ws.freeze_panes = "C3"
+
+
 def build_excel(results: list[CampaignResult]) -> bytes:
     """
     Build the full 3-sheet Excel and return as bytes (for Streamlit download).
@@ -215,6 +343,9 @@ def build_excel(results: list[CampaignResult]) -> bytes:
 
     ws_sum = wb.create_sheet("Top of Search — SP vs SB")
     _make_summary_sheet(ws_sum, sp_rows, sb_rows)
+
+    ws_algo = wb.create_sheet("📍 Placement Algorithm")
+    _make_algo_sheet(ws_algo, results)
 
     buf = io.BytesIO()
     wb.save(buf)
