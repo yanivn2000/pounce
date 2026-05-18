@@ -366,10 +366,23 @@ def get_inventory_overview(cost_map: dict, avg_daily_sales: dict) -> pd.DataFram
         if loc not in pivot_ib.columns:
             pivot_ib[loc] = 0
 
-    # Attach title (take first non-empty title per asin)
-    titles = (inv[inv["title"].notna() & (inv["title"] != "")]
-              .groupby("asin")["title"].first().reset_index())
-    pivot = pivot.merge(titles, on="asin", how="left")
+    # Attach title — prefer product_name from product_costs (user-defined),
+    # fall back to title from inventory snapshots (Amazon CSV placeholder text)
+    conn_t = get_conn()
+    pc_titles = {
+        r["asin"].strip().upper(): r["product_name"]
+        for r in conn_t.execute(
+            "SELECT asin, product_name FROM product_costs WHERE product_name IS NOT NULL AND product_name != ''"
+        ).fetchall()
+    }
+    conn_t.close()
+
+    snap_titles = (inv[inv["title"].notna() & (inv["title"] != "")]
+                   .groupby("asin")["title"].first())
+    pivot["title"] = pivot["asin"].apply(
+        lambda a: pc_titles.get(str(a).strip().upper())
+                  or snap_titles.get(a, "")
+    )
 
     # Totals
     fba_cols = [c for c in FBA_LOCATIONS if c in pivot.columns]
