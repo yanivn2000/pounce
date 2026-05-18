@@ -7,6 +7,33 @@ import pandas as pd
 from datetime import date, timedelta
 from db.database import get_conn
 
+# ── Encoding-safe CSV reader ─────────────────────────────────────────────────
+def _read_csv_bytes(file_obj) -> str:
+    """
+    Read a file-like object and decode it robustly.
+    Amazon reports are often Windows-1252, not UTF-8.
+    Returns the decoded text string.
+    """
+    raw = file_obj.read()
+    if isinstance(raw, str):
+        return raw
+    for enc in ("utf-8-sig", "windows-1252", "latin-1"):
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _csv_to_df(file_obj, sep: str = None) -> pd.DataFrame:
+    """Decode file, auto-detect separator, return DataFrame."""
+    text = _read_csv_bytes(file_obj)
+    first_line = text.split("\n")[0]
+    if sep is None:
+        sep = "\t" if first_line.count("\t") >= first_line.count(",") else ","
+    return pd.read_csv(io.StringIO(text), dtype=str, sep=sep)
+
+
 # ── Location metadata ─────────────────────────────────────────────────────────
 LOCATIONS = {
     "FBA_US":     {"label": "FBA US",       "type": "FBA",        "marketplace": "amazon.com"},
@@ -40,13 +67,7 @@ def import_fba_csv(file_obj, location: str, snapshot_date: str = None) -> tuple[
         snapshot_date = str(date.today())
     warnings = []
     try:
-        sample = file_obj.read(4096)
-        if isinstance(sample, bytes):
-            sample = sample.decode("utf-8", errors="replace")
-        file_obj.seek(0)
-        first_line = sample.split("\n")[0]
-        sep = "\t" if first_line.count("\t") >= first_line.count(",") else ","
-        df = pd.read_csv(file_obj, dtype=str, sep=sep)
+        df = _csv_to_df(file_obj)
     except Exception as e:
         return 0, [f"Failed to read CSV: {e}"]
 
@@ -108,11 +129,8 @@ def import_awd_csv(file_obj, snapshot_date: str = None) -> tuple[int, list[str]]
         snapshot_date = str(date.today())
     warnings = []
     try:
-        raw = file_obj.read()
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8", errors="replace")
-        file_obj.seek(0)
-        lines = raw.splitlines()
+        text  = _read_csv_bytes(file_obj)
+        lines = text.splitlines()
         # Find the header row (contains "ASIN")
         header_idx = next((i for i, l in enumerate(lines) if "ASIN" in l), None)
         if header_idx is None:
@@ -172,13 +190,7 @@ def import_spm_csv(file_obj, snapshot_date: str = None) -> tuple[int, list[str],
         snapshot_date = str(date.today())
     warnings = []
     try:
-        sample = file_obj.read(4096)
-        if isinstance(sample, bytes):
-            sample = sample.decode("utf-8", errors="replace")
-        file_obj.seek(0)
-        first_line = sample.split("\n")[0]
-        sep = "\t" if first_line.count("\t") >= first_line.count(",") else ","
-        df = pd.read_csv(file_obj, dtype=str, sep=sep)
+        df = _csv_to_df(file_obj)
     except Exception as e:
         return 0, [f"Failed to read CSV: {e}"], []
 
@@ -236,7 +248,7 @@ def import_whcn_csv(file_obj, snapshot_date: str = None) -> tuple[int, list[str]
         snapshot_date = str(date.today())
     warnings = []
     try:
-        df = pd.read_csv(file_obj, dtype=str)
+        df = _csv_to_df(file_obj, sep=",")
     except Exception as e:
         return 0, [f"Failed to read CSV: {e}"]
     df.columns = [c.strip().lower() for c in df.columns]
