@@ -354,9 +354,9 @@ with tab_inv:
             }
             for raw_col, label in _day_col_map.items():
                 if raw_col in _overview.columns:
-                    _overview[label] = _overview[raw_col].apply(
-                        lambda v: int(round(v)) if v is not None and not pd.isna(v) else None
-                    )
+                    # Int64 (nullable) keeps whole numbers even when NaN present
+                    _overview[label] = pd.to_numeric(_overview[raw_col], errors="coerce") \
+                                         .round(0).astype("Int64")
                     _display_cols.append(label)
 
             _show_cols = [c for c in _display_cols if c in _overview.columns]
@@ -409,6 +409,9 @@ with tab_inv:
                              "ASIN":    st.column_config.TextColumn(width=120),
                              "Title":   st.column_config.TextColumn(width=200),
                              "Value $": st.column_config.NumberColumn(format="$%d"),
+                             "Days US": st.column_config.NumberColumn(format="%d"),
+                             "Days CA": st.column_config.NumberColumn(format="%d"),
+                             "Days UK": st.column_config.NumberColumn(format="%d"),
                          })
 
             st.markdown(
