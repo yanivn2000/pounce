@@ -129,6 +129,7 @@ def init_db():
     _migrate_recommendations_score(conn)
     _migrate_recommendations_source(conn)
     _migrate_product_costs_new_product(conn)
+    _migrate_recommendations_end_date(conn)
     conn.close()
 
 
@@ -145,6 +146,14 @@ def _migrate_recommendations_source(conn: sqlite3.Connection):
     cols = [r[1] for r in conn.execute("PRAGMA table_info(recommendations)").fetchall()]
     if "source" not in cols:
         conn.execute("ALTER TABLE recommendations ADD COLUMN source TEXT DEFAULT 'auto'")
+        conn.commit()
+
+
+def _migrate_recommendations_end_date(conn: sqlite3.Connection):
+    """Add end_date column to recommendations if missing."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(recommendations)").fetchall()]
+    if "end_date" not in cols:
+        conn.execute("ALTER TABLE recommendations ADD COLUMN end_date TEXT")
         conn.commit()
 
 

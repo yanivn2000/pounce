@@ -156,8 +156,9 @@ def save_recommendation(rec: dict) -> int:
             INSERT INTO recommendations
                 (date_given, asin, marketplace, campaign_name, placement_type,
                  campaign_type, current_multiplier, recommended_action,
-                 recommended_multiplier, reasoning, window_days, review_date, score, source)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 recommended_multiplier, reasoning, window_days, review_date, score, source,
+                 end_date)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             rec.get("date_given"),
             rec.get("asin"),
@@ -173,6 +174,7 @@ def save_recommendation(rec: dict) -> int:
             rec.get("review_date"),
             rec.get("score"),
             rec.get("source", "auto"),
+            rec.get("end_date"),
         ))
         row_id = cur.lastrowid
     conn.close()

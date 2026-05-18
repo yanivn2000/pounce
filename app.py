@@ -1121,7 +1121,7 @@ with tab_ads:
                 recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
 
                 display_cols = [
-                    "id", "date_given", "source", "score", "asin", "marketplace", "campaign_name",
+                    "id", "date_given", "end_date", "source", "score", "asin", "marketplace", "campaign_name",
                     "placement_type", "campaign_type", "change",
                     "reasoning", "review_date", "outcome"
                 ]
@@ -1139,8 +1139,9 @@ with tab_ads:
                     on_select="rerun",
                     selection_mode="single-row",
                     column_config={
-                        "change":    st.column_config.TextColumn("Change",    width=90),
-                        "reasoning": st.column_config.TextColumn("Reasoning", width=400),
+                        "end_date":  st.column_config.TextColumn("📅 End Date", width=100),
+                        "change":    st.column_config.TextColumn("Change",      width=90),
+                        "reasoning": st.column_config.TextColumn("Reasoning",   width=400),
                     },
                     key="recs_table_sel",
                 )
@@ -1274,6 +1275,7 @@ with tab_ads:
                                 "window_days":            14,
                                 "review_date":            review_str,
                                 "score":                  r.score,
+                                "end_date":               r.end_date or None,
                             })
                             saved_count += 1
                     if saved_count:
