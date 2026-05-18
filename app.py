@@ -1057,7 +1057,7 @@ with tab_ads:
             st.divider()
 
             # ── Filter + list ─────────────────────────────────────────────────────────
-            rhf1, rhf2, rhf3, rhf4 = st.columns(4)
+            rhf1, rhf2, rhf3, rhf4, rhf5 = st.columns(5)
             with rhf1:
                 rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
                 rh_market = None if rh_market == "all" else rh_market
@@ -1066,6 +1066,13 @@ with tab_ads:
             with rhf3:
                 show_pending = st.checkbox("Show only pending review", value=False)
             with rhf4:
+                hide_paused = st.checkbox(
+                    "⏸ Hide paused",
+                    value=True,
+                    key="rh_hide_paused",
+                    help="Hide recommendations from campaigns whose End Date is 7+ days old (likely paused)"
+                )
+            with rhf5:
                 show_critical_recs = st.checkbox(
                     "🚨 Critical only",
                     value=False,
@@ -1089,11 +1096,18 @@ with tab_ads:
                 st.info("No recommendations logged yet. Run an analysis to generate them.")
             else:
                 if show_pending:
-                    today_str = str(date.today())
+                    today_str_flt = str(date.today())
                     recs_df = recs_df[
-                        (recs_df["review_date"].fillna("") <= today_str) &
+                        (recs_df["review_date"].fillna("") <= today_str_flt) &
                         (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
                     ]
+
+                # Hide paused: end_date present and 7+ days before today
+                if hide_paused and "end_date" in recs_df.columns:
+                    _cutoff = str(date.today() - timedelta(days=7))
+                    _has_end = recs_df["end_date"].notna() & (recs_df["end_date"] != "")
+                    _is_paused_row = _has_end & (recs_df["end_date"] < _cutoff)
+                    recs_df = recs_df[~_is_paused_row]
 
                 # Critical filter: LOSING placement (risk) or score ≥ 70 (opportunity)
                 if show_critical_recs:
@@ -1256,6 +1270,8 @@ with tab_ads:
                     saved_count = 0
                     cost_map_for_asin = cost_map  # already loaded above
                     for r in results:
+                        if r.is_paused:
+                            continue   # never save recommendations for paused campaigns
                         asin = next(
                             (a for a in cost_map_for_asin if a.upper() in r.campaign.upper()),
                             None
