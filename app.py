@@ -1387,8 +1387,9 @@ with tab_ads:
                     st.markdown("")
 
                     # ── Critical filter ───────────────────────────────────
-                    _n_risk  = sum(1 for _r in results if _r.mode == "isolation")
-                    _n_opp   = sum(1 for _r in results if _r.is_critical and _r.mode == "optimization")
+                    _n_risk  = sum(1 for _r in results if _r.mode == "isolation" and not _r.is_paused)
+                    _n_opp   = sum(1 for _r in results if _r.is_critical and _r.mode == "optimization" and not _r.is_paused)
+                    _n_paused = sum(1 for _r in results if _r.is_paused)
                     _n_crit  = _n_risk + _n_opp
 
                     _crit_col, _crit_info = st.columns([3, 7])
@@ -1400,11 +1401,12 @@ with tab_ads:
                             help="Show only campaigns losing money (🔴 Isolation) or high-confidence opportunities (🟢 score ≥ 70)"
                         )
                     with _crit_info:
-                        if _n_crit:
-                            st.caption(
-                                f"🔴 **{_n_risk}** losing money &nbsp;·&nbsp; "
-                                f"🟢 **{_n_opp}** high-opportunity"
-                            )
+                        parts = []
+                        if _n_risk:  parts.append(f"🔴 **{_n_risk}** losing money")
+                        if _n_opp:   parts.append(f"🟢 **{_n_opp}** high-opportunity")
+                        if _n_paused: parts.append(f"⏸ **{_n_paused}** paused (excluded)")
+                        if parts:
+                            st.caption(" &nbsp;·&nbsp; ".join(parts))
 
                     _display_results = [_r for _r in results if _r.is_critical] if _show_critical else results
 
@@ -1434,8 +1436,9 @@ with tab_ads:
                             else "No base bid change" if _base == 0
                             else f"⬆️ Increase base bids {_base}%"
                         )
+                        _paused_badge = " &nbsp;⏸ PAUSED" if _r.is_paused else ""
                         _exp_label = (
-                            f"{_ml} &nbsp;|&nbsp; {_r.campaign} &nbsp;|&nbsp; {_base_txt} &nbsp;|&nbsp; Score: {_sc}/10"
+                            f"{_ml}{_paused_badge} &nbsp;|&nbsp; {_r.campaign} &nbsp;|&nbsp; {_base_txt} &nbsp;|&nbsp; Score: {_sc}/10"
                         )
                         with st.expander(_exp_label, expanded=(_mode == "isolation")):
                             st.markdown(

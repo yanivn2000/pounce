@@ -80,6 +80,7 @@ class CampaignResult:
     base_bid_change_pct: int = 0   # e.g. -40 means reduce all keyword bids 40%
     placement_algorithm: dict = field(default_factory=dict)  # full algo result dict
     is_critical: bool = False      # True = urgent action (risk or opportunity)
+    is_paused: bool = False        # True = campaign ended before report window closed
 
 
 def _safe(v):
@@ -94,6 +95,10 @@ def _safe(v):
     return v
 
 
+_PAUSED_LAG_DAYS = 7   # campaigns whose last End Date is ≥ this many days before the
+                        # report's overall End Date are considered paused/archived
+
+
 def load_and_aggregate(path: str, sales_col: str) -> pd.DataFrame:
     df = pd.read_excel(path)
     df.columns = df.columns.str.strip()
@@ -102,7 +107,8 @@ def load_and_aggregate(path: str, sales_col: str) -> pd.DataFrame:
     if 'Placement' not in df.columns or df.empty:
         return pd.DataFrame(columns=['Campaign', 'PL', 'Impressions',
                                      'Clicks', 'Spend', 'Sales', 'Orders',
-                                     'CTR', 'CPC', 'ROAS', 'ACOS', 'BidAdj'])
+                                     'CTR', 'CPC', 'ROAS', 'ACOS', 'BidAdj',
+                                     'is_paused'])
 
     df = df.rename(columns={'Campaign Name': 'Campaign'})
 
@@ -158,6 +164,21 @@ def load_and_aggregate(path: str, sales_col: str) -> pd.DataFrame:
     else:
         g['BidAdj'] = 0.0
     g['BidAdj'] = g['BidAdj'].fillna(0.0)
+
+    # ── Paused campaign detection via End Date ─────────────────────────────
+    # Amazon includes 'End Date' per row.  A campaign whose last End Date is
+    # ≥ _PAUSED_LAG_DAYS before the report's overall End Date was stopped/paused
+    # before the reporting window closed.
+    if 'End Date' in df.columns:
+        df['_EndDate'] = pd.to_datetime(df['End Date'], errors='coerce')
+        report_end = df['_EndDate'].max()
+        camp_end   = df.groupby('Campaign')['_EndDate'].max().reset_index()
+        camp_end.columns = ['Campaign', '_CampEnd']
+        camp_end['is_paused'] = (report_end - camp_end['_CampEnd']).dt.days >= _PAUSED_LAG_DAYS
+        g = g.merge(camp_end[['Campaign', 'is_paused']], on='Campaign', how='left')
+        g['is_paused'] = g['is_paused'].fillna(False)
+    else:
+        g['is_paused'] = False
 
     return g
 
@@ -689,12 +710,15 @@ def analyze(sp_path: str, sb_path: str,
     return results
 
 
-def _is_critical(mode: str, score: int) -> bool:
+def _is_critical(mode: str, score: int, is_paused: bool = False) -> bool:
     """
     A campaign is critical if immediate action could significantly move the needle
     — either because money is being lost (isolation) or because high-confidence
     performance means real upside is being left on the table (optimization ≥ 70).
+    Paused campaigns are never critical — the user already took action.
     """
+    if is_paused:
+        return False
     if mode == "isolation":
         return True
     if mode == "optimization" and score >= 70:
@@ -750,10 +774,17 @@ def analyze_with_products(sp_path: str, sb_path: str,
 
     results = []
 
+    # Build a fast paused-lookup: {campaign_name: bool}
+    _sp_paused = (sp_grp[['Campaign', 'is_paused']].drop_duplicates()
+                  .set_index('Campaign')['is_paused'].to_dict()
+                  if 'is_paused' in sp_grp.columns else {})
+
     for camp in sp_grp['Campaign'].unique():
-        sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
+        sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(
+            columns=['Campaign', 'is_paused'], errors='ignore')
         avg_price              = get_avg_price(sub)
         camp_target, cost_data = get_campaign_data(camp, avg_price)
+        paused                 = bool(_sp_paused.get(camp, False))
         sc                     = score_campaign(sub, camp_target, breakeven_roas=camp_target)
         total_spend            = sub['Spend'].sum()
         total_sales            = sub['Sales'].sum()
@@ -792,14 +823,21 @@ def analyze_with_products(sp_path: str, sb_path: str,
             mode=algo_result.get('mode', ''),
             base_bid_change_pct=algo_result.get('base_bid_change_pct', 0),
             placement_algorithm=algo_result,
-            is_critical=_is_critical(algo_result.get('mode', ''), sc),
+            is_paused=paused,
+            is_critical=_is_critical(algo_result.get('mode', ''), sc, paused),
         )
         results.append(r)
 
+    _sb_paused = (sb_grp[['Campaign', 'is_paused']].drop_duplicates()
+                  .set_index('Campaign')['is_paused'].to_dict()
+                  if 'is_paused' in sb_grp.columns else {})
+
     for camp in sb_grp['Campaign'].unique():
-        sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(columns=['Campaign'])
+        sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(
+            columns=['Campaign', 'is_paused'], errors='ignore')
         avg_price              = get_avg_price(sub)
         camp_target, cost_data = get_campaign_data(camp, avg_price)
+        paused                 = bool(_sb_paused.get(camp, False))
         sc                     = score_campaign(sub, camp_target, breakeven_roas=camp_target)
         total_spend            = sub['Spend'].sum()
         total_sales            = sub['Sales'].sum()
@@ -836,7 +874,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
             mode=algo_result.get('mode', ''),
             base_bid_change_pct=algo_result.get('base_bid_change_pct', 0),
             placement_algorithm=algo_result,
-            is_critical=_is_critical(algo_result.get('mode', ''), sc),
+            is_paused=paused,
+            is_critical=_is_critical(algo_result.get('mode', ''), sc, paused),
         )
         results.append(r)
 
