@@ -346,7 +346,7 @@ with tab_inv:
             _overview["Value $"] = _overview["value_usd"].fillna(0).round(0).astype(int)
             _display_cols += ["Total", "Value $"]
 
-            # Days columns with colour
+            # Days columns — rounded to whole numbers
             _day_col_map = {
                 "days_fba_us": "Days US",
                 "days_fba_ca": "Days CA",
@@ -354,10 +354,29 @@ with tab_inv:
             }
             for raw_col, label in _day_col_map.items():
                 if raw_col in _overview.columns:
-                    _overview[label] = _overview[raw_col]
+                    _overview[label] = _overview[raw_col].apply(
+                        lambda v: int(round(v)) if v is not None and not pd.isna(v) else None
+                    )
                     _display_cols.append(label)
 
+            _show_cols = [c for c in _display_cols if c in _overview.columns]
+
+            # ── Totals row ────────────────────────────────────────────────────
+            _num_cols = [c for c in _show_cols if c not in ("ASIN", "Title", "Days US", "Days CA", "Days UK")]
+            _total_row = {c: "" for c in _show_cols}
+            _total_row["ASIN"]  = "TOTAL"
+            _total_row["Title"] = ""
+            for c in _num_cols:
+                _total_row[c] = int(_overview[c].fillna(0).sum()) if c != "Value $" \
+                    else int(_overview["Value $"].fillna(0).sum())
+            _display_df = pd.concat(
+                [_overview[_show_cols], pd.DataFrame([_total_row])],
+                ignore_index=True
+            )
+
             def _color_days(val):
+                if val == "" or val is None:
+                    return ""
                 try:
                     v = float(val)
                 except (TypeError, ValueError):
@@ -370,15 +389,19 @@ with tab_inv:
                     return "background-color:#fff3b0;color:#7d4e00;font-weight:600"
                 return "background-color:#1a7f3722;color:#1a7f37"
 
-            _show_cols = [c for c in _display_cols if c in _overview.columns]
+            def _color_total_row(row):
+                """Bold + light grey background on the TOTAL row."""
+                if row.get("ASIN") == "TOTAL":
+                    return ["background-color:#f0f0f0;font-weight:700"] * len(row)
+                return [""] * len(row)
+
             _days_subset = [c for c in ["Days US", "Days CA", "Days UK"] if c in _show_cols]
-            _styler = _overview[_show_cols].style
+            _styler = _display_df.style.apply(_color_total_row, axis=1)
             if _days_subset:
-                # pandas ≥2.1 uses .map(), older uses .applymap()
                 _map_fn = getattr(_styler, "map", None) or getattr(_styler, "applymap")
                 _styler = _map_fn(_color_days, subset=_days_subset)
-            _styled_inv = _styler
-            st.dataframe(_styled_inv, use_container_width=True, hide_index=True,
+
+            st.dataframe(_styler, use_container_width=True, hide_index=True,
                          column_config={
                              "ASIN":    st.column_config.TextColumn(width=120),
                              "Title":   st.column_config.TextColumn(width=200),

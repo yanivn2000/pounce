@@ -456,17 +456,6 @@ def get_inventory_alerts(overview: pd.DataFrame) -> list[dict]:
                                 "market": mkt, "days": days,
                                 "msg": f"📦 {fba_units} units aging ({days}d stock) in {fba_loc} — consider deal/coupon"})
 
-    # Imbalance: one market < 30d while another > 90d
-    for _, row in overview.iterrows():
-        asin  = row["asin"]
-        title = str(row.get("title", "") or asin)[:50]
-        day_vals = {m: row.get(c) for m, c in mkt_day_cols.items() if row.get(c) is not None}
-        if len(day_vals) >= 2:
-            min_m, min_d = min(day_vals.items(), key=lambda x: x[1])
-            max_m, max_d = max(day_vals.items(), key=lambda x: x[1])
-            if min_d < 30 and max_d > 90:
-                alerts.append({"level": "imbalance", "asin": asin, "title": title,
-                                "market": min_m, "days": min_d,
-                                "msg": f"⚖️ Low in {min_m} ({min_d}d) but overstocked in {max_m} ({max_d}d)"})
+    # Note: imbalance/overstocked alert removed — inventory cannot be moved between marketplaces
 
     return sorted(alerts, key=lambda a: {"critical": 0, "urgent": 1, "plan": 2, "imbalance": 3, "aging": 4}.get(a["level"], 5))
