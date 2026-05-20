@@ -1466,17 +1466,19 @@ with tab_ads:
                             f"🔴 {_bf['campaign']} — {_bf['placement']} "
                             f"({_bf['before_date']} → {_bf['after_date']})", expanded=True
                         ):
-                            _nc1, _nc2, _nc3, _nc4 = st.columns(4)
+                            _nc1, _nc2, _nc3, _nc4, _nc5 = st.columns(5)
                             _nc1.metric("ROAS Before", f"{_bf['before_roas']}x")
                             _nc2.metric("ROAS After",  f"{_bf['after_roas']}x",
                                         delta=f"-{_bf['roas_chg_pct']}%", delta_color="inverse")
                             if _bf.get("profit_data"):
-                                _nc3.metric("Profit Δ", f"-{_bf['profit_chg_pct']}%",
-                                            delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}",
+                                _nc3.metric("Profit Before", f"${_bf['before_profit']:.0f}")
+                                _nc4.metric("Profit After",  f"${_bf['after_profit']:.0f}",
+                                            delta=f"{_bf['after_profit'] - _bf['before_profit']:.0f}",
                                             delta_color="inverse")
                             else:
-                                _nc3.metric("Profit Δ", "—", help="Re-run analysis to populate profit data")
-                            _nc4.metric("Spend", f"${_bf['spend']:.2f}")
+                                _nc3.metric("Profit Before", "—")
+                                _nc4.metric("Profit After",  "—", help="Re-run analysis to populate profit data")
+                            _nc5.metric("Spend", f"${_bf['spend']:.2f}")
                             st.caption(
                                 f"Purchases: {_bf['purchases']} · "
                                 f"Snapshots: {_bf['before_date']} → {_bf['after_date']}"
@@ -1495,13 +1497,18 @@ with tab_ads:
                             f"🟢 {_imp['campaign']} — {_imp['placement']} "
                             f"({_imp['before_date']} → {_imp['after_date']})", expanded=False
                         ):
-                            _pc1, _pc2, _pc3, _pc4 = st.columns(4)
+                            _pc1, _pc2, _pc3, _pc4, _pc5 = st.columns(5)
                             _pc1.metric("ROAS Before", f"{_imp['before_roas']}x")
                             _pc2.metric("ROAS After",  f"{_imp['after_roas']}x",
                                         delta=f"+{_imp['roas_chg_pct']}%")
-                            _pc3.metric("Profit Δ",    f"+{_imp['profit_chg_pct']}%",
-                                        delta=f"${_imp['after_profit']:.0f} vs ${_imp['before_profit']:.0f}")
-                            _pc4.metric("Spend", f"${_imp['spend']:.2f}")
+                            if _imp.get("profit_data"):
+                                _pc3.metric("Profit Before", f"${_imp['before_profit']:.0f}")
+                                _pc4.metric("Profit After",  f"${_imp['after_profit']:.0f}",
+                                            delta=f"+{_imp['after_profit'] - _imp['before_profit']:.0f}")
+                            else:
+                                _pc3.metric("Profit Before", "—")
+                                _pc4.metric("Profit After",  "—", help="Re-run analysis to populate profit data")
+                            _pc5.metric("Spend", f"${_imp['spend']:.2f}")
                             st.caption(
                                 f"Purchases: {_imp['purchases']} · "
                                 f"Snapshots: {_imp['before_date']} → {_imp['after_date']}"
