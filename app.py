@@ -25,6 +25,7 @@ from products import (
 if products_exist() and not products_exist_db():
     migrate_csv_to_db()
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
+from db.performance import save_performance_snapshot, get_backfire_alerts
 from db.inventory import (
     import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
     upsert_manual_inventory, save_sku_mapping,
@@ -1002,7 +1003,7 @@ with tab_sales:
             with cl1:
                 cl_asin = st.text_input("ASIN", placeholder="B0XXXXXXXX")
             with cl2:
-                cl_type = st.selectbox("Change Type", ["price", "image", "title", "deal", "listing", "other"])
+                cl_type = st.selectbox("Change Type", ["bid", "price", "image", "title", "deal", "listing", "other"])
             with cl3:
                 cl_notes = st.text_input("Notes", placeholder="Reduced price from $29.99 to $24.99")
             cl_date = st.date_input("Date", value=date.today())
@@ -1409,6 +1410,10 @@ with tab_ads:
                             for p in [sp_path, sb_path]:
                                 if os.path.exists(p): os.unlink(p)
 
+                    # ── Save performance snapshot for backfire detection ──────────────
+                    from datetime import date as _date
+                    save_performance_snapshot(results, str(_date.today()), detected_marketplace)
+
                     # ── Auto-save recommendations to DB ──────────────────────────────
                     today_str   = str(date.today())
                     review_str  = str(date.today() + timedelta(days=14))
@@ -1499,6 +1504,19 @@ with tab_ads:
                                 f'</div>',
                                 unsafe_allow_html=True
                             )
+
+                    # ── Backfire alerts ───────────────────────────────────────────────
+                    _backfires = get_backfire_alerts(detected_marketplace)
+                    if _backfires:
+                        st.error(f"⚠️ **{len(_backfires)} bid change(s) appear to have backfired** — ROAS and profit dropped significantly after a logged bid change.")
+                        for _bf in _backfires:
+                            with st.expander(f"🔴 {_bf['campaign']} — {_bf['placement']} (changed {_bf['change_date']})", expanded=True):
+                                _bfc1, _bfc2, _bfc3 = st.columns(3)
+                                _bfc1.metric("ROAS Before", f"{_bf['before_roas']}x")
+                                _bfc2.metric("ROAS After",  f"{_bf['after_roas']}x",  delta=f"-{_bf['roas_drop_pct']}%",  delta_color="inverse")
+                                _bfc3.metric("Profit Δ",    f"-{_bf['profit_drop_pct']}%", delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}", delta_color="inverse")
+                                st.caption(f"Bid change logged: {_bf['change_date']} · Notes: {_bf['change_notes'] or '—'}")
+                                st.caption("💡 Consider reverting this placement multiplier to its previous value.")
 
                     st.divider()
                     st.markdown("### 🏆 All Campaigns — Ranked by Score")

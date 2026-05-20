@@ -143,6 +143,23 @@ def init_db():
                 updated_at  TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS campaign_performance (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_date   TEXT NOT NULL,
+                campaign_name   TEXT NOT NULL,
+                marketplace     TEXT NOT NULL,
+                placement_type  TEXT NOT NULL,
+                roas            REAL,
+                spend           REAL,
+                sales           REAL,
+                purchases       INTEGER,
+                total_profit    REAL,
+                margin_per_unit REAL,
+                breakeven_roas  REAL,
+                UNIQUE(snapshot_date, campaign_name, placement_type, marketplace)
+            );
+            CREATE INDEX IF NOT EXISTS idx_camp_perf ON campaign_performance(campaign_name, marketplace, snapshot_date);
+
             INSERT OR IGNORE INTO fx_rates (marketplace, rate, note) VALUES
                 ('amazon.com',    1.00, 'USD baseline'),
                 ('amazon.co.uk',  0.79, 'GBP — update regularly'),
@@ -162,6 +179,7 @@ def init_db():
     _migrate_fx_rates(conn)
     _migrate_recommendations_dedup_index(conn)
     _migrate_recommendations_debug_json(conn)
+    _migrate_campaign_performance(conn)
     conn.close()
 
 
@@ -314,6 +332,22 @@ def _migrate_fx_rates(conn: sqlite3.Connection):
                 ('amazon.it',     0.92, 'EUR — update regularly'),
             ]
         )
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_campaign_performance(conn: sqlite3.Connection):
+    """Ensure campaign_performance table and its index exist."""
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS campaign_performance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_date TEXT NOT NULL, campaign_name TEXT NOT NULL,
+            marketplace TEXT NOT NULL, placement_type TEXT NOT NULL,
+            roas REAL, spend REAL, sales REAL, purchases INTEGER,
+            total_profit REAL, margin_per_unit REAL, breakeven_roas REAL,
+            UNIQUE(snapshot_date, campaign_name, placement_type, marketplace))""")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_camp_perf ON campaign_performance(campaign_name, marketplace, snapshot_date)")
         conn.commit()
     except Exception:
         pass
