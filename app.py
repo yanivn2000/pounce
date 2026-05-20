@@ -25,7 +25,7 @@ from products import (
 if products_exist() and not products_exist_db():
     migrate_csv_to_db()
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
-from db.performance import save_performance_snapshot, get_backfire_alerts
+from db.performance import save_performance_snapshot, get_backfire_alerts, reset_snapshots, get_snapshot_count
 from db.inventory import (
     import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
     upsert_manual_inventory, save_sku_mapping,
@@ -1508,15 +1508,16 @@ with tab_ads:
                     # ── Backfire alerts ───────────────────────────────────────────────
                     _backfires = get_backfire_alerts(detected_marketplace)
                     if _backfires:
-                        st.error(f"⚠️ **{len(_backfires)} bid change(s) appear to have backfired** — ROAS and profit dropped significantly after a logged bid change.")
+                        st.error(f"⚠️ **{len(_backfires)} campaign placement(s) regressed** — ROAS and profit dropped significantly vs the previous upload.")
                         for _bf in _backfires:
-                            with st.expander(f"🔴 {_bf['campaign']} — {_bf['placement']} (changed {_bf['change_date']})", expanded=True):
-                                _bfc1, _bfc2, _bfc3 = st.columns(3)
+                            with st.expander(f"🔴 {_bf['campaign']} — {_bf['placement']} ({_bf['before_date']} → {_bf['after_date']})", expanded=True):
+                                _bfc1, _bfc2, _bfc3, _bfc4 = st.columns(4)
                                 _bfc1.metric("ROAS Before", f"{_bf['before_roas']}x")
                                 _bfc2.metric("ROAS After",  f"{_bf['after_roas']}x",  delta=f"-{_bf['roas_drop_pct']}%",  delta_color="inverse")
                                 _bfc3.metric("Profit Δ",    f"-{_bf['profit_drop_pct']}%", delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}", delta_color="inverse")
-                                st.caption(f"Bid change logged: {_bf['change_date']} · Notes: {_bf['change_notes'] or '—'}")
-                                st.caption("💡 Consider reverting this placement multiplier to its previous value.")
+                                _bfc4.metric("Spend (latest)", f"${_bf['spend']:.2f}")
+                                st.caption(f"Snapshot comparison: {_bf['before_date']} → {_bf['after_date']} · Purchases: {_bf['purchases']}")
+                                st.caption("💡 Consider reverting the bid multiplier for this placement.")
 
                     st.divider()
                     st.markdown("### 🏆 All Campaigns — Ranked by Score")
@@ -1746,6 +1747,28 @@ if tab_admin is not None:
                 conn.close()
                 st.success(f"✅ Deleted {log_count:,} change log entries.")
                 st.rerun()
+
+        # ── Performance Snapshots ─────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 📸 Performance Snapshots")
+
+        snap_count = get_snapshot_count()
+        st.markdown(
+            f"<p style='color:{T['text_secondary']};font-size:0.9rem;'>"
+            f"Snapshots are saved automatically every time you upload a placement report. "
+            f"They power the regression alerts (ROAS / profit drop detection) shown after each analysis. "
+            f"Reset when you want to start a fresh comparison baseline — for example after a major campaign restructure.</p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"Current records: &nbsp;<strong>{snap_count:,}</strong> snapshot rows",
+            unsafe_allow_html=True,
+        )
+        confirm_snaps = st.checkbox("Yes, reset all performance snapshots", key="confirm_snaps")
+        if st.button("🗑️ Reset Snapshots", type="primary", disabled=not confirm_snaps):
+            reset_snapshots()
+            st.success("✅ All performance snapshots deleted. The next upload will become the new baseline.")
+            st.rerun()
 
         # ── Session Management ────────────────────────────────────────────────
         st.divider()

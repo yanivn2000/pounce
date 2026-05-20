@@ -1,9 +1,7 @@
 """
 db/performance.py — Campaign performance snapshots and backfire detection.
 """
-import json
-from datetime import date, timedelta
-import pandas as pd
+from datetime import date
 from db.database import get_conn
 
 
@@ -62,92 +60,97 @@ def save_performance_snapshot(results: list, snapshot_date: str, marketplace: st
 
 def get_backfire_alerts(marketplace: str, current_date: str = None) -> list:
     """
-    For each ASIN that had a 'bid' change log entry since the previous snapshot,
-    compare performance before vs after. Return list of alert dicts.
+    Compare the two most recent snapshots for every campaign in this marketplace.
+    Alert if ROAS dropped >30% AND total profit dropped >20% between them.
+    No change log dependency — alerts fire for any significant regression.
     """
-    if current_date is None:
-        current_date = str(date.today())
-
     conn = get_conn()
 
-    # Get all bid-type change log entries in the last 60 days
-    cutoff = str(date.today() - timedelta(days=60))
-    bid_changes = conn.execute("""
-        SELECT asin, log_date, notes
-        FROM change_log
-        WHERE change_type = 'bid'
-          AND marketplace = ?
-          AND log_date >= ?
-        ORDER BY log_date DESC
-    """, (marketplace, cutoff)).fetchall()
+    # Get all distinct campaign+placement combos that have at least 2 snapshots
+    combos = conn.execute("""
+        SELECT campaign_name, placement_type
+        FROM campaign_performance
+        WHERE marketplace = ?
+        GROUP BY campaign_name, placement_type
+        HAVING COUNT(DISTINCT snapshot_date) >= 2
+    """, (marketplace,)).fetchall()
 
     alerts = []
 
-    for change in bid_changes:
-        asin      = change["asin"].upper()
-        log_date  = change["log_date"]
-        notes     = change["notes"] or ""
+    for row in combos:
+        camp      = row["campaign_name"]
+        placement = row["placement_type"]
 
-        # Find campaigns for this ASIN (campaign name contains ASIN)
-        campaigns = conn.execute("""
-            SELECT DISTINCT campaign_name FROM campaign_performance
-            WHERE marketplace = ?
-              AND UPPER(campaign_name) LIKE ?
-        """, (marketplace, f"%{asin}%")).fetchall()
+        # Two most recent distinct snapshots
+        snaps = conn.execute("""
+            SELECT snapshot_date, roas, spend, sales, purchases, total_profit
+            FROM campaign_performance
+            WHERE campaign_name = ? AND marketplace = ? AND placement_type = ?
+            ORDER BY snapshot_date DESC
+            LIMIT 2
+        """, (camp, marketplace, placement)).fetchall()
 
-        for camp_row in campaigns:
-            camp = camp_row["campaign_name"]
+        if len(snaps) < 2:
+            continue
 
-            for placement in ['Top', 'Rest', 'Product']:
-                # Get snapshot just BEFORE the bid change
-                before = conn.execute("""
-                    SELECT roas, spend, sales, purchases, total_profit, snapshot_date
-                    FROM campaign_performance
-                    WHERE campaign_name = ? AND marketplace = ? AND placement_type = ?
-                      AND snapshot_date < ?
-                    ORDER BY snapshot_date DESC LIMIT 1
-                """, (camp, marketplace, placement, log_date)).fetchone()
+        after  = snaps[0]   # most recent
+        before = snaps[1]   # previous
 
-                # Get snapshot AFTER the bid change (most recent)
-                after = conn.execute("""
-                    SELECT roas, spend, sales, purchases, total_profit, snapshot_date
-                    FROM campaign_performance
-                    WHERE campaign_name = ? AND marketplace = ? AND placement_type = ?
-                      AND snapshot_date >= ?
-                    ORDER BY snapshot_date DESC LIMIT 1
-                """, (camp, marketplace, placement, log_date)).fetchone()
+        before_roas   = before["roas"]        or 0
+        after_roas    = after["roas"]          or 0
+        before_profit = before["total_profit"] or 0
+        after_profit  = after["total_profit"]  or 0
 
-                if not before or not after:
-                    continue
+        if before_roas <= 0 or after_roas <= 0:
+            continue
 
-                before_roas   = before["roas"]         or 0
-                after_roas    = after["roas"]           or 0
-                before_profit = before["total_profit"]  or 0
-                after_profit  = after["total_profit"]   or 0
+        roas_drop   = (before_roas - after_roas) / before_roas
+        profit_drop = (before_profit - after_profit) / abs(before_profit) if before_profit != 0 else 0
 
-                if before_roas <= 0 or after_roas <= 0:
-                    continue
-
-                roas_drop   = (before_roas - after_roas) / before_roas
-                profit_drop = (before_profit - after_profit) / abs(before_profit) if before_profit != 0 else 0
-
-                # Alert if ROAS dropped >30% AND profit dropped >20%
-                if roas_drop > 0.30 and profit_drop > 0.20:
-                    alerts.append({
-                        "campaign":        camp,
-                        "placement":       placement,
-                        "asin":            asin,
-                        "change_date":     log_date,
-                        "change_notes":    notes,
-                        "before_roas":     round(before_roas, 2),
-                        "after_roas":      round(after_roas, 2),
-                        "roas_drop_pct":   round(roas_drop * 100),
-                        "before_profit":   round(before_profit, 2),
-                        "after_profit":    round(after_profit, 2),
-                        "profit_drop_pct": round(profit_drop * 100),
-                        "before_date":     before["snapshot_date"],
-                        "after_date":      after["snapshot_date"],
-                    })
+        # Alert if ROAS dropped >30% AND profit dropped >20%
+        if roas_drop > 0.30 and profit_drop > 0.20:
+            alerts.append({
+                "campaign":        camp,
+                "placement":       placement,
+                "before_roas":     round(before_roas, 2),
+                "after_roas":      round(after_roas, 2),
+                "roas_drop_pct":   round(roas_drop * 100),
+                "before_profit":   round(before_profit, 2),
+                "after_profit":    round(after_profit, 2),
+                "profit_drop_pct": round(profit_drop * 100),
+                "before_date":     before["snapshot_date"],
+                "after_date":      after["snapshot_date"],
+                "spend":           round(after["spend"] or 0, 2),
+                "purchases":       after["purchases"] or 0,
+            })
 
     conn.close()
     return alerts
+
+
+def reset_snapshots():
+    """Delete all rows from campaign_performance. Called from Admin tab."""
+    conn = get_conn()
+    with conn:
+        conn.execute("DELETE FROM campaign_performance")
+    conn.close()
+
+
+def get_snapshot_count() -> int:
+    """Return total number of snapshot rows stored."""
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) FROM campaign_performance").fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_snapshot_dates(marketplace: str) -> list[str]:
+    """Return distinct snapshot dates for a marketplace, newest first."""
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT DISTINCT snapshot_date FROM campaign_performance
+        WHERE marketplace = ?
+        ORDER BY snapshot_date DESC
+    """, (marketplace,)).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
