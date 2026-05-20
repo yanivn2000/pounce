@@ -1365,6 +1365,22 @@ with tab_ads:
             with col2:
                 sb_file = st.file_uploader("🏷️ Sponsored Brands — Campaign Placement Report (.xlsx)", type=["xlsx"], key="sb")
 
+            # Optional: let the user back-date the snapshot when uploading old reports
+            with st.expander("📅 Snapshot date (optional — set only when uploading old reports)", expanded=False):
+                st.caption(
+                    "By default the snapshot is saved with **today's date**. "
+                    "If you're uploading a report from an earlier date (e.g. May 13) set that date here "
+                    "so the regression comparison timeline stays accurate."
+                )
+                _snap_date_override = st.date_input(
+                    "Report date",
+                    value=date.today(),
+                    max_value=date.today(),
+                    key="snap_date_override",
+                    label_visibility="collapsed",
+                )
+                _use_date_override = st.checkbox("Use this date for the snapshot", value=False, key="use_snap_override")
+
             st.divider()
 
             # ── Analysis parameters ───────────────────────────────────────────────────
@@ -1411,8 +1427,12 @@ with tab_ads:
                                 if os.path.exists(p): os.unlink(p)
 
                     # ── Save performance snapshot for backfire detection ──────────────
-                    from datetime import date as _date
-                    save_performance_snapshot(results, str(_date.today()), detected_marketplace)
+                    _snap_date = (
+                        str(_snap_date_override)
+                        if _use_date_override and _snap_date_override
+                        else str(date.today())
+                    )
+                    save_performance_snapshot(results, _snap_date, detected_marketplace)
 
                     # ── Auto-save recommendations to DB ──────────────────────────────
                     today_str   = str(date.today())
