@@ -82,6 +82,7 @@ class CampaignResult:
     is_critical: bool = False      # True = urgent action (risk or opportunity)
     is_paused: bool = False        # True = campaign ended before report window closed
     end_date: str = ''             # Campaign's last End Date from the report (YYYY-MM-DD)
+    breakeven_roas: float = 0.0   # Calculated breakeven ROAS for this campaign (used for snapshots)
 
 
 def _safe(v):
@@ -874,6 +875,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
             is_paused=paused,
             end_date=camp_end_date,
             is_critical=_is_critical(algo_result.get('mode', ''), sc, paused),
+            breakeven_roas=float(camp_target),
         )
         results.append(r)
 
@@ -938,6 +940,7 @@ def analyze_with_products(sp_path: str, sb_path: str,
             is_paused=paused,
             end_date=camp_end_date,
             is_critical=_is_critical(algo_result.get('mode', ''), sc, paused),
+            breakeven_roas=float(camp_target),
         )
         results.append(r)
 

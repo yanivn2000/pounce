@@ -14,35 +14,26 @@ def save_performance_snapshot(results: list, snapshot_date: str, marketplace: st
     conn = get_conn()
     with conn:
         for r in results:
-            # Get avg_price and margin from placement_algorithm debug or approximate
-            algo    = r.placement_algorithm or {}
-            be_roas = 0.0
-            margin  = 0.0
+            # breakeven_roas is now stored directly on the CampaignResult dataclass
+            be = getattr(r, 'breakeven_roas', 0.0) or 0.0
 
             for pl_name, pl_data in [('Top', r.top), ('Rest', r.rest), ('Product', r.product)]:
                 if pl_data is None:
                     continue
-                spend     = pl_data.spend     or 0
-                sales     = pl_data.sales     or 0
-                purchases = pl_data.orders    or 0
-                roas      = pl_data.roas      or 0
+                spend     = pl_data.spend  or 0
+                sales     = pl_data.sales  or 0
+                purchases = pl_data.orders or 0
+                roas      = pl_data.roas   or 0
 
-                # Get breakeven from placements list in algo result
-                be = 0.0
-                for p in algo.get('placements', []):
-                    if p.get('label', '').startswith(pl_name[:3]):
-                        be = p.get('breakeven_roas', 0) or 0
-                        break
-
-                # margin_per_unit: approximate from sales/purchases and breakeven
-                if be > 0 and roas > 0 and sales > 0 and purchases > 0:
-                    avg_p = sales / purchases
-                    m_per_unit = avg_p * (1 - 1 / be) if be > 0 else 0
-                    total_profit = (m_per_unit * purchases) - spend
-                    margin = m_per_unit
+                # Calculate margin and total profit from breakeven ROAS
+                if be > 0 and sales > 0 and purchases > 0:
+                    avg_p      = sales / purchases
+                    m_per_unit = avg_p * (1 - 1 / be)
+                    total_profit = round((m_per_unit * purchases) - spend, 2)
+                    margin       = round(m_per_unit, 4)
                 else:
                     total_profit = 0.0
-                    margin = 0.0
+                    margin       = 0.0
 
                 try:
                     conn.execute("""
@@ -52,7 +43,7 @@ def save_performance_snapshot(results: list, snapshot_date: str, marketplace: st
                         VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """, (snapshot_date, r.campaign, marketplace, pl_name,
                           roas, spend, sales, purchases,
-                          round(total_profit, 2), round(margin, 2), be))
+                          total_profit, margin, be))
                 except Exception:
                     pass
     conn.close()
@@ -117,28 +108,38 @@ def get_performance_alerts(marketplace: str, thresholds: dict = None) -> list:
         roas_change   = (after_roas - before_roas) / before_roas
         profit_change = (after_profit - before_profit) / abs(before_profit) if before_profit != 0 else 0
 
+        # If profit data is missing for both snapshots (legacy data stored as 0),
+        # fall back to ROAS-only comparison so existing snapshots still produce alerts.
+        profit_data_available = not (before_profit == 0 and after_profit == 0)
+
         base = {
-            "campaign":      camp,
-            "placement":     placement,
-            "before_roas":   round(before_roas, 2),
-            "after_roas":    round(after_roas, 2),
-            "roas_chg_pct":  round(abs(roas_change) * 100),
-            "before_profit": round(before_profit, 2),
-            "after_profit":  round(after_profit, 2),
-            "profit_chg_pct": round(abs(profit_change) * 100),
-            "before_date":   before["snapshot_date"],
-            "after_date":    after["snapshot_date"],
-            "spend":         round(after["spend"] or 0, 2),
-            "purchases":     after["purchases"] or 0,
+            "campaign":           camp,
+            "placement":          placement,
+            "before_roas":        round(before_roas, 2),
+            "after_roas":         round(after_roas, 2),
+            "roas_chg_pct":       round(abs(roas_change) * 100),
+            "before_profit":      round(before_profit, 2),
+            "after_profit":       round(after_profit, 2),
+            "profit_chg_pct":     round(abs(profit_change) * 100),
+            "profit_data":        profit_data_available,
+            "before_date":        before["snapshot_date"],
+            "after_date":         after["snapshot_date"],
+            "spend":              round(after["spend"] or 0, 2),
+            "purchases":          after["purchases"] or 0,
         }
 
-        # Regression: ROAS AND profit both dropped beyond thresholds
-        if roas_change < -roas_drop_thresh and profit_change < -profit_drop_thresh:
-            alerts.append({**base, "type": "regression"})
-
-        # Improvement: ROAS AND profit both rose beyond thresholds
-        elif roas_change > roas_gain_thresh and profit_change > profit_gain_thresh:
-            alerts.append({**base, "type": "improvement"})
+        if profit_data_available:
+            # Full check: ROAS AND profit must both move beyond threshold
+            if roas_change < -roas_drop_thresh and profit_change < -profit_drop_thresh:
+                alerts.append({**base, "type": "regression"})
+            elif roas_change > roas_gain_thresh and profit_change > profit_gain_thresh:
+                alerts.append({**base, "type": "improvement"})
+        else:
+            # Fallback: ROAS-only (no profit data in these snapshots)
+            if roas_change < -roas_drop_thresh:
+                alerts.append({**base, "type": "regression"})
+            elif roas_change > roas_gain_thresh:
+                alerts.append({**base, "type": "improvement"})
 
     conn.close()
     return alerts

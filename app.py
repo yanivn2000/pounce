@@ -1470,13 +1470,17 @@ with tab_ads:
                             _nc1.metric("ROAS Before", f"{_bf['before_roas']}x")
                             _nc2.metric("ROAS After",  f"{_bf['after_roas']}x",
                                         delta=f"-{_bf['roas_chg_pct']}%", delta_color="inverse")
-                            _nc3.metric("Profit Δ",    f"-{_bf['profit_chg_pct']}%",
-                                        delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}",
-                                        delta_color="inverse")
+                            if _bf.get("profit_data"):
+                                _nc3.metric("Profit Δ", f"-{_bf['profit_chg_pct']}%",
+                                            delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}",
+                                            delta_color="inverse")
+                            else:
+                                _nc3.metric("Profit Δ", "—", help="Re-run analysis to populate profit data")
                             _nc4.metric("Spend", f"${_bf['spend']:.2f}")
                             st.caption(
                                 f"Purchases: {_bf['purchases']} · "
                                 f"Snapshots: {_bf['before_date']} → {_bf['after_date']}"
+                                + ("" if _bf.get("profit_data") else " · ⚠️ ROAS-only (no profit data — re-run analysis to fix)")
                             )
                             st.caption("💡 Consider reverting the bid multiplier for this placement.")
 
