@@ -1427,7 +1427,7 @@ with tab_ads:
                         save_setting("alert_profit_drop_pct", _pd)
                         save_setting("alert_roas_gain_pct",   _rg)
                         save_setting("alert_profit_gain_pct", _pg)
-                        st.success("✅ Thresholds saved. Reopen this tab to see updated alerts.")
+                        st.rerun()  # reload page so _thresh and alerts use new values
 
                 st.divider()
 
