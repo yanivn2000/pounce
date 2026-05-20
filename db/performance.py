@@ -58,15 +58,25 @@ def save_performance_snapshot(results: list, snapshot_date: str, marketplace: st
     conn.close()
 
 
-def get_backfire_alerts(marketplace: str, current_date: str = None) -> list:
+def get_performance_alerts(marketplace: str, thresholds: dict = None) -> list:
     """
     Compare the two most recent snapshots for every campaign in this marketplace.
-    Alert if ROAS dropped >30% AND total profit dropped >20% between them.
-    No change log dependency — alerts fire for any significant regression.
+    Returns alerts with type='regression' (negative) or type='improvement' (positive).
+    Thresholds are read from DB if not provided.
     """
+    if thresholds is None:
+        # Lazy import to avoid circular dependency
+        from db.settings import get_alert_thresholds
+        thresholds = get_alert_thresholds()
+
+    roas_drop_thresh   = thresholds.get("alert_roas_drop_pct",   30) / 100
+    profit_drop_thresh = thresholds.get("alert_profit_drop_pct", 20) / 100
+    roas_gain_thresh   = thresholds.get("alert_roas_gain_pct",   30) / 100
+    profit_gain_thresh = thresholds.get("alert_profit_gain_pct", 20) / 100
+
     conn = get_conn()
 
-    # Get all distinct campaign+placement combos that have at least 2 snapshots
+    # All campaign+placement combos with at least 2 snapshots
     combos = conn.execute("""
         SELECT campaign_name, placement_type
         FROM campaign_performance
@@ -104,28 +114,39 @@ def get_backfire_alerts(marketplace: str, current_date: str = None) -> list:
         if before_roas <= 0 or after_roas <= 0:
             continue
 
-        roas_drop   = (before_roas - after_roas) / before_roas
-        profit_drop = (before_profit - after_profit) / abs(before_profit) if before_profit != 0 else 0
+        roas_change   = (after_roas - before_roas) / before_roas
+        profit_change = (after_profit - before_profit) / abs(before_profit) if before_profit != 0 else 0
 
-        # Alert if ROAS dropped >30% AND profit dropped >20%
-        if roas_drop > 0.30 and profit_drop > 0.20:
-            alerts.append({
-                "campaign":        camp,
-                "placement":       placement,
-                "before_roas":     round(before_roas, 2),
-                "after_roas":      round(after_roas, 2),
-                "roas_drop_pct":   round(roas_drop * 100),
-                "before_profit":   round(before_profit, 2),
-                "after_profit":    round(after_profit, 2),
-                "profit_drop_pct": round(profit_drop * 100),
-                "before_date":     before["snapshot_date"],
-                "after_date":      after["snapshot_date"],
-                "spend":           round(after["spend"] or 0, 2),
-                "purchases":       after["purchases"] or 0,
-            })
+        base = {
+            "campaign":      camp,
+            "placement":     placement,
+            "before_roas":   round(before_roas, 2),
+            "after_roas":    round(after_roas, 2),
+            "roas_chg_pct":  round(abs(roas_change) * 100),
+            "before_profit": round(before_profit, 2),
+            "after_profit":  round(after_profit, 2),
+            "profit_chg_pct": round(abs(profit_change) * 100),
+            "before_date":   before["snapshot_date"],
+            "after_date":    after["snapshot_date"],
+            "spend":         round(after["spend"] or 0, 2),
+            "purchases":     after["purchases"] or 0,
+        }
+
+        # Regression: ROAS AND profit both dropped beyond thresholds
+        if roas_change < -roas_drop_thresh and profit_change < -profit_drop_thresh:
+            alerts.append({**base, "type": "regression"})
+
+        # Improvement: ROAS AND profit both rose beyond thresholds
+        elif roas_change > roas_gain_thresh and profit_change > profit_gain_thresh:
+            alerts.append({**base, "type": "improvement"})
 
     conn.close()
     return alerts
+
+
+# Backwards-compatible alias used by existing callers
+def get_backfire_alerts(marketplace: str, **kwargs) -> list:
+    return [a for a in get_performance_alerts(marketplace, **kwargs) if a["type"] == "regression"]
 
 
 def reset_snapshots():

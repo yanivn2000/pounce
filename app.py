@@ -25,7 +25,8 @@ from products import (
 if products_exist() and not products_exist_db():
     migrate_csv_to_db()
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
-from db.performance import save_performance_snapshot, get_backfire_alerts, reset_snapshots, get_snapshot_count
+from db.performance import save_performance_snapshot, get_performance_alerts, reset_snapshots, get_snapshot_count
+from db.settings import get_alert_thresholds, save_setting
 from db.inventory import (
     import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
     upsert_manual_inventory, save_sku_mapping,
@@ -1403,6 +1404,52 @@ with tab_ads:
                     help="Bid recommendations will never exceed this margin floor."
                 ) / 100
 
+            # ── Alert thresholds (persisted in DB) ────────────────────────────────────
+            with st.expander("🔔 Alert Thresholds", expanded=False):
+                st.caption(
+                    "Thresholds are **saved to the database** — changes persist across sessions and apply to every future analysis."
+                )
+                _thresh = get_alert_thresholds()
+                _at1, _at2 = st.columns(2)
+                with _at1:
+                    st.markdown("##### 🔴 Negative alert (regression)")
+                    _rd = st.number_input(
+                        "ROAS drop % to trigger alert",
+                        min_value=5, max_value=90, step=5,
+                        value=int(_thresh.get("alert_roas_drop_pct", 30)),
+                        key="thresh_roas_drop",
+                        help="Alert fires when ROAS drops by this % or more vs the previous snapshot."
+                    )
+                    _pd = st.number_input(
+                        "Profit drop % to trigger alert",
+                        min_value=5, max_value=90, step=5,
+                        value=int(_thresh.get("alert_profit_drop_pct", 20)),
+                        key="thresh_profit_drop",
+                        help="Both ROAS AND profit must drop to fire a negative alert."
+                    )
+                with _at2:
+                    st.markdown("##### 🟢 Positive alert (improvement)")
+                    _rg = st.number_input(
+                        "ROAS gain % to trigger alert",
+                        min_value=5, max_value=90, step=5,
+                        value=int(_thresh.get("alert_roas_gain_pct", 30)),
+                        key="thresh_roas_gain",
+                        help="Alert fires when ROAS rises by this % or more vs the previous snapshot."
+                    )
+                    _pg = st.number_input(
+                        "Profit gain % to trigger alert",
+                        min_value=5, max_value=90, step=5,
+                        value=int(_thresh.get("alert_profit_gain_pct", 20)),
+                        key="thresh_profit_gain",
+                        help="Both ROAS AND profit must rise to fire a positive alert."
+                    )
+                if st.button("💾 Save Thresholds", key="save_thresholds"):
+                    save_setting("alert_roas_drop_pct",   _rd)
+                    save_setting("alert_profit_drop_pct", _pd)
+                    save_setting("alert_roas_gain_pct",   _rg)
+                    save_setting("alert_profit_gain_pct", _pg)
+                    st.success("✅ Alert thresholds saved.")
+
             if sp_file and sb_file:
                 if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
 
@@ -1525,19 +1572,57 @@ with tab_ads:
                                 unsafe_allow_html=True
                             )
 
-                    # ── Backfire alerts ───────────────────────────────────────────────
-                    _backfires = get_backfire_alerts(detected_marketplace)
-                    if _backfires:
-                        st.error(f"⚠️ **{len(_backfires)} campaign placement(s) regressed** — ROAS and profit dropped significantly vs the previous upload.")
-                        for _bf in _backfires:
-                            with st.expander(f"🔴 {_bf['campaign']} — {_bf['placement']} ({_bf['before_date']} → {_bf['after_date']})", expanded=True):
+                    # ── Performance alerts (regressions + improvements) ───────────────
+                    _all_alerts    = get_performance_alerts(detected_marketplace)
+                    _regressions   = [a for a in _all_alerts if a["type"] == "regression"]
+                    _improvements  = [a for a in _all_alerts if a["type"] == "improvement"]
+
+                    if _regressions:
+                        st.error(
+                            f"⚠️ **{len(_regressions)} placement(s) regressed** — "
+                            f"ROAS and profit dropped significantly vs the previous upload."
+                        )
+                        for _bf in _regressions:
+                            with st.expander(
+                                f"🔴 {_bf['campaign']} — {_bf['placement']} "
+                                f"({_bf['before_date']} → {_bf['after_date']})", expanded=True
+                            ):
                                 _bfc1, _bfc2, _bfc3, _bfc4 = st.columns(4)
                                 _bfc1.metric("ROAS Before", f"{_bf['before_roas']}x")
-                                _bfc2.metric("ROAS After",  f"{_bf['after_roas']}x",  delta=f"-{_bf['roas_drop_pct']}%",  delta_color="inverse")
-                                _bfc3.metric("Profit Δ",    f"-{_bf['profit_drop_pct']}%", delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}", delta_color="inverse")
+                                _bfc2.metric("ROAS After",  f"{_bf['after_roas']}x",
+                                             delta=f"-{_bf['roas_chg_pct']}%", delta_color="inverse")
+                                _bfc3.metric("Profit Δ",    f"-{_bf['profit_chg_pct']}%",
+                                             delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}",
+                                             delta_color="inverse")
                                 _bfc4.metric("Spend (latest)", f"${_bf['spend']:.2f}")
-                                st.caption(f"Snapshot comparison: {_bf['before_date']} → {_bf['after_date']} · Purchases: {_bf['purchases']}")
+                                st.caption(
+                                    f"Purchases: {_bf['purchases']} · "
+                                    f"Snapshots: {_bf['before_date']} → {_bf['after_date']}"
+                                )
                                 st.caption("💡 Consider reverting the bid multiplier for this placement.")
+
+                    if _improvements:
+                        st.success(
+                            f"🚀 **{len(_improvements)} placement(s) improved significantly** — "
+                            f"ROAS and profit rose vs the previous upload."
+                        )
+                        for _imp in _improvements:
+                            with st.expander(
+                                f"🟢 {_imp['campaign']} — {_imp['placement']} "
+                                f"({_imp['before_date']} → {_imp['after_date']})", expanded=False
+                            ):
+                                _ic1, _ic2, _ic3, _ic4 = st.columns(4)
+                                _ic1.metric("ROAS Before", f"{_imp['before_roas']}x")
+                                _ic2.metric("ROAS After",  f"{_imp['after_roas']}x",
+                                            delta=f"+{_imp['roas_chg_pct']}%")
+                                _ic3.metric("Profit Δ",    f"+{_imp['profit_chg_pct']}%",
+                                            delta=f"${_imp['after_profit']:.0f} vs ${_imp['before_profit']:.0f}")
+                                _ic4.metric("Spend (latest)", f"${_imp['spend']:.2f}")
+                                st.caption(
+                                    f"Purchases: {_imp['purchases']} · "
+                                    f"Snapshots: {_imp['before_date']} → {_imp['after_date']}"
+                                )
+                                st.caption("✅ Consider locking in or scaling this placement.")
 
                     st.divider()
                     st.markdown("### 🏆 All Campaigns — Ranked by Score")

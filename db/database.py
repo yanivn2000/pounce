@@ -169,6 +169,18 @@ def init_db():
                 ('amazon.fr',     0.92, 'EUR — update regularly'),
                 ('amazon.es',     0.92, 'EUR — update regularly'),
                 ('amazon.it',     0.92, 'EUR — update regularly');
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            INSERT OR IGNORE INTO app_settings (key, value) VALUES
+                ('alert_roas_drop_pct',   '30'),
+                ('alert_profit_drop_pct', '20'),
+                ('alert_roas_gain_pct',   '30'),
+                ('alert_profit_gain_pct', '20');
         """)
     _migrate_product_costs(conn)
     _migrate_recommendations_score(conn)
@@ -180,6 +192,7 @@ def init_db():
     _migrate_recommendations_dedup_index(conn)
     _migrate_recommendations_debug_json(conn)
     _migrate_campaign_performance(conn)
+    _migrate_app_settings(conn)
     conn.close()
 
 
@@ -360,6 +373,30 @@ def _migrate_recommendations_debug_json(conn: sqlite3.Connection):
         if "debug_json" not in cols:
             conn.execute("ALTER TABLE recommendations ADD COLUMN debug_json TEXT")
             conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_app_settings(conn: sqlite3.Connection):
+    """Ensure app_settings table exists and default alert thresholds are seeded."""
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.executemany(
+            "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)",
+            [
+                ('alert_roas_drop_pct',   '30'),
+                ('alert_profit_drop_pct', '20'),
+                ('alert_roas_gain_pct',   '30'),
+                ('alert_profit_gain_pct', '20'),
+            ]
+        )
+        conn.commit()
     except Exception:
         pass
 
