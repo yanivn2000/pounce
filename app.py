@@ -1369,8 +1369,18 @@ with tab_ads:
                 )
                 _thresh = get_alert_thresholds()
                 _all_perf_alerts = get_performance_alerts(_alerts_market, _thresh)
-                _neg_alerts = [a for a in _all_perf_alerts if a["type"] == "regression"]
-                _pos_alerts = [a for a in _all_perf_alerts if a["type"] == "improvement"]
+                # Worst regression first (biggest ROAS drop, then biggest profit loss)
+                _neg_alerts = sorted(
+                    [a for a in _all_perf_alerts if a["type"] == "regression"],
+                    key=lambda x: (x["roas_chg_pct"], x["before_profit"] - x["after_profit"]),
+                    reverse=True,
+                )
+                # Best improvement first (biggest ROAS gain, then biggest profit gain)
+                _pos_alerts = sorted(
+                    [a for a in _all_perf_alerts if a["type"] == "improvement"],
+                    key=lambda x: (x["roas_chg_pct"], x["after_profit"] - x["before_profit"]),
+                    reverse=True,
+                )
 
                 _ac1, _ac2, _ac3 = st.columns(3)
                 _ac1.metric("📸 Snapshots stored",
