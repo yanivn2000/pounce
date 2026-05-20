@@ -11,42 +11,40 @@ def save_performance_snapshot(results: list, snapshot_date: str, marketplace: st
     Called after every analysis run.
     results: list of CampaignResult dataclass instances.
     """
-    conn = get_conn()
-    with conn:
-        for r in results:
-            # breakeven_roas is now stored directly on the CampaignResult dataclass
-            be = getattr(r, 'breakeven_roas', 0.0) or 0.0
+    rows = []
+    for r in results:
+        be = getattr(r, 'breakeven_roas', 0.0) or 0.0
 
-            for pl_name, pl_data in [('Top', r.top), ('Rest', r.rest), ('Product', r.product)]:
-                if pl_data is None:
-                    continue
-                spend     = pl_data.spend  or 0
-                sales     = pl_data.sales  or 0
-                purchases = pl_data.orders or 0
-                roas      = pl_data.roas   or 0
+        for pl_name, pl_data in [('Top', r.top), ('Rest', r.rest), ('Product', r.product)]:
+            if pl_data is None:
+                continue
+            spend     = pl_data.spend  or 0
+            sales     = pl_data.sales  or 0
+            purchases = pl_data.orders or 0
+            roas      = pl_data.roas   or 0
 
-                # Calculate margin and total profit from breakeven ROAS
-                if be > 0 and sales > 0 and purchases > 0:
-                    avg_p      = sales / purchases
-                    m_per_unit = avg_p * (1 - 1 / be)
-                    total_profit = round((m_per_unit * purchases) - spend, 2)
-                    margin       = round(m_per_unit, 4)
-                else:
-                    total_profit = 0.0
-                    margin       = 0.0
+            if be > 0 and sales > 0 and purchases > 0:
+                avg_p        = sales / purchases
+                m_per_unit   = avg_p * (1 - 1 / be)
+                total_profit = round((m_per_unit * purchases) - spend, 2)
+                margin       = round(m_per_unit, 4)
+            else:
+                total_profit = 0.0
+                margin       = 0.0
 
-                try:
-                    conn.execute("""
-                        INSERT OR REPLACE INTO campaign_performance
-                            (snapshot_date, campaign_name, marketplace, placement_type,
-                             roas, spend, sales, purchases, total_profit, margin_per_unit, breakeven_roas)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                    """, (snapshot_date, r.campaign, marketplace, pl_name,
-                          roas, spend, sales, purchases,
-                          total_profit, margin, be))
-                except Exception:
-                    pass
-    conn.close()
+            rows.append((snapshot_date, r.campaign, marketplace, pl_name,
+                         roas, spend, sales, purchases, total_profit, margin, be))
+
+    if rows:
+        conn = get_conn()
+        with conn:
+            conn.executemany("""
+                INSERT OR REPLACE INTO campaign_performance
+                    (snapshot_date, campaign_name, marketplace, placement_type,
+                     roas, spend, sales, purchases, total_profit, margin_per_unit, breakeven_roas)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, rows)
+        conn.close()
 
 
 def get_performance_alerts(marketplace: str, thresholds: dict = None) -> list:

@@ -33,7 +33,7 @@ from db.inventory import (
     get_inventory_overview, get_avg_daily_sales, get_inventory_alerts,
     get_latest_inventory, LOCATIONS, FBA_LOCATIONS,
 )
-from db.importer import import_orders_csv, save_recommendation, update_recommendation_outcome
+from db.importer import import_orders_csv, save_recommendation, save_recommendations_batch, update_recommendation_outcome
 from db.fba_fees import (
     import_fee_preview_csv, get_fba_fees_map, get_all_fba_fees_df,
     get_fx_rates, get_fx_rates_df, save_fx_rate,
@@ -1601,20 +1601,19 @@ with tab_ads:
                     )
                     save_performance_snapshot(results, _snap_date, detected_marketplace)
 
-                    # ── Auto-save recommendations to DB ──────────────────────────────
-                    today_str   = str(date.today())
-                    review_str  = str(date.today() + timedelta(days=14))
-                    saved_count = 0
-                    cost_map_for_asin = cost_map  # already loaded above
+                    # ── Auto-save recommendations to DB (batched) ────────────────────
+                    today_str  = str(date.today())
+                    review_str = str(date.today() + timedelta(days=14))
+                    _rec_batch = []
                     for r in results:
                         if r.is_paused:
-                            continue   # never save recommendations for paused campaigns
+                            continue
                         asin = next(
-                            (a for a in cost_map_for_asin if a.upper() in r.campaign.upper()),
+                            (a for a in cost_map if a.upper() in r.campaign.upper()),
                             None
                         )
                         for pl_rec in r.bid_recs_data:
-                            save_recommendation({
+                            _rec_batch.append({
                                 "date_given":             today_str,
                                 "asin":                   asin,
                                 "marketplace":            r.marketplace,
@@ -1631,7 +1630,7 @@ with tab_ads:
                                 "end_date":               r.end_date or None,
                                 "debug":                  pl_rec.get("debug", {}),
                             })
-                            saved_count += 1
+                    saved_count = save_recommendations_batch(_rec_batch)
                     if saved_count:
                         st.success(f"✅ {saved_count} placement recommendations auto-saved to history.")
 

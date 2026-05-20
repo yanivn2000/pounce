@@ -183,6 +183,45 @@ def save_recommendation(rec: dict) -> int:
     return row_id
 
 
+def save_recommendations_batch(recs: list[dict]) -> int:
+    """Bulk-insert/replace a list of recommendation dicts. Returns count saved."""
+    if not recs:
+        return 0
+    rows = [
+        (
+            rec.get("date_given"),
+            rec.get("asin"),
+            rec.get("marketplace", "amazon.com"),
+            rec.get("campaign_name"),
+            rec.get("placement_type"),
+            rec.get("campaign_type"),
+            rec.get("current_multiplier"),
+            rec.get("recommended_action"),
+            rec.get("recommended_multiplier"),
+            rec.get("reasoning"),
+            rec.get("window_days", 14),
+            rec.get("review_date"),
+            rec.get("score"),
+            rec.get("source", "auto"),
+            rec.get("end_date"),
+            json.dumps(rec.get("debug") or {}),
+        )
+        for rec in recs
+    ]
+    conn = get_conn()
+    with conn:
+        conn.executemany("""
+            INSERT OR REPLACE INTO recommendations
+                (date_given, asin, marketplace, campaign_name, placement_type,
+                 campaign_type, current_multiplier, recommended_action,
+                 recommended_multiplier, reasoning, window_days, review_date, score, source,
+                 end_date, debug_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, rows)
+    conn.close()
+    return len(rows)
+
+
 def update_recommendation_outcome(rec_id: int, outcome: str):
     """Record what actually happened after a recommendation."""
     conn = get_conn()

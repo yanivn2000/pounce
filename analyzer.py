@@ -802,11 +802,10 @@ def analyze_with_products(sp_path: str, sb_path: str,
     sp_grp = load_and_aggregate(sp_path, '7 Day Total Sales')
     sb_grp = load_and_aggregate(sb_path, '14 Day Total Sales')
 
-    df_sp = pd.read_excel(sp_path)
-    df_sp.columns = df_sp.columns.str.strip()
+    # Campaign type lookup — derived from already-loaded sp_grp (no extra Excel read)
     sp_types = {
         c: ('Auto' if 'AUTO' in c.upper() else 'Manual')
-        for c in df_sp['Campaign Name'].unique()
+        for c in sp_grp['Campaign'].unique()
     }
 
     results = []
@@ -819,8 +818,9 @@ def analyze_with_products(sp_path: str, sb_path: str,
                     .set_index('Campaign')['end_date'].to_dict()
                     if 'end_date' in sp_grp.columns else {})
 
-    for camp in sp_grp['Campaign'].unique():
-        sub = sp_grp[sp_grp['Campaign'] == camp].set_index('PL').drop(
+    # Use groupby so each campaign sub-frame is sliced once, not via repeated full-scan
+    for camp, sub_raw in sp_grp.groupby('Campaign', sort=False):
+        sub = sub_raw.set_index('PL').drop(
             columns=['Campaign', 'is_paused', 'end_date'], errors='ignore')
         avg_price                        = get_avg_price(sub)
         camp_target, cost_data, camp_debug = get_campaign_data(camp, avg_price)
@@ -886,8 +886,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
                     .set_index('Campaign')['end_date'].to_dict()
                     if 'end_date' in sb_grp.columns else {})
 
-    for camp in sb_grp['Campaign'].unique():
-        sub = sb_grp[sb_grp['Campaign'] == camp].set_index('PL').drop(
+    for camp, sub_raw in sb_grp.groupby('Campaign', sort=False):
+        sub = sub_raw.set_index('PL').drop(
             columns=['Campaign', 'is_paused', 'end_date'], errors='ignore')
         avg_price                          = get_avg_price(sub)
         camp_target, cost_data, camp_debug = get_campaign_data(camp, avg_price)
