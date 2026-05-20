@@ -1434,6 +1434,27 @@ with tab_ads:
                 if not _neg_alerts and not _pos_alerts:
                     st.success("✅ No significant changes detected between the last two snapshots.")
 
+                # ── Debug: show raw snapshot comparison ───────────────────────
+                with st.expander("🔍 Debug — raw snapshot comparison", expanded=False):
+                    _dbg_conn = _alerts_get_conn()
+                    _dbg_dates = [r[0] for r in _dbg_conn.execute(
+                        "SELECT DISTINCT snapshot_date FROM campaign_performance WHERE marketplace = ? ORDER BY snapshot_date DESC LIMIT 2",
+                        (_alerts_market,)
+                    ).fetchall()]
+                    st.caption(f"Two most recent snapshot dates: **{' → '.join(reversed(_dbg_dates))}**")
+                    if len(_dbg_dates) >= 2:
+                        _dbg_rows = _dbg_conn.execute("""
+                            SELECT campaign_name, placement_type, snapshot_date,
+                                   roas, spend, sales, purchases, total_profit, breakeven_roas
+                            FROM campaign_performance
+                            WHERE marketplace = ? AND snapshot_date IN (?, ?)
+                            ORDER BY campaign_name, placement_type, snapshot_date
+                        """, (_alerts_market, _dbg_dates[0], _dbg_dates[1])).fetchall()
+                        import pandas as _dbg_pd
+                        _dbg_df = _dbg_pd.DataFrame([dict(r) for r in _dbg_rows])
+                        st.dataframe(_dbg_df, use_container_width=True, hide_index=True)
+                    _dbg_conn.close()
+
                 if _neg_alerts:
                     st.error(
                         f"⚠️ **{len(_neg_alerts)} placement(s) regressed** — "
