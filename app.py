@@ -1033,7 +1033,7 @@ with tab_ads:
     _placement_tab, = st.tabs(["📍 Placement"])
 
     with _placement_tab:
-        _recs_view, _analysis_view = st.tabs(["📋 Recommendations", "📊 Analysis"])
+        _recs_view, _alerts_view, _analysis_view = st.tabs(["📋 Recommendations", "🔔 Alerts", "📊 Analysis"])
 
         with _recs_view:
             # ── RECOMMENDATIONS content ───────────────────────────────────────
@@ -1342,6 +1342,100 @@ with tab_ads:
                                     },
                                 )
 
+        with _alerts_view:
+            # ── ALERTS content ────────────────────────────────────────────────
+            st.markdown("# 🔔 Performance Alerts")
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.95rem;'>"
+                "Compares the two most recent snapshots for every campaign. "
+                "Snapshots are saved automatically each time you run an analysis.</p>",
+                unsafe_allow_html=True,
+            )
+            st.divider()
+
+            # Pick marketplace from available snapshots
+            from db.database import get_conn as _alerts_get_conn
+            _snap_markets = [
+                r[0] for r in _alerts_get_conn().execute(
+                    "SELECT DISTINCT marketplace FROM campaign_performance ORDER BY marketplace"
+                ).fetchall()
+            ]
+
+            if not _snap_markets:
+                st.info("No snapshots yet. Run an analysis first to start tracking campaign performance over time.")
+            else:
+                _alerts_market = st.selectbox(
+                    "Marketplace", _snap_markets, key="alerts_market_sel"
+                )
+                _thresh = get_alert_thresholds()
+                _all_perf_alerts = get_performance_alerts(_alerts_market, _thresh)
+                _neg_alerts = [a for a in _all_perf_alerts if a["type"] == "regression"]
+                _pos_alerts = [a for a in _all_perf_alerts if a["type"] == "improvement"]
+
+                _ac1, _ac2, _ac3 = st.columns(3)
+                _ac1.metric("📸 Snapshots stored",
+                    _alerts_get_conn().execute(
+                        "SELECT COUNT(DISTINCT snapshot_date) FROM campaign_performance WHERE marketplace = ?",
+                        (_alerts_market,)
+                    ).fetchone()[0]
+                )
+                _ac2.metric("🔴 Regressions", len(_neg_alerts))
+                _ac3.metric("🟢 Improvements", len(_pos_alerts))
+
+                st.divider()
+
+                if not _neg_alerts and not _pos_alerts:
+                    st.success("✅ No significant changes detected between the last two snapshots.")
+
+                if _neg_alerts:
+                    st.error(
+                        f"⚠️ **{len(_neg_alerts)} placement(s) regressed** — "
+                        f"ROAS dropped >{int(_thresh['alert_roas_drop_pct'])}% AND "
+                        f"profit dropped >{int(_thresh['alert_profit_drop_pct'])}% vs previous snapshot."
+                    )
+                    for _bf in _neg_alerts:
+                        with st.expander(
+                            f"🔴 {_bf['campaign']} — {_bf['placement']} "
+                            f"({_bf['before_date']} → {_bf['after_date']})", expanded=True
+                        ):
+                            _nc1, _nc2, _nc3, _nc4 = st.columns(4)
+                            _nc1.metric("ROAS Before", f"{_bf['before_roas']}x")
+                            _nc2.metric("ROAS After",  f"{_bf['after_roas']}x",
+                                        delta=f"-{_bf['roas_chg_pct']}%", delta_color="inverse")
+                            _nc3.metric("Profit Δ",    f"-{_bf['profit_chg_pct']}%",
+                                        delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}",
+                                        delta_color="inverse")
+                            _nc4.metric("Spend", f"${_bf['spend']:.2f}")
+                            st.caption(
+                                f"Purchases: {_bf['purchases']} · "
+                                f"Snapshots: {_bf['before_date']} → {_bf['after_date']}"
+                            )
+                            st.caption("💡 Consider reverting the bid multiplier for this placement.")
+
+                if _pos_alerts:
+                    st.success(
+                        f"🚀 **{len(_pos_alerts)} placement(s) improved significantly** — "
+                        f"ROAS rose >{int(_thresh['alert_roas_gain_pct'])}% AND "
+                        f"profit rose >{int(_thresh['alert_profit_gain_pct'])}% vs previous snapshot."
+                    )
+                    for _imp in _pos_alerts:
+                        with st.expander(
+                            f"🟢 {_imp['campaign']} — {_imp['placement']} "
+                            f"({_imp['before_date']} → {_imp['after_date']})", expanded=False
+                        ):
+                            _pc1, _pc2, _pc3, _pc4 = st.columns(4)
+                            _pc1.metric("ROAS Before", f"{_imp['before_roas']}x")
+                            _pc2.metric("ROAS After",  f"{_imp['after_roas']}x",
+                                        delta=f"+{_imp['roas_chg_pct']}%")
+                            _pc3.metric("Profit Δ",    f"+{_imp['profit_chg_pct']}%",
+                                        delta=f"${_imp['after_profit']:.0f} vs ${_imp['before_profit']:.0f}")
+                            _pc4.metric("Spend", f"${_imp['spend']:.2f}")
+                            st.caption(
+                                f"Purchases: {_imp['purchases']} · "
+                                f"Snapshots: {_imp['before_date']} → {_imp['after_date']}"
+                            )
+                            st.caption("✅ Consider locking in or scaling this placement.")
+
         with _analysis_view:
             # ── ANALYSIS content ──────────────────────────────────────────────
             st.markdown("# 📊 Amazon Ads Placement Analyzer")
@@ -1572,57 +1666,13 @@ with tab_ads:
                                 unsafe_allow_html=True
                             )
 
-                    # ── Performance alerts (regressions + improvements) ───────────────
-                    _all_alerts    = get_performance_alerts(detected_marketplace)
-                    _regressions   = [a for a in _all_alerts if a["type"] == "regression"]
-                    _improvements  = [a for a in _all_alerts if a["type"] == "improvement"]
-
-                    if _regressions:
-                        st.error(
-                            f"⚠️ **{len(_regressions)} placement(s) regressed** — "
-                            f"ROAS and profit dropped significantly vs the previous upload."
+                    # ── Snapshot-based alerts live in the 🔔 Alerts tab ──────────────
+                    _snap_alert_count = len(get_performance_alerts(detected_marketplace))
+                    if _snap_alert_count:
+                        st.info(
+                            f"🔔 **{_snap_alert_count} performance alert(s)** detected vs the previous snapshot. "
+                            f"See the **🔔 Alerts** tab for details."
                         )
-                        for _bf in _regressions:
-                            with st.expander(
-                                f"🔴 {_bf['campaign']} — {_bf['placement']} "
-                                f"({_bf['before_date']} → {_bf['after_date']})", expanded=True
-                            ):
-                                _bfc1, _bfc2, _bfc3, _bfc4 = st.columns(4)
-                                _bfc1.metric("ROAS Before", f"{_bf['before_roas']}x")
-                                _bfc2.metric("ROAS After",  f"{_bf['after_roas']}x",
-                                             delta=f"-{_bf['roas_chg_pct']}%", delta_color="inverse")
-                                _bfc3.metric("Profit Δ",    f"-{_bf['profit_chg_pct']}%",
-                                             delta=f"${_bf['after_profit']:.0f} vs ${_bf['before_profit']:.0f}",
-                                             delta_color="inverse")
-                                _bfc4.metric("Spend (latest)", f"${_bf['spend']:.2f}")
-                                st.caption(
-                                    f"Purchases: {_bf['purchases']} · "
-                                    f"Snapshots: {_bf['before_date']} → {_bf['after_date']}"
-                                )
-                                st.caption("💡 Consider reverting the bid multiplier for this placement.")
-
-                    if _improvements:
-                        st.success(
-                            f"🚀 **{len(_improvements)} placement(s) improved significantly** — "
-                            f"ROAS and profit rose vs the previous upload."
-                        )
-                        for _imp in _improvements:
-                            with st.expander(
-                                f"🟢 {_imp['campaign']} — {_imp['placement']} "
-                                f"({_imp['before_date']} → {_imp['after_date']})", expanded=False
-                            ):
-                                _ic1, _ic2, _ic3, _ic4 = st.columns(4)
-                                _ic1.metric("ROAS Before", f"{_imp['before_roas']}x")
-                                _ic2.metric("ROAS After",  f"{_imp['after_roas']}x",
-                                            delta=f"+{_imp['roas_chg_pct']}%")
-                                _ic3.metric("Profit Δ",    f"+{_imp['profit_chg_pct']}%",
-                                            delta=f"${_imp['after_profit']:.0f} vs ${_imp['before_profit']:.0f}")
-                                _ic4.metric("Spend (latest)", f"${_imp['spend']:.2f}")
-                                st.caption(
-                                    f"Purchases: {_imp['purchases']} · "
-                                    f"Snapshots: {_imp['before_date']} → {_imp['after_date']}"
-                                )
-                                st.caption("✅ Consider locking in or scaling this placement.")
 
                     st.divider()
                     st.markdown("### 🏆 All Campaigns — Ranked by Score")
