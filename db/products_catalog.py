@@ -81,7 +81,7 @@ def get_items() -> list[dict]:
                s.name AS supplier_name,
                i.manufacturer_cost, i.service_cost,
                (i.manufacturer_cost + i.service_cost) AS total_cost,
-               i.net_weight_grams, i.hst_code_na, i.hst_code_uk, i.upc, i.currency, i.notes
+               i.net_weight_grams, i.hst_code_na, i.hst_code_uk, i.supplier_code, i.currency, i.notes
         FROM items i
         LEFT JOIN suppliers s ON s.id = i.supplier_id
         ORDER BY i.name
@@ -96,7 +96,7 @@ def upsert_item(data: dict, item_id: int | None = None) -> int:
         data.get("name"), data.get("item_type"), data.get("supplier_id"),
         data.get("manufacturer_cost", 0), data.get("service_cost", 0),
         data.get("net_weight_grams"), data.get("hst_code_na"), data.get("hst_code_uk"),
-        data.get("upc"), data.get("currency", "USD"), data.get("notes"),
+        data.get("supplier_code"), data.get("currency", "USD"), data.get("notes"),
     )
     with conn:
         if item_id:
@@ -104,7 +104,7 @@ def upsert_item(data: dict, item_id: int | None = None) -> int:
                 UPDATE items
                 SET name=?, item_type=?, supplier_id=?, manufacturer_cost=?,
                     service_cost=?, net_weight_grams=?, hst_code_na=?, hst_code_uk=?,
-                    upc=?, currency=?, notes=?, updated_at=datetime('now')
+                    supplier_code=?, currency=?, notes=?, updated_at=datetime('now')
                 WHERE id=?
             """, (*fields, item_id))
             result_id = item_id
@@ -112,7 +112,7 @@ def upsert_item(data: dict, item_id: int | None = None) -> int:
             cur = conn.execute("""
                 INSERT INTO items
                     (name, item_type, supplier_id, manufacturer_cost, service_cost,
-                     net_weight_grams, hst_code_na, hst_code_uk, upc, currency, notes)
+                     net_weight_grams, hst_code_na, hst_code_uk, supplier_code, currency, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, fields)
             result_id = cur.lastrowid
@@ -143,7 +143,7 @@ def get_products_catalog() -> list[dict]:
 def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
     conn = get_conn()
     fields = (
-        data.get("asin"), data.get("sku"), data.get("name"),
+        data.get("asin"), data.get("sku"), data.get("upc"), data.get("name"),
         data.get("product_type"),
         data.get("width_cm"), data.get("length_cm"), data.get("height_cm"),
         data.get("weight_kg"), data.get("shipping_cost", 0),
@@ -157,7 +157,7 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
         if product_id:
             conn.execute("""
                 UPDATE products_catalog
-                SET asin=?, sku=?, name=?, product_type=?,
+                SET asin=?, sku=?, upc=?, name=?, product_type=?,
                     width_cm=?, length_cm=?, height_cm=?, weight_kg=?,
                     shipping_cost=?, fba_fee=?,
                     is_new_product=?, notes=?,
@@ -170,12 +170,12 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
         else:
             cur = conn.execute("""
                 INSERT INTO products_catalog
-                    (asin, sku, name, product_type,
+                    (asin, sku, upc, name, product_type,
                      width_cm, length_cm, height_cm, weight_kg,
                      shipping_cost, fba_fee, is_new_product, notes,
                      carton_units, carton_length_cm, carton_width_cm,
                      carton_height_cm, carton_nw_kg, carton_gw_kg, carton_cbm)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, fields)
             result_id = cur.lastrowid
     conn.close()
@@ -369,7 +369,7 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
             "net_weight_grams":  _f("net_weight_grams") or _f("net_width_cm") or None,
             "hst_code_na":       _s("hst_code_na") or _s("hst_code"),
             "hst_code_uk":       _s("hst_code_uk"),
-            "upc":               _s("upc"),
+            "supplier_code":     _s("supplier_code"),
             "currency":          _s("currency") or "USD",
             "notes":             _s("notes"),
         }
@@ -471,6 +471,7 @@ def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
             data = {
                 "asin":          asin,
                 "sku":           _s(row, "sku"),
+                "upc":           _s(row, "upc"),
                 "name":          name,
                 "product_type":  _s(row, "product_type"),
                 "width_cm":      _f(row, "width_cm") or None,

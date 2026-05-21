@@ -239,6 +239,8 @@ def init_db():
     _migrate_products_schema_v2(conn)
     _migrate_items_net_weight(conn)
     _migrate_products_carton(conn)
+    _migrate_items_supplier_code(conn)
+    _migrate_products_upc(conn)
     conn.close()
 
 
@@ -708,5 +710,30 @@ def _migrate_products_carton(conn: sqlite3.Connection):
             if col not in cols:
                 conn.execute(f"ALTER TABLE products_catalog ADD COLUMN {col} {typedef}")
         conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_items_supplier_code(conn: sqlite3.Connection):
+    """Rename items.upc → items.supplier_code."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(items)").fetchall()]
+        if "supplier_code" not in cols:
+            if "upc" in cols:
+                conn.execute("ALTER TABLE items RENAME COLUMN upc TO supplier_code")
+            else:
+                conn.execute("ALTER TABLE items ADD COLUMN supplier_code TEXT")
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_products_upc(conn: sqlite3.Connection):
+    """Add upc column to products_catalog."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(products_catalog)").fetchall()]
+        if "upc" not in cols:
+            conn.execute("ALTER TABLE products_catalog ADD COLUMN upc TEXT")
+            conn.commit()
     except Exception:
         pass

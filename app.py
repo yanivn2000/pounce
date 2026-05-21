@@ -766,7 +766,7 @@ with _items_tab:
         _ITEMS_COLS = [
             "name", "item_type", "supplier_name", "manufacturer_cost",
             "service_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
-            "upc", "currency", "notes",
+            "supplier_code", "currency", "notes",
         ]
         if _item_list:
             _items_export_df = pd.DataFrame(_item_list).reindex(columns=_ITEMS_COLS).fillna("")
@@ -784,7 +784,7 @@ with _items_tab:
         st.markdown(
             "**Upload columns:** `name`\\*, `item_type`\\*, `supplier_name`, "
             "`manufacturer_cost`, `service_cost`, `net_weight_grams`, "
-            "`hst_code_na`, `hst_code_uk`, `upc`, `currency`, `notes`"
+            "`hst_code_na`, `hst_code_uk`, `supplier_code`, `currency`, `notes`"
         )
         # ── Upload ────────────────────────────────────────────────────────────
         _items_csv = st.file_uploader("Upload Items CSV", type=["csv"], key="items_import_csv")
@@ -802,12 +802,12 @@ with _items_tab:
             _item_df[[
                 "name", "item_type", "supplier_name", "manufacturer_cost",
                 "service_cost", "total_cost", "hst_code_na", "hst_code_uk",
-                "upc", "net_weight_grams", "currency"
+                    "supplier_code", "net_weight_grams", "currency"
             ]].rename(columns={
                 "name": "Name", "item_type": "Type", "supplier_name": "Supplier",
                 "manufacturer_cost": "Mfg Cost ($)", "service_cost": "Service Cost ($)",
                 "total_cost": "Total Cost ($)", "hst_code_na": "HS Code (NA)",
-                "hst_code_uk": "HS Code (UK)", "upc": "UPC",
+                "hst_code_uk": "HS Code (UK)", "supplier_code": "Supplier Code",
                 "net_weight_grams": "Net Weight (g)", "currency": "Currency",
             }),
             use_container_width=True, hide_index=True
@@ -868,7 +868,7 @@ with _items_tab:
             with _c4:
                 _item_hst_uk = st.text_input("HS Code (UK)", value=_item_rec.get("hst_code_uk", "") or "")
             with _c5:
-                _item_upc = st.text_input("UPC", value=_item_rec.get("upc", "") or "")
+                _item_supplier_code = st.text_input("Supplier Code", value=_item_rec.get("supplier_code", "") or "")
             _item_currency = st.selectbox(
                 "Currency",
                 _item_currencies,
@@ -889,7 +889,7 @@ with _items_tab:
                             "net_weight_grams": _item_net_weight if _item_net_weight else None,
                             "hst_code_na": _item_hst_na.strip() or None,
                             "hst_code_uk": _item_hst_uk.strip() or None,
-                            "upc": _item_upc.strip() or None,
+                            "supplier_code": _item_supplier_code.strip() or None,
                             "currency": _item_currency,
                             "notes": _item_notes.strip() or None,
                         },
@@ -934,7 +934,7 @@ with _catalog_tab:
         # ── Download current data (one row per component; products with no
         #    components get one row with blank item_name/item_quantity) ────────
         _PROD_COLS = [
-            "name", "asin", "sku", "product_type",
+            "name", "asin", "sku", "upc", "product_type",
             "width_cm", "length_cm", "height_cm", "weight_kg",
             "shipping_cost", "fba_fee", "is_new_product", "notes",
             "carton_units", "carton_length_cm", "carton_width_cm", "carton_height_cm",
@@ -962,7 +962,7 @@ with _catalog_tab:
             use_container_width=True,
         )
         st.markdown(
-            "**Product columns:** `name`\\*, `asin`, `sku`, `product_type`, "
+            "**Product columns:** `name`\\*, `asin`, `sku`, `upc`, `product_type`, "
             "`width_cm`, `length_cm`, `height_cm`, `weight_kg`, "
             "`shipping_cost`, `fba_fee`, `is_new_product`, `notes`, "
             "`carton_units`, `carton_length_cm`, `carton_width_cm`, `carton_height_cm`, "
@@ -989,7 +989,8 @@ with _catalog_tab:
                 "Name": _cp["name"],
                 "Type": _cp["product_type"] or "",
                 "ASIN": _cp["asin"] or "",
-                "SKU": _cp["sku"] or "",
+                "SKU":  _cp["sku"]  or "",
+                "UPC":  _cp.get("upc") or "",
                 "Dims (WxLxH cm)": (
                     f"{_cp['width_cm'] or '?'} × {_cp['length_cm'] or '?'} × {_cp['height_cm'] or '?'}"
                     if any([_cp["width_cm"], _cp["length_cm"], _cp["height_cm"]]) else ""
@@ -1045,7 +1046,8 @@ with _catalog_tab:
             with _cfa:
                 _cat_name = st.text_input("Product name *", value=_cat_rec.get("name", ""))
                 _cat_asin = st.text_input("ASIN", value=_cat_rec.get("asin", "") or "")
-                _cat_sku = st.text_input("SKU", value=_cat_rec.get("sku", "") or "")
+                _cat_sku  = st.text_input("SKU",  value=_cat_rec.get("sku",  "") or "")
+                _cat_upc  = st.text_input("UPC",  value=_cat_rec.get("upc",  "") or "")
             with _cfb:
                 _cat_ptype = st.selectbox(
                     "Product type",
@@ -1155,7 +1157,8 @@ with _catalog_tab:
                     _saved_pid = upsert_product_catalog(
                         data={
                             "asin": _cat_asin.strip().upper() or None,
-                            "sku": _cat_sku.strip() or None,
+                            "sku":  _cat_sku.strip() or None,
+                            "upc":  _cat_upc.strip() or None,
                             "name": _cat_name.strip(),
                             "product_type": _cat_ptype,
                             "width_cm": _cat_w if _cat_w else None,
