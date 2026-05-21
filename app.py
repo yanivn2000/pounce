@@ -741,7 +741,28 @@ with _items_tab:
     _sup_list_for_items = get_suppliers()
 
     with st.expander("📥 Import / Export Items CSV"):
-        # ── Download current data ──────────────────────────────────────────────
+        # ── Supplier reference ─────────────────────────────────────────────────
+        if _sup_list_for_items:
+            st.markdown("**✅ Valid supplier names** — copy exactly into your CSV:")
+            for _s in _sup_list_for_items:
+                st.code(_s["name"], language=None)
+            # Also offer as a downloadable reference CSV
+            _sup_ref_df = pd.DataFrame(
+                [{"supplier_name": s["name"], "category": s["category"],
+                  "type": "Direct Manufacturer" if s["is_manufacturer"] else "Agent / Intermediary"}
+                 for s in _sup_list_for_items]
+            )
+            _sup_ref_buf = io.StringIO()
+            _sup_ref_df.to_csv(_sup_ref_buf, index=False)
+            st.download_button(
+                "⬇️ Download suppliers reference CSV",
+                data=_sup_ref_buf.getvalue(),
+                file_name="suppliers_reference.csv",
+                mime="text/csv",
+            )
+            st.divider()
+
+        # ── Download current items ─────────────────────────────────────────────
         _ITEMS_COLS = [
             "name", "item_type", "supplier_name", "manufacturer_cost",
             "service_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",

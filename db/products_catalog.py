@@ -321,9 +321,10 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
     if missing:
         return 0, [f"Missing required columns: {missing}"]
 
-    # Build supplier name → id map; auto-create missing suppliers
+    # Build supplier name → id map (case-insensitive, whitespace-stripped)
     suppliers = get_suppliers()
-    sup_map = {s["name"].lower(): s["id"] for s in suppliers}
+    sup_map = {s["name"].strip().lower(): s["id"] for s in suppliers}
+    valid_supplier_names = [s["name"] for s in suppliers]
 
     warnings: list[str] = []
     imported = 0
@@ -335,19 +336,18 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
             continue
         item_type = str(row.get("item_type", "fabric")).strip()
 
-        # Resolve supplier
+        # Resolve supplier — must exist in the closed list
         sup_id = None
         sup_name_raw = str(row.get("supplier_name", "")).strip()
-        if sup_name_raw:
-            key = sup_name_raw.lower()
+        if sup_name_raw and sup_name_raw.lower() != "nan":
+            key = sup_name_raw.strip().lower()
             if key in sup_map:
                 sup_id = sup_map[key]
             else:
-                sup_id = upsert_supplier(
-                    name=sup_name_raw, category="other",
-                    is_manufacturer=1, notes="auto-created via CSV import"
+                warnings.append(
+                    f"Row '{name}': supplier '{sup_name_raw}' not found. "
+                    f"Valid names: {', '.join(valid_supplier_names)}. Item saved without supplier."
                 )
-                sup_map[key] = sup_id
 
         def _f(col, default=0.0):
             try:
