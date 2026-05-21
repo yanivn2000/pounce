@@ -733,12 +733,32 @@ with _items_tab:
     _item_list = get_items()
     _sup_list_for_items = get_suppliers()
 
-    with st.expander("📥 Import Items from CSV"):
+    with st.expander("📥 Import / Export Items CSV"):
+        # ── Download current data ──────────────────────────────────────────────
+        _ITEMS_COLS = [
+            "name", "item_type", "supplier_name", "manufacturer_cost",
+            "service_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
+            "upc", "currency", "notes",
+        ]
+        if _item_list:
+            _items_export_df = pd.DataFrame(_item_list).reindex(columns=_ITEMS_COLS).fillna("")
+        else:
+            _items_export_df = pd.DataFrame(columns=_ITEMS_COLS)
+        _items_csv_buf = io.StringIO()
+        _items_export_df.to_csv(_items_csv_buf, index=False)
+        st.download_button(
+            "⬇️ Download existing items as CSV",
+            data=_items_csv_buf.getvalue(),
+            file_name="items_export.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
         st.markdown(
-            "**Expected columns:** `name`, `item_type`, `supplier_name`, "
+            "**Upload columns:** `name`\\*, `item_type`\\*, `supplier_name`, "
             "`manufacturer_cost`, `service_cost`, `net_weight_grams`, "
             "`hst_code_na`, `hst_code_uk`, `upc`, `currency`, `notes`"
         )
+        # ── Upload ────────────────────────────────────────────────────────────
         _items_csv = st.file_uploader("Upload Items CSV", type=["csv"], key="items_import_csv")
         if _items_csv:
             _imp_n, _imp_warns = import_items_csv(_items_csv)
@@ -882,14 +902,47 @@ with _catalog_tab:
     _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}
     _prod_types = ["single_mug", "set_two_mugs", "mug_with_socks", "silicon_coaster", "other"]
 
-    with st.expander("📥 Import Products from CSV"):
+    with st.expander("📥 Import / Export Products CSV"):
+        # ── Download current data (one row per component; products with no
+        #    components get one row with blank item_name/item_quantity) ────────
+        _PROD_COLS = [
+            "name", "asin", "sku", "product_type",
+            "width_cm", "length_cm", "height_cm", "weight_kg",
+            "shipping_cost", "fba_fee", "is_new_product", "notes",
+            "carton_units", "carton_length_cm", "carton_width_cm", "carton_height_cm",
+            "carton_nw_kg", "carton_gw_kg", "carton_cbm",
+            "item_name", "item_quantity",
+        ]
+        _prod_export_rows = []
+        for _pe in _cat_list:
+            _pe_comps = get_product_components(_pe["id"])
+            _pe_base = {c: _pe.get(c, "") for c in _PROD_COLS if c not in ("item_name", "item_quantity")}
+            _pe_base["is_new_product"] = 1 if _pe.get("is_new_product") else 0
+            if _pe_comps:
+                for _pec in _pe_comps:
+                    _prod_export_rows.append({**_pe_base, "item_name": _pec["item_name"], "item_quantity": _pec["quantity"]})
+            else:
+                _prod_export_rows.append({**_pe_base, "item_name": "", "item_quantity": ""})
+        _prod_export_df = pd.DataFrame(_prod_export_rows if _prod_export_rows else [], columns=_PROD_COLS).fillna("")
+        _prod_csv_buf = io.StringIO()
+        _prod_export_df.to_csv(_prod_csv_buf, index=False)
+        st.download_button(
+            "⬇️ Download existing products as CSV",
+            data=_prod_csv_buf.getvalue(),
+            file_name="products_export.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
         st.markdown(
             "**Product columns:** `name`\\*, `asin`, `sku`, `product_type`, "
             "`width_cm`, `length_cm`, `height_cm`, `weight_kg`, "
-            "`shipping_cost`, `fba_fee`, `is_new_product`, `notes`  \n"
+            "`shipping_cost`, `fba_fee`, `is_new_product`, `notes`, "
+            "`carton_units`, `carton_length_cm`, `carton_width_cm`, `carton_height_cm`, "
+            "`carton_nw_kg`, `carton_gw_kg`, `carton_cbm`  \n"
             "**Component columns (optional):** `item_name`, `item_quantity`  \n"
             "Use multiple rows with the same `name`/`asin` to add multiple components."
         )
+        # ── Upload ────────────────────────────────────────────────────────────
         _cat_csv = st.file_uploader("Upload Products CSV", type=["csv"], key="catalog_import_csv")
         if _cat_csv:
             _cat_n, _cat_warns = import_products_catalog_csv(_cat_csv)
