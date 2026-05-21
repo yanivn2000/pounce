@@ -1394,50 +1394,47 @@ with tab_ads:
 
                 st.divider()
 
-                # ── Threshold editor ──────────────────────────────────────────
+                # ── Threshold editor — wrapped in st.form so +/- clicks don't rerun ──
                 with st.expander("⚙️ Alert Thresholds", expanded=False):
                     st.caption(
                         "Saved to the database — changes apply immediately to the alerts above without re-uploading."
                     )
-                    _at1, _at2 = st.columns(2)
-                    with _at1:
-                        st.markdown("##### 🔴 Negative alert (regression)")
-                        _rd = st.number_input(
-                            "ROAS drop % to trigger alert",
-                            min_value=5, max_value=90, step=5,
-                            value=int(_thresh.get("alert_roas_drop_pct", 30)),
-                            key="thresh_roas_drop",
-                            help="Alert fires when ROAS drops by this % or more vs the previous snapshot."
-                        )
-                        _pd = st.number_input(
-                            "Profit drop % to trigger alert",
-                            min_value=5, max_value=90, step=5,
-                            value=int(_thresh.get("alert_profit_drop_pct", 20)),
-                            key="thresh_profit_drop",
-                            help="Both ROAS AND profit must drop to fire a negative alert."
-                        )
-                    with _at2:
-                        st.markdown("##### 🟢 Positive alert (improvement)")
-                        _rg = st.number_input(
-                            "ROAS gain % to trigger alert",
-                            min_value=5, max_value=90, step=5,
-                            value=int(_thresh.get("alert_roas_gain_pct", 30)),
-                            key="thresh_roas_gain",
-                            help="Alert fires when ROAS rises by this % or more vs the previous snapshot."
-                        )
-                        _pg = st.number_input(
-                            "Profit gain % to trigger alert",
-                            min_value=5, max_value=90, step=5,
-                            value=int(_thresh.get("alert_profit_gain_pct", 20)),
-                            key="thresh_profit_gain",
-                            help="Both ROAS AND profit must rise to fire a positive alert."
-                        )
-                    if st.button("💾 Save Thresholds", key="save_thresholds"):
-                        save_setting("alert_roas_drop_pct",   _rd)
-                        save_setting("alert_profit_drop_pct", _pd)
-                        save_setting("alert_roas_gain_pct",   _rg)
-                        save_setting("alert_profit_gain_pct", _pg)
-                        st.rerun()  # reload page so _thresh and alerts use new values
+                    with st.form("alert_thresholds_form"):
+                        _at1, _at2 = st.columns(2)
+                        with _at1:
+                            st.markdown("##### 🔴 Negative alert (regression)")
+                            _rd = st.number_input(
+                                "ROAS drop % to trigger alert",
+                                min_value=5, max_value=90, step=5,
+                                value=int(_thresh.get("alert_roas_drop_pct", 30)),
+                                help="Alert fires when ROAS drops by this % or more vs the previous snapshot."
+                            )
+                            _pd = st.number_input(
+                                "Profit drop % to trigger alert",
+                                min_value=5, max_value=90, step=5,
+                                value=int(_thresh.get("alert_profit_drop_pct", 20)),
+                                help="Both ROAS AND profit must drop to fire a negative alert."
+                            )
+                        with _at2:
+                            st.markdown("##### 🟢 Positive alert (improvement)")
+                            _rg = st.number_input(
+                                "ROAS gain % to trigger alert",
+                                min_value=5, max_value=90, step=5,
+                                value=int(_thresh.get("alert_roas_gain_pct", 30)),
+                                help="Alert fires when ROAS rises by this % or more vs the previous snapshot."
+                            )
+                            _pg = st.number_input(
+                                "Profit gain % to trigger alert",
+                                min_value=5, max_value=90, step=5,
+                                value=int(_thresh.get("alert_profit_gain_pct", 20)),
+                                help="Both ROAS AND profit must rise to fire a positive alert."
+                            )
+                        if st.form_submit_button("💾 Save Thresholds"):
+                            save_setting("alert_roas_drop_pct",   _rd)
+                            save_setting("alert_profit_drop_pct", _pd)
+                            save_setting("alert_roas_gain_pct",   _rg)
+                            save_setting("alert_profit_gain_pct", _pg)
+                            st.rerun()
 
                 st.divider()
 
