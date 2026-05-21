@@ -664,30 +664,37 @@ with _suppliers_tab:
             else:
                 _sup_rec = {}
         else:
+            _sup_sel = "__new__"
             _sup_rec = {}
 
+        # Use the selection as a key suffix so all widgets reset when the
+        # dropdown changes (prevents stale values showing for "— New supplier —")
+        _sk = _sup_sel if _sup_list else "__new__"
+
         with st.form("supplier_form"):
-            _sup_name = st.text_input("Name *", value=_sup_rec.get("name", ""))
+            _sup_name = st.text_input("Name *", value=_sup_rec.get("name", ""), key=f"sup_name_{_sk}")
             _sup_cat = st.selectbox(
                 "Category",
                 ["mugs", "socks", "silicon", "other"],
                 index=["mugs", "socks", "silicon", "other"].index(_sup_rec["category"])
                 if _sup_rec.get("category") in ["mugs", "socks", "silicon", "other"] else 0,
+                key=f"sup_cat_{_sk}",
             )
             _sup_type = st.radio(
                 "Supplier type",
                 ["Direct Manufacturer", "Agent / Intermediary"],
                 index=0 if _sup_rec.get("is_manufacturer", 1) else 1,
                 horizontal=True,
+                key=f"sup_type_{_sk}",
             )
             _sup_col1, _sup_col2 = st.columns(2)
             with _sup_col1:
-                _sup_contact = st.text_input("Contact person", value=_sup_rec.get("contact_person", "") or "")
-                _sup_email   = st.text_input("Email", value=_sup_rec.get("email", "") or "")
+                _sup_contact = st.text_input("Contact person", value=_sup_rec.get("contact_person", "") or "", key=f"sup_contact_{_sk}")
+                _sup_email   = st.text_input("Email", value=_sup_rec.get("email", "") or "", key=f"sup_email_{_sk}")
             with _sup_col2:
-                _sup_tel     = st.text_input("Tel", value=_sup_rec.get("tel", "") or "")
-                _sup_address = st.text_input("Address", value=_sup_rec.get("address", "") or "")
-            _sup_notes = st.text_input("Notes", value=_sup_rec.get("notes", "") or "")
+                _sup_tel     = st.text_input("Tel", value=_sup_rec.get("tel", "") or "", key=f"sup_tel_{_sk}")
+                _sup_address = st.text_input("Address", value=_sup_rec.get("address", "") or "", key=f"sup_address_{_sk}")
+            _sup_notes = st.text_input("Notes", value=_sup_rec.get("notes", "") or "", key=f"sup_notes_{_sk}")
             if st.form_submit_button("💾 Save Supplier", type="primary"):
                 if _sup_name.strip():
                     upsert_supplier(
