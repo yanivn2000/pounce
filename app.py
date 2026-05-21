@@ -43,6 +43,13 @@ from db.queries import (
     get_change_log, get_marketplaces, get_order_date_range, count_orders,
     get_units_matrix, get_weekly_units_matrix, get_weekly_units_matrix_yoy,
 )
+from db.products_catalog import (
+    get_suppliers, upsert_supplier, delete_supplier,
+    get_items, upsert_item, delete_item,
+    get_products_catalog, upsert_product_catalog, delete_product_catalog,
+    get_product_components, set_product_components,
+    calc_product_cost, sync_product_to_costs,
+)
 
 init_db()
 
@@ -611,7 +618,9 @@ with tab_inv:
 # TAB — PROFIT
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_profit:
-    _products_tab, = st.tabs(["📦 Products & Costs"])
+    _products_tab, _suppliers_tab, _items_tab, _catalog_tab = st.tabs([
+        "📦 Products & Costs", "🏭 Suppliers", "🧩 Items", "📋 Products Catalog"
+    ])
     tab_products = _products_tab
 
 with tab_products:
@@ -721,6 +730,415 @@ with tab_products:
         save_products_db(edited_df)
         st.success("✅ Product costs saved. Will be used in next analysis run.")
         st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — SUPPLIERS
+# ══════════════════════════════════════════════════════════════════════════════
+with _suppliers_tab:
+    st.markdown("# 🏭 Suppliers")
+    st.markdown(
+        f"<p style='color:{T['text_secondary']};'>Manage your supplier and manufacturer contacts.</p>",
+        unsafe_allow_html=True
+    )
+    st.divider()
+
+    _sup_list = get_suppliers()
+    if _sup_list:
+        _sup_df = pd.DataFrame(_sup_list)
+        _sup_df["Type"] = _sup_df["is_manufacturer"].apply(
+            lambda x: "Direct Manufacturer" if x else "Agent / Intermediary"
+        )
+        st.dataframe(
+            _sup_df[["name", "category", "Type", "notes"]].rename(columns={
+                "name": "Name", "category": "Category", "notes": "Notes"
+            }),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("No suppliers yet. Add one below.")
+
+    st.divider()
+
+    with st.expander("➕ Add / Edit Supplier", expanded=not _sup_list):
+        _sup_edit_id = None
+        if _sup_list:
+            _sup_names = ["— New supplier —"] + [s["name"] for s in _sup_list]
+            _sup_sel = st.selectbox("Edit existing supplier", _sup_names, key="sup_edit_sel")
+            if _sup_sel != "— New supplier —":
+                _sup_rec = next(s for s in _sup_list if s["name"] == _sup_sel)
+                _sup_edit_id = _sup_rec["id"]
+            else:
+                _sup_rec = {}
+        else:
+            _sup_rec = {}
+
+        with st.form("supplier_form"):
+            _sup_name = st.text_input("Name *", value=_sup_rec.get("name", ""))
+            _sup_cat = st.selectbox(
+                "Category",
+                ["mugs", "socks", "silicon", "other"],
+                index=["mugs", "socks", "silicon", "other"].index(_sup_rec["category"])
+                if _sup_rec.get("category") in ["mugs", "socks", "silicon", "other"] else 0,
+            )
+            _sup_type = st.radio(
+                "Supplier type",
+                ["Direct Manufacturer", "Agent / Intermediary"],
+                index=0 if _sup_rec.get("is_manufacturer", 1) else 1,
+                horizontal=True,
+            )
+            _sup_notes = st.text_input("Notes", value=_sup_rec.get("notes", "") or "")
+            if st.form_submit_button("💾 Save Supplier", type="primary"):
+                if _sup_name.strip():
+                    upsert_supplier(
+                        name=_sup_name.strip(),
+                        category=_sup_cat,
+                        is_manufacturer=1 if _sup_type == "Direct Manufacturer" else 0,
+                        notes=_sup_notes.strip() or None,
+                        supplier_id=_sup_edit_id,
+                    )
+                    st.success("✅ Supplier saved.")
+                    st.rerun()
+                else:
+                    st.warning("Supplier name is required.")
+
+    if _sup_list:
+        st.divider()
+        st.markdown("#### 🗑️ Delete Supplier")
+        _del_sup_name = st.selectbox(
+            "Select supplier to delete", [s["name"] for s in _sup_list], key="del_sup_sel"
+        )
+        _del_sup_confirm = st.checkbox("Confirm deletion", key="del_sup_confirm")
+        if st.button("🗑️ Delete Supplier", disabled=not _del_sup_confirm, key="del_sup_btn"):
+            _del_sup_id = next(s["id"] for s in _sup_list if s["name"] == _del_sup_name)
+            delete_supplier(_del_sup_id)
+            st.success(f"✅ Supplier '{_del_sup_name}' deleted.")
+            st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — ITEMS
+# ══════════════════════════════════════════════════════════════════════════════
+with _items_tab:
+    st.markdown("# 🧩 Items")
+    st.markdown(
+        f"<p style='color:{T['text_secondary']};'>Raw items and components used to assemble products.</p>",
+        unsafe_allow_html=True
+    )
+    st.divider()
+
+    _item_list = get_items()
+    _sup_list_for_items = get_suppliers()
+
+    if _item_list:
+        _item_df = pd.DataFrame(_item_list)
+        st.dataframe(
+            _item_df[[
+                "name", "item_type", "supplier_name", "manufacturer_cost",
+                "service_cost", "total_cost", "hst_code", "upc", "net_width_cm", "currency"
+            ]].rename(columns={
+                "name": "Name", "item_type": "Type", "supplier_name": "Supplier",
+                "manufacturer_cost": "Mfg Cost ($)", "service_cost": "Service Cost ($)",
+                "total_cost": "Total Cost ($)", "hst_code": "HST Code",
+                "upc": "UPC", "net_width_cm": "Net Width (cm)", "currency": "Currency",
+            }),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("No items yet. Add one below.")
+
+    st.divider()
+
+    with st.expander("➕ Add / Edit Item", expanded=not _item_list):
+        _item_edit_id = None
+        _item_rec = {}
+        if _item_list:
+            _item_names = ["— New item —"] + [i["name"] for i in _item_list]
+            _item_sel = st.selectbox("Edit existing item", _item_names, key="item_edit_sel")
+            if _item_sel != "— New item —":
+                _item_rec = next(i for i in _item_list if i["name"] == _item_sel)
+                _item_edit_id = _item_rec["id"]
+
+        _item_types = ["mug", "socks", "silicon_coaster", "other"]
+        _item_currencies = ["USD", "GBP", "EUR", "CAD", "AUD"]
+        _sup_options = [None] + [s["name"] for s in _sup_list_for_items]
+        _sup_ids_by_name = {s["name"]: s["id"] for s in _sup_list_for_items}
+
+        with st.form("item_form"):
+            _item_name = st.text_input("Name *", value=_item_rec.get("name", ""))
+            _item_type = st.selectbox(
+                "Item type",
+                _item_types,
+                index=_item_types.index(_item_rec["item_type"])
+                if _item_rec.get("item_type") in _item_types else 0,
+            )
+            _item_sup_name = st.selectbox(
+                "Supplier",
+                _sup_options,
+                index=_sup_options.index(_item_rec.get("supplier_name"))
+                if _item_rec.get("supplier_name") in _sup_options else 0,
+            )
+            _c1, _c2 = st.columns(2)
+            with _c1:
+                _item_mfg_cost = st.number_input(
+                    "Manufacturer cost ($)", min_value=0.0, step=0.01, format="%.2f",
+                    value=float(_item_rec.get("manufacturer_cost", 0) or 0),
+                )
+            with _c2:
+                _item_svc_cost = st.number_input(
+                    "Service cost ($)", min_value=0.0, step=0.01, format="%.2f",
+                    value=float(_item_rec.get("service_cost", 0) or 0),
+                )
+            st.caption("Service cost = agent fee. It is NOT included in customs calculations.")
+            _item_width = st.number_input(
+                "Net width (cm)", min_value=0.0, step=0.1, format="%.1f",
+                value=float(_item_rec.get("net_width_cm", 0) or 0),
+            )
+            _c3, _c4 = st.columns(2)
+            with _c3:
+                _item_hst = st.text_input("HST code", value=_item_rec.get("hst_code", "") or "")
+            with _c4:
+                _item_upc = st.text_input("UPC", value=_item_rec.get("upc", "") or "")
+            _item_currency = st.selectbox(
+                "Currency",
+                _item_currencies,
+                index=_item_currencies.index(_item_rec["currency"])
+                if _item_rec.get("currency") in _item_currencies else 0,
+            )
+            _item_notes = st.text_input("Notes", value=_item_rec.get("notes", "") or "")
+
+            if st.form_submit_button("💾 Save Item", type="primary"):
+                if _item_name.strip():
+                    upsert_item(
+                        data={
+                            "name": _item_name.strip(),
+                            "item_type": _item_type,
+                            "supplier_id": _sup_ids_by_name.get(_item_sup_name) if _item_sup_name else None,
+                            "manufacturer_cost": _item_mfg_cost,
+                            "service_cost": _item_svc_cost,
+                            "net_width_cm": _item_width if _item_width else None,
+                            "hst_code": _item_hst.strip() or None,
+                            "upc": _item_upc.strip() or None,
+                            "currency": _item_currency,
+                            "notes": _item_notes.strip() or None,
+                        },
+                        item_id=_item_edit_id,
+                    )
+                    st.success("✅ Item saved.")
+                    st.rerun()
+                else:
+                    st.warning("Item name is required.")
+
+    if _item_list:
+        st.divider()
+        st.markdown("#### 🗑️ Delete Item")
+        _del_item_name = st.selectbox(
+            "Select item to delete", [i["name"] for i in _item_list], key="del_item_sel"
+        )
+        _del_item_confirm = st.checkbox("Confirm deletion", key="del_item_confirm")
+        if st.button("🗑️ Delete Item", disabled=not _del_item_confirm, key="del_item_btn"):
+            _del_item_id = next(i["id"] for i in _item_list if i["name"] == _del_item_name)
+            delete_item(_del_item_id)
+            st.success(f"✅ Item '{_del_item_name}' deleted.")
+            st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — PRODUCTS CATALOG
+# ══════════════════════════════════════════════════════════════════════════════
+with _catalog_tab:
+    st.markdown("# 📋 Products Catalog")
+    st.markdown(
+        f"<p style='color:{T['text_secondary']};'>Assembled products with components, dimensions, "
+        f"and full landed-cost breakdown.</p>",
+        unsafe_allow_html=True
+    )
+    st.divider()
+
+    _cat_list = get_products_catalog()
+    _items_for_cat = get_items()
+    _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}
+    _prod_types = ["single_mug", "set_two_mugs", "mug_with_socks", "silicon_coaster", "other"]
+
+    if _cat_list:
+        # Build display table with computed landed cost
+        _cat_rows = []
+        for _cp in _cat_list:
+            _breakdown = calc_product_cost(_cp["id"])
+            _cat_rows.append({
+                "Name": _cp["name"],
+                "Type": _cp["product_type"] or "",
+                "ASIN": _cp["asin"] or "",
+                "Marketplace": _cp["marketplace"] or "",
+                "Dims (WxLxH cm)": (
+                    f"{_cp['width_cm'] or '?'} × {_cp['length_cm'] or '?'} × {_cp['height_cm'] or '?'}"
+                    if any([_cp["width_cm"], _cp["length_cm"], _cp["height_cm"]]) else ""
+                ),
+                "Weight (kg)": _cp["weight_kg"] or "",
+                "Landed Cost ($)": f"${_breakdown.get('landed_cost', 0):.2f}" if _breakdown else "—",
+            })
+        st.dataframe(pd.DataFrame(_cat_rows), use_container_width=True, hide_index=True)
+
+        # Cost breakdown for selected product
+        st.markdown("#### 📊 Cost Breakdown")
+        _breakdown_sel = st.selectbox(
+            "Select product to view breakdown",
+            [p["name"] for p in _cat_list],
+            key="cat_breakdown_sel",
+        )
+        _bd_product = next(p for p in _cat_list if p["name"] == _breakdown_sel)
+        _bd = calc_product_cost(_bd_product["id"])
+        if _bd:
+            if _bd["items"]:
+                _bd_df = pd.DataFrame([{
+                    "Item": r["name"],
+                    "Qty": r["qty"],
+                    "Mfg Cost ($)": f"${r['mfg_cost']:.2f}",
+                    "Service Cost ($)": f"${r['service_cost']:.2f}",
+                    "Subtotal ($)": f"${r['subtotal']:.2f}",
+                } for r in _bd["items"]])
+                st.dataframe(_bd_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No components assigned to this product.")
+            st.markdown(
+                f"**+ Shipping:** ${_bd['shipping_cost']:.2f}  \n"
+                f"**+ Customs** ({_bd['customs_rate_pct']:.1f}% of "
+                f"${_bd['total_manufacturer']:.2f} mfg cost): ${_bd['customs_cost']:.2f}  \n"
+                f"───────────────────────  \n"
+                f"**Landed Cost: ${_bd['landed_cost']:.2f}**"
+            )
+    else:
+        st.info("No products in catalog yet. Add one below.")
+
+    st.divider()
+
+    with st.expander("➕ Add / Edit Product", expanded=not _cat_list):
+        _cat_edit_id = None
+        _cat_rec = {}
+        if _cat_list:
+            _cat_names = ["— New product —"] + [p["name"] for p in _cat_list]
+            _cat_sel = st.selectbox("Edit existing product", _cat_names, key="cat_edit_sel")
+            if _cat_sel != "— New product —":
+                _cat_rec = next(p for p in _cat_list if p["name"] == _cat_sel)
+                _cat_edit_id = _cat_rec["id"]
+
+        with st.form("catalog_form"):
+            _cfa, _cfb = st.columns(2)
+            with _cfa:
+                _cat_name = st.text_input("Product name *", value=_cat_rec.get("name", ""))
+                _cat_asin = st.text_input("ASIN", value=_cat_rec.get("asin", "") or "")
+                _cat_sku = st.text_input("SKU", value=_cat_rec.get("sku", "") or "")
+            with _cfb:
+                _cat_ptype = st.selectbox(
+                    "Product type",
+                    _prod_types,
+                    index=_prod_types.index(_cat_rec["product_type"])
+                    if _cat_rec.get("product_type") in _prod_types else 0,
+                )
+                _cat_market = st.text_input("Marketplace", value=_cat_rec.get("marketplace", "amazon.com") or "amazon.com")
+
+            st.markdown("**Dimensions**")
+            _d1, _d2, _d3, _d4 = st.columns(4)
+            with _d1:
+                _cat_w = st.number_input("Width (cm)", min_value=0.0, step=0.1, format="%.1f",
+                                          value=float(_cat_rec.get("width_cm") or 0))
+            with _d2:
+                _cat_l = st.number_input("Length (cm)", min_value=0.0, step=0.1, format="%.1f",
+                                          value=float(_cat_rec.get("length_cm") or 0))
+            with _d3:
+                _cat_h = st.number_input("Height (cm)", min_value=0.0, step=0.1, format="%.1f",
+                                          value=float(_cat_rec.get("height_cm") or 0))
+            with _d4:
+                _cat_wt = st.number_input("Weight (kg)", min_value=0.0, step=0.01, format="%.3f",
+                                           value=float(_cat_rec.get("weight_kg") or 0))
+
+            _ce1, _ce2, _ce3 = st.columns(3)
+            with _ce1:
+                _cat_ship = st.number_input("Shipping cost ($)", min_value=0.0, step=0.01, format="%.2f",
+                                             value=float(_cat_rec.get("shipping_cost") or 0))
+            with _ce2:
+                _cat_cust_rate = st.number_input("Customs rate (%)", min_value=0.0, step=0.1, format="%.1f",
+                                                  value=float(_cat_rec.get("customs_rate") or 0))
+            with _ce3:
+                _cat_fba = st.number_input("FBA fee ($)", min_value=0.0, step=0.01, format="%.2f",
+                                            value=float(_cat_rec.get("fba_fee") or 0))
+
+            _cat_is_new = st.checkbox("🚼 New product (launch phase)", value=bool(_cat_rec.get("is_new_product", 0)))
+            _cat_notes = st.text_input("Notes", value=_cat_rec.get("notes", "") or "")
+
+            # Component builder
+            st.markdown("**Components**")
+            if _items_for_cat:
+                # Pre-select existing components if editing
+                _existing_comps = {}
+                if _cat_edit_id:
+                    for _ec in get_product_components(_cat_edit_id):
+                        _existing_comps[_ec["item_name"]] = _ec["quantity"]
+
+                _selected_items = st.multiselect(
+                    "Select items in this product",
+                    [i["name"] for i in _items_for_cat],
+                    default=list(_existing_comps.keys()),
+                    key="cat_components_sel",
+                )
+                _comp_quantities = {}
+                for _si in _selected_items:
+                    _comp_quantities[_si] = st.number_input(
+                        f"Qty of {_si}",
+                        min_value=1, step=1,
+                        value=int(_existing_comps.get(_si, 1)),
+                        key=f"comp_qty_{_si}",
+                    )
+            else:
+                st.info("Add items in the 🧩 Items tab first.")
+                _selected_items = []
+                _comp_quantities = {}
+
+            if st.form_submit_button("💾 Save Product", type="primary"):
+                if _cat_name.strip():
+                    _saved_pid = upsert_product_catalog(
+                        data={
+                            "asin": _cat_asin.strip().upper() or None,
+                            "sku": _cat_sku.strip() or None,
+                            "name": _cat_name.strip(),
+                            "product_type": _cat_ptype,
+                            "marketplace": _cat_market.strip() or "amazon.com",
+                            "width_cm": _cat_w if _cat_w else None,
+                            "length_cm": _cat_l if _cat_l else None,
+                            "height_cm": _cat_h if _cat_h else None,
+                            "weight_kg": _cat_wt if _cat_wt else None,
+                            "shipping_cost": _cat_ship,
+                            "customs_rate": _cat_cust_rate,
+                            "fba_fee": _cat_fba,
+                            "is_new_product": _cat_is_new,
+                            "notes": _cat_notes.strip() or None,
+                        },
+                        product_id=_cat_edit_id,
+                    )
+                    # Save components
+                    _components = [
+                        {"item_id": _item_ids_by_name[_sn], "quantity": _comp_quantities[_sn]}
+                        for _sn in _selected_items
+                        if _sn in _item_ids_by_name
+                    ]
+                    set_product_components(_saved_pid, _components)
+                    # Sync to product_costs if ASIN is set
+                    if _cat_asin.strip():
+                        sync_product_to_costs(_saved_pid)
+                    st.success("✅ Product saved.")
+                    st.rerun()
+                else:
+                    st.warning("Product name is required.")
+
+    if _cat_list:
+        st.divider()
+        st.markdown("#### 🗑️ Delete Product")
+        _del_cat_name = st.selectbox(
+            "Select product to delete", [p["name"] for p in _cat_list], key="del_cat_sel"
+        )
+        _del_cat_confirm = st.checkbox("Confirm deletion", key="del_cat_confirm")
+        if st.button("🗑️ Delete Product", disabled=not _del_cat_confirm, key="del_cat_btn"):
+            _del_cat_id = next(p["id"] for p in _cat_list if p["name"] == _del_cat_name)
+            delete_product_catalog(_del_cat_id)
+            st.success(f"✅ Product '{_del_cat_name}' deleted.")
+            st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — SALES DASHBOARD

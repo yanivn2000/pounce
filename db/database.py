@@ -181,6 +181,57 @@ def init_db():
                 ('alert_profit_drop_pct', '20'),
                 ('alert_roas_gain_pct',   '30'),
                 ('alert_profit_gain_pct', '20');
+
+            CREATE TABLE IF NOT EXISTS suppliers (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL UNIQUE,
+                category        TEXT,
+                is_manufacturer INTEGER DEFAULT 1,
+                notes           TEXT,
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS items (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                name              TEXT NOT NULL,
+                item_type         TEXT NOT NULL,
+                supplier_id       INTEGER REFERENCES suppliers(id),
+                manufacturer_cost REAL NOT NULL DEFAULT 0,
+                service_cost      REAL NOT NULL DEFAULT 0,
+                net_width_cm      REAL,
+                hst_code          TEXT,
+                upc               TEXT,
+                currency          TEXT DEFAULT 'USD',
+                notes             TEXT,
+                updated_at        TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS products_catalog (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                asin            TEXT,
+                sku             TEXT,
+                name            TEXT NOT NULL,
+                product_type    TEXT,
+                marketplace     TEXT DEFAULT 'amazon.com',
+                width_cm        REAL,
+                length_cm       REAL,
+                height_cm       REAL,
+                weight_kg       REAL,
+                shipping_cost   REAL DEFAULT 0,
+                customs_rate    REAL DEFAULT 0,
+                fba_fee         REAL DEFAULT 0,
+                is_new_product  INTEGER DEFAULT 0,
+                notes           TEXT,
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS product_components (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id  INTEGER NOT NULL REFERENCES products_catalog(id) ON DELETE CASCADE,
+                item_id     INTEGER NOT NULL REFERENCES items(id),
+                quantity    INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(product_id, item_id)
+            );
         """)
     _migrate_product_costs(conn)
     _migrate_recommendations_score(conn)
@@ -193,6 +244,7 @@ def init_db():
     _migrate_recommendations_debug_json(conn)
     _migrate_campaign_performance(conn)
     _migrate_app_settings(conn)
+    _migrate_product_catalog(conn)
     conn.close()
 
 
@@ -427,3 +479,60 @@ def _migrate_product_costs(conn: sqlite3.Connection):
         ALTER TABLE product_costs_new RENAME TO product_costs;
     """)
     conn.close()
+
+
+def _migrate_product_catalog(conn: sqlite3.Connection):
+    """Ensure suppliers, items, products_catalog, product_components tables exist."""
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS suppliers (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL UNIQUE,
+                category        TEXT,
+                is_manufacturer INTEGER DEFAULT 1,
+                notes           TEXT,
+                created_at      TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS items (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                name              TEXT NOT NULL,
+                item_type         TEXT NOT NULL,
+                supplier_id       INTEGER REFERENCES suppliers(id),
+                manufacturer_cost REAL NOT NULL DEFAULT 0,
+                service_cost      REAL NOT NULL DEFAULT 0,
+                net_width_cm      REAL,
+                hst_code          TEXT,
+                upc               TEXT,
+                currency          TEXT DEFAULT 'USD',
+                notes             TEXT,
+                updated_at        TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS products_catalog (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                asin            TEXT,
+                sku             TEXT,
+                name            TEXT NOT NULL,
+                product_type    TEXT,
+                marketplace     TEXT DEFAULT 'amazon.com',
+                width_cm        REAL,
+                length_cm       REAL,
+                height_cm       REAL,
+                weight_kg       REAL,
+                shipping_cost   REAL DEFAULT 0,
+                customs_rate    REAL DEFAULT 0,
+                fba_fee         REAL DEFAULT 0,
+                is_new_product  INTEGER DEFAULT 0,
+                notes           TEXT,
+                updated_at      TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS product_components (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id  INTEGER NOT NULL REFERENCES products_catalog(id) ON DELETE CASCADE,
+                item_id     INTEGER NOT NULL REFERENCES items(id),
+                quantity    INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(product_id, item_id)
+            );
+        """)
+        conn.commit()
+    except Exception:
+        pass
