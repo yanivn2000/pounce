@@ -148,20 +148,51 @@ def get_backfire_alerts(marketplace: str, **kwargs) -> list:
     return [a for a in get_performance_alerts(marketplace, **kwargs) if a["type"] == "regression"]
 
 
-def reset_snapshots():
-    """Delete all rows from campaign_performance. Called from Admin tab."""
+def reset_snapshots(marketplace: str = None):
+    """
+    Delete snapshot rows. If marketplace is given, deletes only that marketplace.
+    If None, deletes all marketplaces.
+    """
     conn = get_conn()
     with conn:
-        conn.execute("DELETE FROM campaign_performance")
+        if marketplace:
+            conn.execute("DELETE FROM campaign_performance WHERE marketplace = ?", (marketplace,))
+        else:
+            conn.execute("DELETE FROM campaign_performance")
     conn.close()
 
 
-def get_snapshot_count() -> int:
-    """Return total number of snapshot rows stored."""
+def get_snapshot_count(marketplace: str = None) -> int:
+    """Return total snapshot rows, optionally filtered by marketplace."""
     conn = get_conn()
-    n = conn.execute("SELECT COUNT(*) FROM campaign_performance").fetchone()[0]
+    if marketplace:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM campaign_performance WHERE marketplace = ?", (marketplace,)
+        ).fetchone()[0]
+    else:
+        n = conn.execute("SELECT COUNT(*) FROM campaign_performance").fetchone()[0]
     conn.close()
     return n
+
+
+def get_snapshot_summary() -> list[dict]:
+    """
+    Return per-marketplace snapshot summary:
+    marketplace, distinct_dates, campaign_count, latest_date
+    """
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT
+            marketplace,
+            COUNT(DISTINCT snapshot_date)  AS distinct_dates,
+            COUNT(DISTINCT campaign_name)  AS campaign_count,
+            MAX(snapshot_date)             AS latest_date
+        FROM campaign_performance
+        GROUP BY marketplace
+        ORDER BY marketplace
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_snapshot_dates(marketplace: str) -> list[str]:

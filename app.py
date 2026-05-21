@@ -25,7 +25,7 @@ from products import (
 if products_exist() and not products_exist_db():
     migrate_csv_to_db()
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
-from db.performance import save_performance_snapshot, get_performance_alerts, reset_snapshots, get_snapshot_count
+from db.performance import save_performance_snapshot, get_performance_alerts, reset_snapshots, get_snapshot_count, get_snapshot_summary
 from db.settings import get_alert_thresholds, save_setting
 from db.inventory import (
     import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
@@ -1945,24 +1945,45 @@ if tab_admin is not None:
         # ── Performance Snapshots ─────────────────────────────────────────────
         st.divider()
         st.markdown("### 📸 Performance Snapshots")
-
-        snap_count = get_snapshot_count()
         st.markdown(
             f"<p style='color:{T['text_secondary']};font-size:0.9rem;'>"
-            f"Snapshots are saved automatically every time you upload a placement report. "
-            f"They power the regression alerts (ROAS / profit drop detection) shown after each analysis. "
-            f"Reset when you want to start a fresh comparison baseline — for example after a major campaign restructure.</p>",
+            "Snapshots are saved per marketplace automatically on every analysis run. "
+            "Reset a marketplace when you want a fresh comparison baseline — e.g. after a major campaign restructure. "
+            "Each marketplace is fully independent.</p>",
             unsafe_allow_html=True,
         )
-        st.markdown(
-            f"Current records: &nbsp;<strong>{snap_count:,}</strong> snapshot rows",
-            unsafe_allow_html=True,
-        )
-        confirm_snaps = st.checkbox("Yes, reset all performance snapshots", key="confirm_snaps")
-        if st.button("🗑️ Reset Snapshots", type="primary", disabled=not confirm_snaps):
-            reset_snapshots()
-            st.success("✅ All performance snapshots deleted. The next upload will become the new baseline.")
-            st.rerun()
+
+        _snap_summary = get_snapshot_summary()
+
+        if not _snap_summary:
+            st.info("No snapshots stored yet. Run an analysis to create the first baseline.")
+        else:
+            # Summary table
+            import pandas as _spd
+            _snap_df = _spd.DataFrame(_snap_summary).rename(columns={
+                "marketplace":    "Marketplace",
+                "distinct_dates": "Snapshots",
+                "campaign_count": "Campaigns",
+                "latest_date":    "Latest snapshot",
+            })
+            st.dataframe(_snap_df, use_container_width=True, hide_index=True)
+
+            st.markdown("#### Reset snapshots for a marketplace")
+            _snap_markets = [r["marketplace"] for r in _snap_summary]
+            _reset_market = st.selectbox(
+                "Select marketplace to reset",
+                ["— All marketplaces —"] + _snap_markets,
+                key="reset_snap_market",
+            )
+            confirm_snaps = st.checkbox("Yes, I want to reset these snapshots", key="confirm_snaps")
+            if st.button("🗑️ Reset Snapshots", type="primary", disabled=not confirm_snaps):
+                if _reset_market == "— All marketplaces —":
+                    reset_snapshots()
+                    st.success("✅ All snapshots deleted across all marketplaces.")
+                else:
+                    reset_snapshots(_reset_market)
+                    st.success(f"✅ Snapshots for **{_reset_market}** deleted. Next upload will be the new baseline.")
+                st.rerun()
 
         # ── Session Management ────────────────────────────────────────────────
         st.divider()
