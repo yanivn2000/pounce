@@ -280,11 +280,11 @@ with st.sidebar:
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
     tab_ads, tab_sales, tab_inv, tab_profit, tab_admin = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "💰 Profit", "⚙️ Admin"
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "⚙️ Admin"
     ])
 else:
     tab_ads, tab_sales, tab_inv, tab_profit = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "💰 Profit"
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products"
     ])
     tab_admin = None
 
@@ -615,7 +615,7 @@ with tab_profit:
     tab_products = _products_tab
 
 with tab_products:
-    st.markdown("# 📦 Products & Costs")
+    st.markdown("# 📦 Products")
     st.markdown(
         f"<p style='color:{T['text_secondary']};'>Product costs are shared across all marketplaces. "
         f"Set them once and they apply everywhere.</p>",
@@ -1535,7 +1535,7 @@ with tab_ads:
                 cost_map = get_cost_map_db()
                 st.success(f"✅ Product cost data loaded — break-even ROAS calculated dynamically for {len(cost_map)} products.")
             else:
-                st.warning("⚠️ No product cost data found. Using default ROAS target. Go to **Products & Costs** tab to set up.")
+                st.warning("⚠️ No product cost data found. Using default ROAS target. Go to the **📦 Products** tab to set up.")
                 cost_map = {}
 
             st.divider()
