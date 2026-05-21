@@ -736,7 +736,7 @@ with _items_tab:
     with st.expander("📥 Import Items from CSV"):
         st.markdown(
             "**Expected columns:** `name`, `item_type`, `supplier_name`, "
-            "`manufacturer_cost`, `service_cost`, `net_width_cm`, "
+            "`manufacturer_cost`, `service_cost`, `net_weight_grams`, "
             "`hst_code_na`, `hst_code_uk`, `upc`, `currency`, `notes`"
         )
         _items_csv = st.file_uploader("Upload Items CSV", type=["csv"], key="items_import_csv")
@@ -754,13 +754,13 @@ with _items_tab:
             _item_df[[
                 "name", "item_type", "supplier_name", "manufacturer_cost",
                 "service_cost", "total_cost", "hst_code_na", "hst_code_uk",
-                "upc", "net_width_cm", "currency"
+                "upc", "net_weight_grams", "currency"
             ]].rename(columns={
                 "name": "Name", "item_type": "Type", "supplier_name": "Supplier",
                 "manufacturer_cost": "Mfg Cost ($)", "service_cost": "Service Cost ($)",
                 "total_cost": "Total Cost ($)", "hst_code_na": "HS Code (NA)",
                 "hst_code_uk": "HS Code (UK)", "upc": "UPC",
-                "net_width_cm": "Net Width (cm)", "currency": "Currency",
+                "net_weight_grams": "Net Weight (g)", "currency": "Currency",
             }),
             use_container_width=True, hide_index=True
         )
@@ -810,9 +810,9 @@ with _items_tab:
                     value=float(_item_rec.get("service_cost", 0) or 0),
                 )
             st.caption("Service cost = agent fee. It is NOT included in customs calculations.")
-            _item_width = st.number_input(
-                "Net width (cm)", min_value=0.0, step=0.1, format="%.1f",
-                value=float(_item_rec.get("net_width_cm", 0) or 0),
+            _item_net_weight = st.number_input(
+                "Net weight (g)", min_value=0.0, step=1.0, format="%.1f",
+                value=float(_item_rec.get("net_weight_grams", 0) or 0),
             )
             _c3, _c4, _c5 = st.columns(3)
             with _c3:
@@ -838,7 +838,7 @@ with _items_tab:
                             "supplier_id": _sup_ids_by_name.get(_item_sup_name) if _item_sup_name else None,
                             "manufacturer_cost": _item_mfg_cost,
                             "service_cost": _item_svc_cost,
-                            "net_width_cm": _item_width if _item_width else None,
+                            "net_weight_grams": _item_net_weight if _item_net_weight else None,
                             "hst_code_na": _item_hst_na.strip() or None,
                             "hst_code_uk": _item_hst_uk.strip() or None,
                             "upc": _item_upc.strip() or None,
@@ -996,6 +996,48 @@ with _catalog_tab:
                 _cat_fba = st.number_input("FBA fee ($)", min_value=0.0, step=0.01, format="%.2f",
                                             value=float(_cat_rec.get("fba_fee") or 0))
 
+            st.markdown("**Master Carton**")
+            _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+            with _mc1:
+                _cat_carton_units = st.number_input(
+                    "Units / carton", min_value=0, step=1,
+                    value=int(_cat_rec.get("carton_units") or 0),
+                )
+            with _mc2:
+                _cat_carton_l = st.number_input(
+                    "Length (cm)", min_value=0.0, step=0.1, format="%.1f",
+                    value=float(_cat_rec.get("carton_length_cm") or 0),
+                    key="carton_l",
+                )
+            with _mc3:
+                _cat_carton_w = st.number_input(
+                    "Width (cm)", min_value=0.0, step=0.1, format="%.1f",
+                    value=float(_cat_rec.get("carton_width_cm") or 0),
+                    key="carton_w",
+                )
+            with _mc4:
+                _cat_carton_h = st.number_input(
+                    "Height (cm)", min_value=0.0, step=0.1, format="%.1f",
+                    value=float(_cat_rec.get("carton_height_cm") or 0),
+                    key="carton_h",
+                )
+            _mc5, _mc6, _mc7 = st.columns(3)
+            with _mc5:
+                _cat_carton_nw = st.number_input(
+                    "NW (kg)", min_value=0.0, step=0.01, format="%.3f",
+                    value=float(_cat_rec.get("carton_nw_kg") or 0),
+                )
+            with _mc6:
+                _cat_carton_gw = st.number_input(
+                    "GW (kg)", min_value=0.0, step=0.01, format="%.3f",
+                    value=float(_cat_rec.get("carton_gw_kg") or 0),
+                )
+            with _mc7:
+                _cat_carton_cbm = st.number_input(
+                    "CBM (m³)", min_value=0.0, step=0.0001, format="%.4f",
+                    value=float(_cat_rec.get("carton_cbm") or 0),
+                )
+
             _cat_is_new = st.checkbox("🚼 New product (launch phase)", value=bool(_cat_rec.get("is_new_product", 0)))
             _cat_notes = st.text_input("Notes", value=_cat_rec.get("notes", "") or "")
 
@@ -1043,6 +1085,13 @@ with _catalog_tab:
                             "fba_fee": _cat_fba,
                             "is_new_product": _cat_is_new,
                             "notes": _cat_notes.strip() or None,
+                            "carton_units":     _cat_carton_units if _cat_carton_units else None,
+                            "carton_length_cm": _cat_carton_l if _cat_carton_l else None,
+                            "carton_width_cm":  _cat_carton_w if _cat_carton_w else None,
+                            "carton_height_cm": _cat_carton_h if _cat_carton_h else None,
+                            "carton_nw_kg":     _cat_carton_nw if _cat_carton_nw else None,
+                            "carton_gw_kg":     _cat_carton_gw if _cat_carton_gw else None,
+                            "carton_cbm":       _cat_carton_cbm if _cat_carton_cbm else None,
                         },
                         product_id=_cat_edit_id,
                     )

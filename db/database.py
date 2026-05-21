@@ -237,6 +237,8 @@ def init_db():
     _migrate_product_costs_to_view(conn)
     _migrate_suppliers_contact_fields(conn)
     _migrate_products_schema_v2(conn)
+    _migrate_items_net_weight(conn)
+    _migrate_products_carton(conn)
     conn.close()
 
 
@@ -670,6 +672,41 @@ def _migrate_product_catalog(conn: sqlite3.Connection):
                 UNIQUE(product_id, item_id)
             );
         """)
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_items_net_weight(conn: sqlite3.Connection):
+    """Rename net_width_cm → net_weight_grams in items table."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(items)").fetchall()]
+        if "net_weight_grams" not in cols:
+            if "net_width_cm" in cols:
+                # SQLite 3.25+ supports RENAME COLUMN
+                conn.execute("ALTER TABLE items RENAME COLUMN net_width_cm TO net_weight_grams")
+            else:
+                conn.execute("ALTER TABLE items ADD COLUMN net_weight_grams REAL")
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_products_carton(conn: sqlite3.Connection):
+    """Add master carton fields to products_catalog."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(products_catalog)").fetchall()]
+        for col, typedef in [
+            ("carton_units",     "INTEGER"),
+            ("carton_length_cm", "REAL"),
+            ("carton_width_cm",  "REAL"),
+            ("carton_height_cm", "REAL"),
+            ("carton_nw_kg",     "REAL"),
+            ("carton_gw_kg",     "REAL"),
+            ("carton_cbm",       "REAL"),
+        ]:
+            if col not in cols:
+                conn.execute(f"ALTER TABLE products_catalog ADD COLUMN {col} {typedef}")
         conn.commit()
     except Exception:
         pass
