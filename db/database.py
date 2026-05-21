@@ -236,6 +236,7 @@ def init_db():
     _migrate_product_catalog(conn)
     _migrate_product_costs_to_view(conn)
     _migrate_suppliers_contact_fields(conn)
+    _migrate_products_schema_v2(conn)
     conn.close()
 
 
@@ -484,6 +485,71 @@ def _migrate_suppliers_contact_fields(conn: sqlite3.Connection):
         ]:
             if col not in cols:
                 conn.execute(f"ALTER TABLE suppliers ADD COLUMN {col} {typedef}")
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_products_schema_v2(conn: sqlite3.Connection):
+    """
+    1. Add hst_code_na and hst_code_uk columns to items (replacing hst_code).
+    2. Remove marketplace and customs_rate columns from products_catalog.
+    3. Rebuild the product_costs VIEW without customs_rate (customs_cost = 0).
+    """
+    try:
+        # ── items: add hst_code_na / hst_code_uk ──────────────────────────────
+        item_cols = [r[1] for r in conn.execute("PRAGMA table_info(items)").fetchall()]
+        if "hst_code_na" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN hst_code_na TEXT")
+        if "hst_code_uk" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN hst_code_uk TEXT")
+        # Migrate existing hst_code value → hst_code_na
+        if "hst_code" in item_cols:
+            conn.execute("""
+                UPDATE items SET hst_code_na = hst_code
+                WHERE hst_code IS NOT NULL AND hst_code != '' AND hst_code_na IS NULL
+            """)
+            try:
+                conn.execute("ALTER TABLE items DROP COLUMN hst_code")
+            except Exception:
+                pass  # SQLite < 3.35 — leave column, just stop using it
+
+        # ── products_catalog: drop marketplace and customs_rate ─────────────
+        cat_cols = [r[1] for r in conn.execute("PRAGMA table_info(products_catalog)").fetchall()]
+        for col in ("marketplace", "customs_rate"):
+            if col in cat_cols:
+                try:
+                    conn.execute(f"ALTER TABLE products_catalog DROP COLUMN {col}")
+                except Exception:
+                    pass  # SQLite < 3.35 — leave column, just stop using it
+
+        # ── Rebuild product_costs VIEW (customs_cost = 0) ───────────────────
+        obj = conn.execute(
+            "SELECT type FROM sqlite_master WHERE name='product_costs'"
+        ).fetchone()
+        if obj and obj[0] == 'view':
+            conn.execute("DROP VIEW product_costs")
+
+        conn.execute("""
+            CREATE VIEW IF NOT EXISTS product_costs AS
+            SELECT
+                pc.id,
+                pc.asin,
+                pc.name                          AS product_name,
+                COALESCE((
+                    SELECT SUM((i.manufacturer_cost + i.service_cost) * pcomp.quantity)
+                    FROM product_components pcomp
+                    JOIN items i ON i.id = pcomp.item_id
+                    WHERE pcomp.product_id = pc.id
+                ), 0)                            AS product_cost,
+                pc.shipping_cost,
+                0.0                              AS customs_cost,
+                COALESCE(pc.fba_fee, 0)          AS fba_fee,
+                COALESCE(pc.is_new_product, 0)   AS is_new_product,
+                pc.updated_at
+            FROM products_catalog pc
+            WHERE pc.asin IS NOT NULL AND pc.asin != ''
+        """)
         conn.commit()
     except Exception:
         pass

@@ -736,7 +736,8 @@ with _items_tab:
     with st.expander("📥 Import Items from CSV"):
         st.markdown(
             "**Expected columns:** `name`, `item_type`, `supplier_name`, "
-            "`manufacturer_cost`, `service_cost`, `net_width_cm`, `hst_code`, `upc`, `currency`, `notes`"
+            "`manufacturer_cost`, `service_cost`, `net_width_cm`, "
+            "`hst_code_na`, `hst_code_uk`, `upc`, `currency`, `notes`"
         )
         _items_csv = st.file_uploader("Upload Items CSV", type=["csv"], key="items_import_csv")
         if _items_csv:
@@ -752,12 +753,14 @@ with _items_tab:
         st.dataframe(
             _item_df[[
                 "name", "item_type", "supplier_name", "manufacturer_cost",
-                "service_cost", "total_cost", "hst_code", "upc", "net_width_cm", "currency"
+                "service_cost", "total_cost", "hst_code_na", "hst_code_uk",
+                "upc", "net_width_cm", "currency"
             ]].rename(columns={
                 "name": "Name", "item_type": "Type", "supplier_name": "Supplier",
                 "manufacturer_cost": "Mfg Cost ($)", "service_cost": "Service Cost ($)",
-                "total_cost": "Total Cost ($)", "hst_code": "HST Code",
-                "upc": "UPC", "net_width_cm": "Net Width (cm)", "currency": "Currency",
+                "total_cost": "Total Cost ($)", "hst_code_na": "HS Code (NA)",
+                "hst_code_uk": "HS Code (UK)", "upc": "UPC",
+                "net_width_cm": "Net Width (cm)", "currency": "Currency",
             }),
             use_container_width=True, hide_index=True
         )
@@ -811,10 +814,12 @@ with _items_tab:
                 "Net width (cm)", min_value=0.0, step=0.1, format="%.1f",
                 value=float(_item_rec.get("net_width_cm", 0) or 0),
             )
-            _c3, _c4 = st.columns(2)
+            _c3, _c4, _c5 = st.columns(3)
             with _c3:
-                _item_hst = st.text_input("HST code", value=_item_rec.get("hst_code", "") or "")
+                _item_hst_na = st.text_input("HS Code (NA — US & CA)", value=_item_rec.get("hst_code_na", "") or "")
             with _c4:
+                _item_hst_uk = st.text_input("HS Code (UK)", value=_item_rec.get("hst_code_uk", "") or "")
+            with _c5:
                 _item_upc = st.text_input("UPC", value=_item_rec.get("upc", "") or "")
             _item_currency = st.selectbox(
                 "Currency",
@@ -834,7 +839,8 @@ with _items_tab:
                             "manufacturer_cost": _item_mfg_cost,
                             "service_cost": _item_svc_cost,
                             "net_width_cm": _item_width if _item_width else None,
-                            "hst_code": _item_hst.strip() or None,
+                            "hst_code_na": _item_hst_na.strip() or None,
+                            "hst_code_uk": _item_hst_uk.strip() or None,
                             "upc": _item_upc.strip() or None,
                             "currency": _item_currency,
                             "notes": _item_notes.strip() or None,
@@ -878,9 +884,9 @@ with _catalog_tab:
 
     with st.expander("📥 Import Products from CSV"):
         st.markdown(
-            "**Product columns:** `name`\\*, `asin`, `sku`, `product_type`, `marketplace`, "
+            "**Product columns:** `name`\\*, `asin`, `sku`, `product_type`, "
             "`width_cm`, `length_cm`, `height_cm`, `weight_kg`, "
-            "`shipping_cost`, `customs_rate`, `fba_fee`, `is_new_product`, `notes`  \n"
+            "`shipping_cost`, `fba_fee`, `is_new_product`, `notes`  \n"
             "**Component columns (optional):** `item_name`, `item_quantity`  \n"
             "Use multiple rows with the same `name`/`asin` to add multiple components."
         )
@@ -902,7 +908,7 @@ with _catalog_tab:
                 "Name": _cp["name"],
                 "Type": _cp["product_type"] or "",
                 "ASIN": _cp["asin"] or "",
-                "Marketplace": _cp["marketplace"] or "",
+                "SKU": _cp["sku"] or "",
                 "Dims (WxLxH cm)": (
                     f"{_cp['width_cm'] or '?'} × {_cp['length_cm'] or '?'} × {_cp['height_cm'] or '?'}"
                     if any([_cp["width_cm"], _cp["length_cm"], _cp["height_cm"]]) else ""
@@ -935,8 +941,6 @@ with _catalog_tab:
                 st.info("No components assigned to this product.")
             st.markdown(
                 f"**+ Shipping:** ${_bd['shipping_cost']:.2f}  \n"
-                f"**+ Customs** ({_bd['customs_rate_pct']:.1f}% of "
-                f"${_bd['total_manufacturer']:.2f} mfg cost): ${_bd['customs_cost']:.2f}  \n"
                 f"───────────────────────  \n"
                 f"**Landed Cost: ${_bd['landed_cost']:.2f}**"
             )
@@ -968,7 +972,6 @@ with _catalog_tab:
                     index=_prod_types.index(_cat_rec["product_type"])
                     if _cat_rec.get("product_type") in _prod_types else 0,
                 )
-                _cat_market = st.text_input("Marketplace", value=_cat_rec.get("marketplace", "amazon.com") or "amazon.com")
 
             st.markdown("**Dimensions**")
             _d1, _d2, _d3, _d4 = st.columns(4)
@@ -985,14 +988,11 @@ with _catalog_tab:
                 _cat_wt = st.number_input("Weight (kg)", min_value=0.0, step=0.01, format="%.3f",
                                            value=float(_cat_rec.get("weight_kg") or 0))
 
-            _ce1, _ce2, _ce3 = st.columns(3)
+            _ce1, _ce2 = st.columns(2)
             with _ce1:
                 _cat_ship = st.number_input("Shipping cost ($)", min_value=0.0, step=0.01, format="%.2f",
                                              value=float(_cat_rec.get("shipping_cost") or 0))
             with _ce2:
-                _cat_cust_rate = st.number_input("Customs rate (%)", min_value=0.0, step=0.1, format="%.1f",
-                                                  value=float(_cat_rec.get("customs_rate") or 0))
-            with _ce3:
                 _cat_fba = st.number_input("FBA fee ($)", min_value=0.0, step=0.01, format="%.2f",
                                             value=float(_cat_rec.get("fba_fee") or 0))
 
@@ -1035,13 +1035,11 @@ with _catalog_tab:
                             "sku": _cat_sku.strip() or None,
                             "name": _cat_name.strip(),
                             "product_type": _cat_ptype,
-                            "marketplace": _cat_market.strip() or "amazon.com",
                             "width_cm": _cat_w if _cat_w else None,
                             "length_cm": _cat_l if _cat_l else None,
                             "height_cm": _cat_h if _cat_h else None,
                             "weight_kg": _cat_wt if _cat_wt else None,
                             "shipping_cost": _cat_ship,
-                            "customs_rate": _cat_cust_rate,
                             "fba_fee": _cat_fba,
                             "is_new_product": _cat_is_new,
                             "notes": _cat_notes.strip() or None,
