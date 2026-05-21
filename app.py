@@ -671,7 +671,7 @@ with _suppliers_tab:
         # dropdown changes (prevents stale values showing for "— New supplier —")
         _sk = _sup_sel if _sup_list else "__new__"
 
-        with st.form("supplier_form"):
+        with st.form(f"supplier_form_{_sk}"):
             _sup_name = st.text_input("Name *", value=_sup_rec.get("name", ""), key=f"sup_name_{_sk}")
             _sup_cat = st.selectbox(
                 "Category",
