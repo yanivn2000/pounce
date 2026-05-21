@@ -12,33 +12,45 @@ from .database import get_conn
 def get_suppliers() -> list[dict]:
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id, name, category, is_manufacturer, notes FROM suppliers ORDER BY name"
+        """SELECT id, name, category, is_manufacturer, notes,
+                  address, contact_person, email, tel
+           FROM suppliers ORDER BY name"""
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
 def upsert_supplier(name: str, category: str, is_manufacturer: int, notes: str,
+                    address: str = "", contact_person: str = "",
+                    email: str = "", tel: str = "",
                     supplier_id: int | None = None) -> int:
     conn = get_conn()
     with conn:
         if supplier_id:
             conn.execute(
                 """UPDATE suppliers
-                   SET name=?, category=?, is_manufacturer=?, notes=?
+                   SET name=?, category=?, is_manufacturer=?, notes=?,
+                       address=?, contact_person=?, email=?, tel=?
                    WHERE id=?""",
-                (name, category, is_manufacturer, notes, supplier_id),
+                (name, category, is_manufacturer, notes,
+                 address, contact_person, email, tel, supplier_id),
             )
             result_id = supplier_id
         else:
             cur = conn.execute(
-                """INSERT INTO suppliers (name, category, is_manufacturer, notes)
-                   VALUES (?, ?, ?, ?)
+                """INSERT INTO suppliers (name, category, is_manufacturer, notes,
+                                          address, contact_person, email, tel)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(name) DO UPDATE SET
                        category=excluded.category,
                        is_manufacturer=excluded.is_manufacturer,
-                       notes=excluded.notes""",
-                (name, category, is_manufacturer, notes),
+                       notes=excluded.notes,
+                       address=excluded.address,
+                       contact_person=excluded.contact_person,
+                       email=excluded.email,
+                       tel=excluded.tel""",
+                (name, category, is_manufacturer, notes,
+                 address, contact_person, email, tel),
             )
             # If INSERT triggered the conflict branch, fetch the existing id
             if cur.lastrowid and cur.lastrowid != 0:
@@ -268,52 +280,235 @@ def calc_product_cost(product_id: int) -> dict:
     }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SYNC TO product_costs
-# ══════════════════════════════════════════════════════════════════════════════
-
 def sync_product_to_costs(product_id: int):
+    """No-op: product_costs is now a VIEW computed from products_catalog."""
+    pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CSV IMPORT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def import_items_csv(file_obj) -> tuple[int, list[str]]:
     """
-    Write computed costs into product_costs so the analyzer keeps working.
-    product_cost = total_manufacturer + total_service
+    Import items from CSV. Matches existing items by name (case-insensitive) and
+    updates them; inserts new rows otherwise.
+
+    Expected columns (case-insensitive, spaces→underscores):
+      name*, item_type*, supplier_name, manufacturer_cost, service_cost,
+      net_width_cm, hst_code, upc, currency, notes
+    (* required)
+    Returns (rows_imported, warnings).
     """
+    import pandas as pd
+
+    try:
+        sample = file_obj.read(4096)
+        if isinstance(sample, bytes):
+            sample = sample.decode("utf-8", errors="replace")
+        file_obj.seek(0)
+        first_line = sample.split("\n")[0]
+        sep = "\t" if first_line.count("\t") >= first_line.count(",") else ","
+        df = pd.read_csv(file_obj, dtype=str, sep=sep)
+    except Exception as e:
+        return 0, [f"Failed to read CSV: {e}"]
+
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+
+    missing = [c for c in ("name", "item_type") if c not in df.columns]
+    if missing:
+        return 0, [f"Missing required columns: {missing}"]
+
+    # Build supplier name → id map; auto-create missing suppliers
+    suppliers = get_suppliers()
+    sup_map = {s["name"].lower(): s["id"] for s in suppliers}
+
+    warnings: list[str] = []
+    imported = 0
     conn = get_conn()
-    product = conn.execute(
-        "SELECT asin, name, fba_fee, is_new_product FROM products_catalog WHERE id=?",
-        (product_id,),
-    ).fetchone()
+
+    for _, row in df.iterrows():
+        name = str(row.get("name", "")).strip()
+        if not name:
+            continue
+        item_type = str(row.get("item_type", "fabric")).strip()
+
+        # Resolve supplier
+        sup_id = None
+        sup_name_raw = str(row.get("supplier_name", "")).strip()
+        if sup_name_raw:
+            key = sup_name_raw.lower()
+            if key in sup_map:
+                sup_id = sup_map[key]
+            else:
+                sup_id = upsert_supplier(
+                    name=sup_name_raw, category="other",
+                    is_manufacturer=1, notes="auto-created via CSV import"
+                )
+                sup_map[key] = sup_id
+
+        def _f(col, default=0.0):
+            try:
+                v = row.get(col)
+                return float(v) if v and str(v).strip() not in ("", "nan") else default
+            except Exception:
+                return default
+
+        def _s(col):
+            v = str(row.get(col, "")).strip()
+            return v if v and v != "nan" else None
+
+        data = {
+            "name":              name,
+            "item_type":         item_type,
+            "supplier_id":       sup_id,
+            "manufacturer_cost": _f("manufacturer_cost"),
+            "service_cost":      _f("service_cost"),
+            "net_width_cm":      _f("net_width_cm") or None,
+            "hst_code":          _s("hst_code"),
+            "upc":               _s("upc"),
+            "currency":          _s("currency") or "USD",
+            "notes":             _s("notes"),
+        }
+
+        try:
+            # Look up existing item by name (case-insensitive)
+            existing = conn.execute(
+                "SELECT id FROM items WHERE LOWER(name)=LOWER(?)", (name,)
+            ).fetchone()
+            item_id = existing[0] if existing else None
+            upsert_item(data, item_id=item_id)
+            imported += 1
+        except Exception as e:
+            warnings.append(f"Row '{name}' skipped: {e}")
+
     conn.close()
+    return imported, warnings
 
-    if not product or not product["asin"]:
-        return
 
-    breakdown = calc_product_cost(product_id)
-    if not breakdown:
-        return
+def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
+    """
+    Import products from CSV. Groups rows by (asin or name) so that multiple
+    rows with different item_name values create multiple components.
 
-    asin = product["asin"].strip().upper()
-    product_name = product["name"]
-    product_cost = breakdown["total_manufacturer"] + breakdown["total_service"]
-    shipping_cost = breakdown["shipping_cost"]
-    customs_cost = breakdown["customs_cost"]
-    fba_fee = product["fba_fee"] or 0.0
-    is_new = int(product["is_new_product"] or 0)
+    Product columns (case-insensitive, spaces→underscores):
+      name*, asin, sku, product_type, marketplace,
+      width_cm, length_cm, height_cm, weight_kg,
+      shipping_cost, customs_rate, fba_fee, is_new_product, notes
 
+    Component columns (optional):
+      item_name, item_quantity  (one component per row)
+
+    (* required)
+    Returns (rows_saved, warnings).
+    """
+    import pandas as pd
+
+    try:
+        sample = file_obj.read(4096)
+        if isinstance(sample, bytes):
+            sample = sample.decode("utf-8", errors="replace")
+        file_obj.seek(0)
+        first_line = sample.split("\n")[0]
+        sep = "\t" if first_line.count("\t") >= first_line.count(",") else ","
+        df = pd.read_csv(file_obj, dtype=str, sep=sep)
+    except Exception as e:
+        return 0, [f"Failed to read CSV: {e}"]
+
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+
+    if "name" not in df.columns:
+        return 0, ["Missing required column: 'name'"]
+
+    # Build item name → id lookup
+    items_list = get_items()
+    item_map = {i["name"].lower(): i["id"] for i in items_list}
+
+    warnings: list[str] = []
+    saved = 0
+
+    def _f(row, col, default=0.0):
+        try:
+            v = row.get(col)
+            return float(v) if v and str(v).strip() not in ("", "nan") else default
+        except Exception:
+            return default
+
+    def _s(row, col):
+        v = str(row.get(col, "")).strip()
+        return v if v and v != "nan" else None
+
+    # Group rows by (asin, name) key to accumulate components
     conn = get_conn()
-    with conn:
-        conn.execute("""
-            INSERT INTO product_costs
-                (asin, product_name, product_cost, shipping_cost, customs_cost,
-                 fba_fee, is_new_product, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(asin) DO UPDATE SET
-                product_name   = excluded.product_name,
-                product_cost   = excluded.product_cost,
-                shipping_cost  = excluded.shipping_cost,
-                customs_cost   = excluded.customs_cost,
-                fba_fee        = excluded.fba_fee,
-                is_new_product = excluded.is_new_product,
-                updated_at     = excluded.updated_at
-        """, (asin, product_name, product_cost, shipping_cost, customs_cost,
-              fba_fee, is_new))
+    processed: dict[str, int] = {}  # key → product_id
+
+    for _, row in df.iterrows():
+        name = str(row.get("name", "")).strip()
+        if not name:
+            continue
+        asin = (_s(row, "asin") or "").strip().upper() or None
+        group_key = asin if asin else name.lower()
+
+        if group_key not in processed:
+            # Find existing product
+            existing_id = None
+            if asin:
+                r = conn.execute(
+                    "SELECT id FROM products_catalog WHERE asin=?", (asin,)
+                ).fetchone()
+                if r:
+                    existing_id = r[0]
+            if existing_id is None:
+                r = conn.execute(
+                    "SELECT id FROM products_catalog WHERE LOWER(name)=LOWER(?)", (name,)
+                ).fetchone()
+                if r:
+                    existing_id = r[0]
+
+            data = {
+                "asin":          asin,
+                "sku":           _s(row, "sku"),
+                "name":          name,
+                "product_type":  _s(row, "product_type"),
+                "marketplace":   _s(row, "marketplace") or "amazon.com",
+                "width_cm":      _f(row, "width_cm") or None,
+                "length_cm":     _f(row, "length_cm") or None,
+                "height_cm":     _f(row, "height_cm") or None,
+                "weight_kg":     _f(row, "weight_kg") or None,
+                "shipping_cost": _f(row, "shipping_cost"),
+                "customs_rate":  _f(row, "customs_rate"),
+                "fba_fee":       _f(row, "fba_fee"),
+                "is_new_product": 1 if str(row.get("is_new_product", "")).strip().lower() in ("1", "true", "yes") else 0,
+                "notes":         _s(row, "notes"),
+            }
+            try:
+                pid = upsert_product_catalog(data, product_id=existing_id)
+                processed[group_key] = pid
+                saved += 1
+            except Exception as e:
+                warnings.append(f"Product '{name}' skipped: {e}")
+                continue
+
+        pid = processed[group_key]
+
+        # Handle optional component
+        item_name_raw = _s(row, "item_name")
+        if item_name_raw:
+            key = item_name_raw.lower()
+            item_id = item_map.get(key)
+            if item_id is None:
+                warnings.append(f"Product '{name}': item '{item_name_raw}' not found — skipped component.")
+            else:
+                qty = int(_f(row, "item_quantity", 1) or 1)
+                try:
+                    conn.execute("""
+                        INSERT INTO product_components (product_id, item_id, quantity)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(product_id, item_id) DO UPDATE SET quantity=excluded.quantity
+                    """, (pid, item_id, qty))
+                    conn.commit()
+                except Exception as e:
+                    warnings.append(f"Product '{name}' component '{item_name_raw}': {e}")
+
     conn.close()
+    return saved, warnings

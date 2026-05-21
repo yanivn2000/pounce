@@ -146,29 +146,34 @@ def save_products_db(df: pd.DataFrame):
             if not asin:
                 continue
             is_new = 1 if row.get("New Product") else 0
-            conn.execute("""
-                INSERT INTO product_costs
-                    (asin, product_name, product_cost,
-                     shipping_cost, customs_cost, fba_fee,
-                     is_new_product, updated_at)
-                VALUES (?,?,?,?,?,?,?,datetime('now'))
-                ON CONFLICT(asin) DO UPDATE SET
-                    product_name    = excluded.product_name,
-                    product_cost    = excluded.product_cost,
-                    shipping_cost   = excluded.shipping_cost,
-                    customs_cost    = excluded.customs_cost,
-                    fba_fee         = excluded.fba_fee,
-                    is_new_product  = excluded.is_new_product,
-                    updated_at      = datetime('now')
-            """, (
-                asin,
-                str(row.get("Product Name") or ""),
-                float(row.get("Product Cost") or 0),
-                float(row.get("Shipping Cost") or 0),
-                float(row.get("Customs Cost") or 0),
-                float(row.get("FBA Fee") or 0),
-                is_new,
-            ))
+            existing = conn.execute(
+                "SELECT id FROM products_catalog WHERE asin=?", (asin,)
+            ).fetchone()
+            if existing:
+                conn.execute("""
+                    UPDATE products_catalog
+                    SET name=COALESCE(?, name),
+                        fba_fee=?,
+                        is_new_product=?,
+                        updated_at=datetime('now')
+                    WHERE asin=?
+                """, (
+                    str(row.get("Product Name") or "").strip() or None,
+                    float(row.get("FBA Fee") or 0),
+                    is_new,
+                    asin,
+                ))
+            else:
+                conn.execute("""
+                    INSERT INTO products_catalog
+                        (asin, name, fba_fee, is_new_product, updated_at)
+                    VALUES (?, ?, ?, ?, datetime('now'))
+                """, (
+                    asin,
+                    str(row.get("Product Name") or asin),
+                    float(row.get("FBA Fee") or 0),
+                    is_new,
+                ))
     conn.close()
 
 
@@ -176,7 +181,7 @@ def delete_product_db(asin: str):
     from db.database import get_conn
     conn = get_conn()
     with conn:
-        conn.execute("DELETE FROM product_costs WHERE asin = ?", (asin.strip().upper(),))
+        conn.execute("DELETE FROM products_catalog WHERE asin = ?", (asin.strip().upper(),))
     conn.close()
 
 
@@ -215,7 +220,9 @@ def get_cost_map_db() -> dict:
 def products_exist_db() -> bool:
     from db.database import get_conn
     conn = get_conn()
-    n = conn.execute("SELECT COUNT(*) FROM product_costs").fetchone()[0]
+    n = conn.execute(
+        "SELECT COUNT(*) FROM products_catalog WHERE asin IS NOT NULL AND asin != ''"
+    ).fetchone()[0]
     conn.close()
     return n > 0
 

@@ -76,17 +76,6 @@ def init_db():
                 created_at              TEXT DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS product_costs (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                asin            TEXT NOT NULL UNIQUE,
-                product_name    TEXT,
-                product_cost    REAL DEFAULT 0,
-                shipping_cost   REAL DEFAULT 0,
-                customs_cost    REAL DEFAULT 0,
-                fba_fee         REAL DEFAULT 0,
-                updated_at      TEXT DEFAULT (datetime('now'))
-            );
-
             CREATE INDEX IF NOT EXISTS idx_orders_date    ON orders(order_date);
             CREATE INDEX IF NOT EXISTS idx_orders_asin    ON orders(asin);
             CREATE INDEX IF NOT EXISTS idx_orders_market  ON orders(marketplace);
@@ -245,6 +234,8 @@ def init_db():
     _migrate_campaign_performance(conn)
     _migrate_app_settings(conn)
     _migrate_product_catalog(conn)
+    _migrate_product_costs_to_view(conn)
+    _migrate_suppliers_contact_fields(conn)
     conn.close()
 
 
@@ -479,6 +470,86 @@ def _migrate_product_costs(conn: sqlite3.Connection):
         ALTER TABLE product_costs_new RENAME TO product_costs;
     """)
     conn.close()
+
+
+def _migrate_suppliers_contact_fields(conn: sqlite3.Connection):
+    """Add address, contact_person, email, tel columns to suppliers if missing."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(suppliers)").fetchall()]
+        for col, typedef in [
+            ("address",        "TEXT"),
+            ("contact_person", "TEXT"),
+            ("email",          "TEXT"),
+            ("tel",            "TEXT"),
+        ]:
+            if col not in cols:
+                conn.execute(f"ALTER TABLE suppliers ADD COLUMN {col} {typedef}")
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_product_costs_to_view(conn: sqlite3.Connection):
+    """
+    Replace the product_costs TABLE with a VIEW computed from products_catalog.
+    Steps:
+      1. If product_costs is already a view, return immediately.
+      2. If product_costs is a table, migrate any orphan rows (ASIN not already in
+         products_catalog) as stub catalog entries, then DROP the table.
+      3. CREATE VIEW product_costs computing costs from products_catalog + components + items.
+    """
+    try:
+        obj = conn.execute(
+            "SELECT type FROM sqlite_master WHERE name='product_costs'"
+        ).fetchone()
+        if obj and obj[0] == 'view':
+            return  # already migrated
+
+        if obj and obj[0] == 'table':
+            # Migrate orphan rows into products_catalog as stubs
+            conn.execute("""
+                INSERT OR IGNORE INTO products_catalog
+                    (asin, name, fba_fee, is_new_product)
+                SELECT asin,
+                       COALESCE(product_name, asin),
+                       COALESCE(fba_fee, 0),
+                       COALESCE(is_new_product, 0)
+                FROM product_costs
+                WHERE asin IS NOT NULL AND asin != ''
+                  AND NOT EXISTS (
+                      SELECT 1 FROM products_catalog cat WHERE cat.asin = product_costs.asin
+                  )
+            """)
+            conn.execute("DROP TABLE product_costs")
+
+        conn.execute("""
+            CREATE VIEW IF NOT EXISTS product_costs AS
+            SELECT
+                pc.id,
+                pc.asin,
+                pc.name                          AS product_name,
+                COALESCE((
+                    SELECT SUM((i.manufacturer_cost + i.service_cost) * pcomp.quantity)
+                    FROM product_components pcomp
+                    JOIN items i ON i.id = pcomp.item_id
+                    WHERE pcomp.product_id = pc.id
+                ), 0)                            AS product_cost,
+                pc.shipping_cost,
+                COALESCE((
+                    SELECT SUM(i.manufacturer_cost * pcomp.quantity)
+                    FROM product_components pcomp
+                    JOIN items i ON i.id = pcomp.item_id
+                    WHERE pcomp.product_id = pc.id
+                ), 0) * pc.customs_rate / 100.0  AS customs_cost,
+                COALESCE(pc.fba_fee, 0)          AS fba_fee,
+                COALESCE(pc.is_new_product, 0)   AS is_new_product,
+                pc.updated_at
+            FROM products_catalog pc
+            WHERE pc.asin IS NOT NULL AND pc.asin != ''
+        """)
+        conn.commit()
+    except Exception:
+        pass
 
 
 def _migrate_product_catalog(conn: sqlite3.Connection):

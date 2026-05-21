@@ -48,7 +48,8 @@ from db.products_catalog import (
     get_items, upsert_item, delete_item,
     get_products_catalog, upsert_product_catalog, delete_product_catalog,
     get_product_components, set_product_components,
-    calc_product_cost, sync_product_to_costs,
+    calc_product_cost,
+    import_items_csv, import_products_catalog_csv,
 )
 
 init_db()
@@ -618,118 +619,9 @@ with tab_inv:
 # TAB — PROFIT
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_profit:
-    _products_tab, _suppliers_tab, _items_tab, _catalog_tab = st.tabs([
-        "📦 Products & Costs", "🏭 Suppliers", "🧩 Items", "📋 Products Catalog"
+    _suppliers_tab, _items_tab, _catalog_tab = st.tabs([
+        "🏭 Suppliers", "🧩 Items", "📋 Products Catalog"
     ])
-    tab_products = _products_tab
-
-with tab_products:
-    st.markdown("# 📦 Products")
-    st.markdown(
-        f"<p style='color:{T['text_secondary']};'>Product costs are shared across all marketplaces. "
-        f"Set them once and they apply everywhere.</p>",
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
-        f"<strong>Break-even ROAS</strong> = Price ÷ (Price − Landed Cost − FBA Fee − Referral Fee). "
-        f"FBA fees are imported per marketplace from the Fee Preview report (Inventory tab).</p>",
-        unsafe_allow_html=True
-    )
-    st.divider()
-
-    # ── Upload CSV ────────────────────────────────────────────────────────────
-    with st.expander("📤 Import CSV", expanded=not products_exist_db()):
-        template_path = os.path.join(os.path.dirname(__file__), "data", "products_template.csv")
-        if os.path.exists(template_path):
-            with open(template_path, "rb") as f:
-                st.download_button(
-                    "⬇️ Download CSV Template",
-                    data=f.read(),
-                    file_name="pounce_products_template.csv",
-                    mime="text/csv",
-                )
-
-        uploaded_csv = st.file_uploader("Upload filled CSV", type=["csv"], key="products_csv")
-        if uploaded_csv:
-            df_imported, err = import_csv(uploaded_csv)
-            if err:
-                st.error(f"❌ {err}")
-            else:
-                st.success(f"✅ {len(df_imported)} products ready to import.")
-                st.dataframe(df_imported, use_container_width=True, hide_index=True)
-                if st.button("💾 Save to DB", type="primary"):
-                    save_products_db(df_imported)
-                    st.success(f"✅ Saved {len(df_imported)} products.")
-                    st.rerun()
-
-    st.divider()
-
-    # ── View & Edit ───────────────────────────────────────────────────────────
-    df_products = load_products_db()
-
-    if df_products.empty:
-        st.info("No products yet. Upload a CSV above or add rows manually below.")
-        df_products = pd.DataFrame(columns=DB_COLUMNS)
-    else:
-        st.markdown("### Current Products")
-        display_df = df_products.copy()
-        display_df["Landed Cost"] = display_df.apply(lambda r: round(calc_landed_cost(r), 2), axis=1)
-        display_df["Break-even ROAS"] = "Calculated from report"
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.markdown("### ✏️ Edit Products")
-    st.markdown(
-        f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
-        f"Edit directly in the table. Changes are saved per marketplace.</p>",
-        unsafe_allow_html=True
-    )
-
-    edited_df = st.data_editor(
-        df_products,
-        use_container_width=True,
-        num_rows="dynamic",
-        hide_index=True,
-        column_config={
-            "ASIN":          st.column_config.TextColumn("ASIN", help="Amazon ASIN — must appear in campaign name"),
-            "Product Name":  st.column_config.TextColumn("Product Name"),
-            "Product Cost":  st.column_config.NumberColumn("Product Cost $", format="$%.2f", min_value=0.0),
-            "Shipping Cost": st.column_config.NumberColumn("Shipping Cost $", format="$%.2f", min_value=0.0),
-            "Customs Cost":  st.column_config.NumberColumn("Customs Cost $", format="$%.2f", min_value=0.0),
-            "New Product":   st.column_config.CheckboxColumn(
-                "🚼 New Product",
-                help="Check if this product is in launch phase (<60 days / <30 reviews). "
-                     "Algorithm will suppress aggressive bid changes and flag as low-confidence.",
-                default=False,
-            ),
-        }
-    )
-
-    if not edited_df.empty:
-        st.markdown("#### 📐 Cost Breakdown Preview")
-        st.markdown(
-            f"<p style='color:{T['text_secondary']};font-size:0.83rem;'>"
-            f"Break-even ROAS calculated during analysis using avg price from your report.</p>",
-            unsafe_allow_html=True
-        )
-        preview_rows = []
-        for _, row in edited_df.iterrows():
-            lc = calc_landed_cost(row)
-            preview_rows.append({
-                "ASIN":          str(row.get("ASIN") or ""),
-                "Product":       str(row.get("Product Name") or ""),
-                "Product Cost":  f"${float(row.get('Product Cost') or 0):.2f}",
-                "Shipping Cost": f"${float(row.get('Shipping Cost') or 0):.2f}",
-                "Customs Cost":  f"${float(row.get('Customs Cost') or 0):.2f}",
-                "Landed Cost":   f"${lc:.2f}",
-            })
-        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
-
-    if st.button("💾 Save Changes", type="primary", use_container_width=True):
-        save_products_db(edited_df)
-        st.success("✅ Product costs saved. Will be used in next analysis run.")
-        st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — SUPPLIERS
@@ -749,8 +641,10 @@ with _suppliers_tab:
             lambda x: "Direct Manufacturer" if x else "Agent / Intermediary"
         )
         st.dataframe(
-            _sup_df[["name", "category", "Type", "notes"]].rename(columns={
-                "name": "Name", "category": "Category", "notes": "Notes"
+            _sup_df[["name", "category", "Type", "contact_person", "email", "tel", "address", "notes"]].rename(columns={
+                "name": "Name", "category": "Category",
+                "contact_person": "Contact", "email": "Email",
+                "tel": "Tel", "address": "Address", "notes": "Notes"
             }),
             use_container_width=True, hide_index=True
         )
@@ -786,6 +680,13 @@ with _suppliers_tab:
                 index=0 if _sup_rec.get("is_manufacturer", 1) else 1,
                 horizontal=True,
             )
+            _sup_col1, _sup_col2 = st.columns(2)
+            with _sup_col1:
+                _sup_contact = st.text_input("Contact person", value=_sup_rec.get("contact_person", "") or "")
+                _sup_email   = st.text_input("Email", value=_sup_rec.get("email", "") or "")
+            with _sup_col2:
+                _sup_tel     = st.text_input("Tel", value=_sup_rec.get("tel", "") or "")
+                _sup_address = st.text_input("Address", value=_sup_rec.get("address", "") or "")
             _sup_notes = st.text_input("Notes", value=_sup_rec.get("notes", "") or "")
             if st.form_submit_button("💾 Save Supplier", type="primary"):
                 if _sup_name.strip():
@@ -794,6 +695,10 @@ with _suppliers_tab:
                         category=_sup_cat,
                         is_manufacturer=1 if _sup_type == "Direct Manufacturer" else 0,
                         notes=_sup_notes.strip() or None,
+                        address=_sup_address.strip() or None,
+                        contact_person=_sup_contact.strip() or None,
+                        email=_sup_email.strip() or None,
+                        tel=_sup_tel.strip() or None,
                         supplier_id=_sup_edit_id,
                     )
                     st.success("✅ Supplier saved.")
@@ -827,6 +732,20 @@ with _items_tab:
 
     _item_list = get_items()
     _sup_list_for_items = get_suppliers()
+
+    with st.expander("📥 Import Items from CSV"):
+        st.markdown(
+            "**Expected columns:** `name`, `item_type`, `supplier_name`, "
+            "`manufacturer_cost`, `service_cost`, `net_width_cm`, `hst_code`, `upc`, `currency`, `notes`"
+        )
+        _items_csv = st.file_uploader("Upload Items CSV", type=["csv"], key="items_import_csv")
+        if _items_csv:
+            _imp_n, _imp_warns = import_items_csv(_items_csv)
+            if _imp_warns:
+                for w in _imp_warns:
+                    st.warning(w)
+            st.success(f"✅ {_imp_n} items imported.")
+            st.rerun()
 
     if _item_list:
         _item_df = pd.DataFrame(_item_list)
@@ -956,6 +875,23 @@ with _catalog_tab:
     _items_for_cat = get_items()
     _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}
     _prod_types = ["single_mug", "set_two_mugs", "mug_with_socks", "silicon_coaster", "other"]
+
+    with st.expander("📥 Import Products from CSV"):
+        st.markdown(
+            "**Product columns:** `name`\\*, `asin`, `sku`, `product_type`, `marketplace`, "
+            "`width_cm`, `length_cm`, `height_cm`, `weight_kg`, "
+            "`shipping_cost`, `customs_rate`, `fba_fee`, `is_new_product`, `notes`  \n"
+            "**Component columns (optional):** `item_name`, `item_quantity`  \n"
+            "Use multiple rows with the same `name`/`asin` to add multiple components."
+        )
+        _cat_csv = st.file_uploader("Upload Products CSV", type=["csv"], key="catalog_import_csv")
+        if _cat_csv:
+            _cat_n, _cat_warns = import_products_catalog_csv(_cat_csv)
+            if _cat_warns:
+                for w in _cat_warns:
+                    st.warning(w)
+            st.success(f"✅ {_cat_n} products saved.")
+            st.rerun()
 
     if _cat_list:
         # Build display table with computed landed cost
@@ -1119,9 +1055,6 @@ with _catalog_tab:
                         if _sn in _item_ids_by_name
                     ]
                     set_product_components(_saved_pid, _components)
-                    # Sync to product_costs if ASIN is set
-                    if _cat_asin.strip():
-                        sync_product_to_costs(_saved_pid)
                     st.success("✅ Product saved.")
                     st.rerun()
                 else:
