@@ -191,16 +191,19 @@ def delete_product_catalog(product_id: int):
     conn.close()
 
 
-def delete_all_products_catalog():
-    """Delete every product and its components."""
+def delete_all_products_catalog() -> str:
+    """Delete every product and its components. Returns a debug summary."""
+    from .database import DB_PATH
+    import os
     conn = get_conn()
-    # executescript issues an implicit COMMIT before running, guaranteeing the
-    # deletes are persisted even if a transaction was already open on this conn.
+    before = conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
     conn.executescript("""
         DELETE FROM product_components;
         DELETE FROM products_catalog;
     """)
+    after = conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
     conn.close()
+    return f"DB: {os.path.abspath(DB_PATH)} | before={before} after={after}"
 
 
 def get_product_components(product_id: int) -> list[dict]:
