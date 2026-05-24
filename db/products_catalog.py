@@ -383,14 +383,18 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
         }
 
         try:
-            # Match by part_id first, then by name
+            # Lookup strategy:
+            # • If part_id is provided → match ONLY by part_id. If not found, INSERT
+            #   a new row (do NOT fall back to name — different part_ids are different
+            #   items even if they share a name).
+            # • If part_id is absent → fall back to name for backward compatibility.
             part_id_val = data.get("part_id")
             existing = None
             if part_id_val:
                 existing = conn.execute(
                     "SELECT id FROM items WHERE part_id=?", (part_id_val,)
                 ).fetchone()
-            if not existing:
+            else:
                 existing = conn.execute(
                     "SELECT id FROM items WHERE LOWER(name)=LOWER(?)", (name,)
                 ).fetchone()
