@@ -243,6 +243,7 @@ def init_db():
     _migrate_products_upc(conn)
     _migrate_products_weight_gr(conn)
     _migrate_items_part_id(conn)
+    _migrate_products_part_ids(conn)
     conn.close()
 
 
@@ -724,6 +725,38 @@ def _migrate_items_part_id(conn: sqlite3.Connection):
             conn.execute("ALTER TABLE items ADD COLUMN part_id TEXT")
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_items_part_id ON items(part_id) WHERE part_id IS NOT NULL")
             conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_products_part_ids(conn: sqlite3.Connection):
+    """Add part_id_1 / part_id_2 to products_catalog and migrate existing product_components."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(products_catalog)").fetchall()]
+        if "part_id_1" not in cols:
+            conn.execute("ALTER TABLE products_catalog ADD COLUMN part_id_1 TEXT")
+        if "part_id_2" not in cols:
+            conn.execute("ALTER TABLE products_catalog ADD COLUMN part_id_2 TEXT")
+
+        # Migrate existing product_components rows → part_id_1 / part_id_2
+        products = conn.execute("SELECT id FROM products_catalog").fetchall()
+        for prod in products:
+            comps = conn.execute("""
+                SELECT i.part_id
+                FROM product_components pc
+                JOIN items i ON i.id = pc.item_id
+                WHERE pc.product_id = ?
+                ORDER BY pc.id
+                LIMIT 2
+            """, (prod[0],)).fetchall()
+            p1 = comps[0][0] if len(comps) > 0 else None
+            p2 = comps[1][0] if len(comps) > 1 else None
+            if p1 or p2:
+                conn.execute(
+                    "UPDATE products_catalog SET part_id_1=?, part_id_2=? WHERE id=? AND part_id_1 IS NULL",
+                    (p1, p2, prod[0]),
+                )
+        conn.commit()
     except Exception:
         pass
 

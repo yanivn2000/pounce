@@ -47,7 +47,6 @@ from db.products_catalog import (
     get_suppliers, upsert_supplier, delete_supplier,
     get_items, upsert_item, delete_item,
     get_products_catalog, upsert_product_catalog, delete_product_catalog,
-    get_product_components, set_product_components,
     calc_product_cost,
     import_items_csv, import_products_catalog_csv,
 )
@@ -922,40 +921,23 @@ with _catalog_tab:
     _cat_list = get_products_catalog()
     _items_for_cat = get_items()
     _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}
-    # Build display labels for component builder: "PART — Name" when part_id exists
-    _item_comp_labels = [
-        f"{i['part_id']} — {i['name']}" if i.get("part_id") else i["name"]
-        for i in _items_for_cat
-    ]
-    _item_ids_by_label = {label: item["id"] for label, item in zip(_item_comp_labels, _items_for_cat)}
-    _item_label_by_name = {item["name"]: label for label, item in zip(_item_comp_labels, _items_for_cat)}
     _prod_types = ["single_mug", "set_two_mugs", "mug_with_socks", "silicon_coaster", "other"]
 
     with st.expander("📥 Import / Export Products CSV"):
-        # ── Download current data (one row per component; products with no
-        #    components get one row with blank item_name/item_quantity) ────────
+        # ── Download current data — one row per product ───────────────────────
         _PROD_COLS = [
             "asin", "sku", "upc", "name", "product_type",
             "width_cm", "length_cm", "height_cm",
             "is_new_product",
             "carton_units", "carton_length_cm", "carton_width_cm", "carton_height_cm",
             "carton_nw_kg", "carton_gw_kg", "carton_cbm",
-            "notes", "item_part_id", "item_quantity",
+            "notes", "part_id_1", "part_id_2",
         ]
         _prod_export_rows = []
         for _pe in _cat_list:
-            _pe_comps = get_product_components(_pe["id"])
-            _pe_base = {c: _pe.get(c, "") for c in _PROD_COLS if c not in ("item_part_id", "item_quantity")}
+            _pe_base = {c: _pe.get(c, "") for c in _PROD_COLS}
             _pe_base["is_new_product"] = 1 if _pe.get("is_new_product") else 0
-            if _pe_comps:
-                for _pec in _pe_comps:
-                    _prod_export_rows.append({
-                        **_pe_base,
-                        "item_part_id": _pec.get("part_id") or _pec["item_name"],
-                        "item_quantity": _pec["quantity"],
-                    })
-            else:
-                _prod_export_rows.append({**_pe_base, "item_part_id": "", "item_quantity": ""})
+            _prod_export_rows.append(_pe_base)
         _prod_export_df = pd.DataFrame(_prod_export_rows if _prod_export_rows else [], columns=_PROD_COLS).fillna("")
         _prod_csv_buf = io.StringIO()
         _prod_export_df.to_csv(_prod_csv_buf, index=False)
@@ -967,13 +949,11 @@ with _catalog_tab:
             use_container_width=True,
         )
         st.markdown(
-            "**Product columns:** `asin`, `sku`, `upc`, `name`, `product_type`, "
-            "`width_cm`, `length_cm`, `height_cm`, "
-            "`is_new_product`, "
+            "**Columns:** `asin`, `sku`, `upc`, `name`, `product_type`, "
+            "`width_cm`, `length_cm`, `height_cm`, `is_new_product`, "
             "`carton_units`, `carton_length_cm`, `carton_width_cm`, `carton_height_cm`, "
             "`carton_nw_kg`, `carton_gw_kg`, `carton_cbm`, `notes`  \n"
-            "**Component columns (optional):** `item_part_id`, `item_quantity`  \n"
-            "Use multiple rows with the same `asin` to add multiple components."
+            "**Component columns (optional):** `part_id_1`, `part_id_2`  — reference `items.part_id`, each contributes qty 1."
         )
         # ── Upload ────────────────────────────────────────────────────────────
         _cat_csv = st.file_uploader(
@@ -999,15 +979,13 @@ with _catalog_tab:
         for _cp in _cat_list:
             _breakdown = calc_product_cost(_cp["id"])
             _cat_rows.append({
-                "Name": _cp["name"],
-                "Type": _cp["product_type"] or "",
                 "ASIN": _cp["asin"] or "",
                 "SKU":  _cp["sku"]  or "",
+                "Part ID 1": _cp.get("part_id_1") or "",
+                "Part ID 2": _cp.get("part_id_2") or "",
+                "Name": _cp["name"],
+                "Type": _cp["product_type"] or "",
                 "UPC":  _cp.get("upc") or "",
-                "Dims (WxLxH cm)": (
-                    f"{_cp['width_cm'] or '?'} × {_cp['length_cm'] or '?'} × {_cp['height_cm'] or '?'}"
-                    if any([_cp["width_cm"], _cp["length_cm"], _cp["height_cm"]]) else ""
-                ),
                 "Weight (g)": f"{_breakdown.get('total_weight_gr', 0):.0f}" if _breakdown else "",
                 "Landed Cost ($)": f"${_breakdown.get('landed_cost', 0):.2f}" if _breakdown else "—",
             })
@@ -1027,7 +1005,6 @@ with _catalog_tab:
                 _bd_df = pd.DataFrame([{
                     "Part ID": r.get("part_id") or "",
                     "Item": r["name"],
-                    "Qty": r["qty"],
                     "Mfg Cost ($)": f"${r['mfg_cost']:.2f}",
                     "Service Cost ($)": f"${r['service_cost']:.2f}",
                     "Subtotal ($)": f"${r['subtotal']:.2f}",
@@ -1130,38 +1107,39 @@ with _catalog_tab:
             _cat_is_new = st.checkbox("🚼 New product (launch phase)", value=bool(_cat_rec.get("is_new_product", 0)))
             _cat_notes = st.text_input("Notes", value=_cat_rec.get("notes", "") or "")
 
-            # Component builder
-            st.markdown("**Components**")
+            # Component picker — Part ID 1 (required) and Part ID 2 (optional)
+            st.markdown("**Components** *(each contributes qty 1)*")
             if _items_for_cat:
-                # Pre-select existing components if editing
-                _existing_comps = {}
-                if _cat_edit_id:
-                    for _ec in get_product_components(_cat_edit_id):
-                        _lbl = _item_label_by_name.get(_ec["item_name"], _ec["item_name"])
-                        _existing_comps[_lbl] = _ec["quantity"]
+                _none_label = "— none —"
+                _part_id_options = [i["part_id"] for i in _items_for_cat if i.get("part_id")]
+                _part_id_options_with_none = [_none_label] + _part_id_options
 
-                _selected_items = st.multiselect(
-                    "Select items in this product",
-                    _item_comp_labels,
-                    default=[lbl for lbl in _existing_comps if lbl in _item_ids_by_label],
-                    key="cat_components_sel",
-                )
-                _comp_quantities = {}
-                for _si in _selected_items:
-                    _comp_quantities[_si] = st.number_input(
-                        f"Qty of {_si}",
-                        min_value=1, step=1,
-                        value=int(_existing_comps.get(_si, 1)),
-                        key=f"comp_qty_{_si}",
+                _existing_p1 = _cat_rec.get("part_id_1") or _none_label
+                _existing_p2 = _cat_rec.get("part_id_2") or _none_label
+
+                _cp1, _cp2 = st.columns(2)
+                with _cp1:
+                    _cat_p1 = st.selectbox(
+                        "Part ID 1",
+                        _part_id_options,
+                        index=_part_id_options.index(_existing_p1) if _existing_p1 in _part_id_options else 0,
+                        key="cat_part_id_1",
+                    )
+                with _cp2:
+                    _cat_p2 = st.selectbox(
+                        "Part ID 2 (optional)",
+                        _part_id_options_with_none,
+                        index=_part_id_options_with_none.index(_existing_p2) if _existing_p2 in _part_id_options_with_none else 0,
+                        key="cat_part_id_2",
                     )
             else:
                 st.info("Add items in the 🧩 Items tab first.")
-                _selected_items = []
-                _comp_quantities = {}
+                _cat_p1 = None
+                _cat_p2 = None
 
             if st.form_submit_button("💾 Save Product", type="primary"):
                 if _cat_name.strip():
-                    _saved_pid = upsert_product_catalog(
+                    upsert_product_catalog(
                         data={
                             "asin": _cat_asin.strip().upper() or None,
                             "sku":  _cat_sku.strip() or None,
@@ -1180,16 +1158,11 @@ with _catalog_tab:
                             "carton_nw_kg":     _cat_carton_nw if _cat_carton_nw else None,
                             "carton_gw_kg":     _cat_carton_gw if _cat_carton_gw else None,
                             "carton_cbm":       _cat_carton_cbm if _cat_carton_cbm else None,
+                            "part_id_1": _cat_p1 if _cat_p1 and _cat_p1 != "— none —" else None,
+                            "part_id_2": _cat_p2 if _cat_p2 and _cat_p2 != "— none —" else None,
                         },
                         product_id=_cat_edit_id,
                     )
-                    # Save components
-                    _components = [
-                        {"item_id": _item_ids_by_label[_sn], "quantity": _comp_quantities[_sn]}
-                        for _sn in _selected_items
-                        if _sn in _item_ids_by_label
-                    ]
-                    set_product_components(_saved_pid, _components)
                     st.success("✅ Product saved.")
                     st.rerun()
                 else:

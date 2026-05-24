@@ -146,12 +146,12 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
         data.get("asin"), data.get("sku"), data.get("upc"), data.get("name"),
         data.get("product_type"),
         data.get("width_cm"), data.get("length_cm"), data.get("height_cm"),
-        data.get("weight_gr"), data.get("shipping_cost", 0),
-        data.get("fba_fee", 0),
+        data.get("weight_gr"),
         int(data.get("is_new_product", 0)), data.get("notes"),
         data.get("carton_units"), data.get("carton_length_cm"),
         data.get("carton_width_cm"), data.get("carton_height_cm"),
         data.get("carton_nw_kg"), data.get("carton_gw_kg"), data.get("carton_cbm"),
+        data.get("part_id_1"), data.get("part_id_2"),
     )
     with conn:
         if product_id:
@@ -159,10 +159,10 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
                 UPDATE products_catalog
                 SET asin=?, sku=?, upc=?, name=?, product_type=?,
                     width_cm=?, length_cm=?, height_cm=?, weight_gr=?,
-                    shipping_cost=?, fba_fee=?,
                     is_new_product=?, notes=?,
                     carton_units=?, carton_length_cm=?, carton_width_cm=?,
                     carton_height_cm=?, carton_nw_kg=?, carton_gw_kg=?, carton_cbm=?,
+                    part_id_1=?, part_id_2=?,
                     updated_at=datetime('now')
                 WHERE id=?
             """, (*fields, product_id))
@@ -172,9 +172,10 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
                 INSERT INTO products_catalog
                     (asin, sku, upc, name, product_type,
                      width_cm, length_cm, height_cm, weight_gr,
-                     shipping_cost, fba_fee, is_new_product, notes,
+                     is_new_product, notes,
                      carton_units, carton_length_cm, carton_width_cm,
-                     carton_height_cm, carton_nw_kg, carton_gw_kg, carton_cbm)
+                     carton_height_cm, carton_nw_kg, carton_gw_kg, carton_cbm,
+                     part_id_1, part_id_2)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, fields)
             result_id = cur.lastrowid
@@ -227,18 +228,17 @@ def set_product_components(product_id: int, components: list[dict]):
 
 def calc_product_cost(product_id: int) -> dict:
     """
-    Returns a detailed cost breakdown for a product.
+    Returns a detailed cost breakdown for a product using part_id_1 / part_id_2.
+    Each referenced item contributes qty=1.
     {
-      items: [{name, qty, mfg_cost, service_cost, subtotal}],
-      total_manufacturer,
-      total_service,
-      shipping_cost,
-      landed_cost,
+      items: [{part_id, name, mfg_cost, service_cost, subtotal, weight_gr}],
+      total_manufacturer, total_service,
+      shipping_cost, landed_cost, total_weight_gr,
     }
     """
     conn = get_conn()
     product = conn.execute(
-        "SELECT shipping_cost FROM products_catalog WHERE id=?", (product_id,)
+        "SELECT part_id_1, part_id_2 FROM products_catalog WHERE id=?", (product_id,)
     ).fetchone()
     if not product:
         conn.close()
@@ -248,37 +248,35 @@ def calc_product_cost(product_id: int) -> dict:
     # For now use a flat $0.50 USD per product.
     shipping_cost = 0.50
 
-    components = conn.execute("""
-        SELECT pc.quantity, i.part_id, i.name, i.manufacturer_cost, i.service_cost,
-               i.net_weight_grams
-        FROM product_components pc
-        JOIN items i ON i.id = pc.item_id
-        WHERE pc.product_id = ?
-    """, (product_id,)).fetchall()
-    conn.close()
-
+    part_ids = [p for p in (product["part_id_1"], product["part_id_2"]) if p]
     item_rows = []
     total_manufacturer = 0.0
     total_service = 0.0
     total_weight_gr = 0.0
-    for comp in components:
-        qty = comp["quantity"]
-        mfg = (comp["manufacturer_cost"] or 0.0) * qty
-        svc = (comp["service_cost"] or 0.0) * qty
-        wt  = (comp["net_weight_grams"] or 0.0) * qty
+
+    for pid in part_ids:
+        item = conn.execute(
+            "SELECT part_id, name, manufacturer_cost, service_cost, net_weight_grams FROM items WHERE part_id=?",
+            (pid,)
+        ).fetchone()
+        if not item:
+            continue
+        mfg = item["manufacturer_cost"] or 0.0
+        svc = item["service_cost"] or 0.0
+        wt  = item["net_weight_grams"] or 0.0
         item_rows.append({
-            "part_id": comp["part_id"] or "",
-            "name": comp["name"],
-            "qty": qty,
-            "mfg_cost": mfg,
+            "part_id":      item["part_id"] or "",
+            "name":         item["name"],
+            "mfg_cost":     mfg,
             "service_cost": svc,
-            "subtotal": mfg + svc,
-            "weight_gr": wt,
+            "subtotal":     mfg + svc,
+            "weight_gr":    wt,
         })
         total_manufacturer += mfg
         total_service += svc
         total_weight_gr += wt
 
+    conn.close()
     landed_cost = total_manufacturer + total_service + shipping_cost
 
     return {
@@ -411,16 +409,15 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
 
 def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
     """
-    Import products from CSV. Groups rows by (asin or name) so that multiple
-    rows with different item_name values create multiple components.
+    Import products from CSV. One row per product.
 
     Product columns (case-insensitive, spaces→underscores):
-      name*, asin, sku, product_type,
-      width_cm, length_cm, height_cm, weight_gr,
-      shipping_cost, fba_fee, is_new_product, notes
-
-    Component columns (optional):
-      item_name, item_quantity  (one component per row)
+      name*, asin, sku, upc, product_type,
+      width_cm, length_cm, height_cm,
+      is_new_product, notes,
+      carton_units, carton_length_cm, carton_width_cm, carton_height_cm,
+      carton_nw_kg, carton_gw_kg, carton_cbm,
+      part_id_1, part_id_2   ← items.part_id references (each qty=1)
 
     (* required)
     Returns (rows_saved, warnings).
@@ -466,76 +463,63 @@ def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
     conn = get_conn()
     processed: dict[str, int] = {}  # key → product_id
 
+    # Build item lookup: part_id → part_id (validate existence)
+    valid_part_ids = {i["part_id"] for i in get_items() if i.get("part_id")}
+
     for _, row in df.iterrows():
         name = str(row.get("name", "")).strip()
         if not name:
             continue
         asin = (_s(row, "asin") or "").strip().upper() or None
-        group_key = asin if asin else name.lower()
 
-        if group_key not in processed:
-            # Find existing product
-            existing_id = None
-            if asin:
-                r = conn.execute(
-                    "SELECT id FROM products_catalog WHERE asin=?", (asin,)
-                ).fetchone()
-                if r:
-                    existing_id = r[0]
-            if existing_id is None:
-                r = conn.execute(
-                    "SELECT id FROM products_catalog WHERE LOWER(name)=LOWER(?)", (name,)
-                ).fetchone()
-                if r:
-                    existing_id = r[0]
+        # Find existing product by ASIN then name
+        existing_id = None
+        if asin:
+            r = conn.execute("SELECT id FROM products_catalog WHERE asin=?", (asin,)).fetchone()
+            if r:
+                existing_id = r[0]
+        if existing_id is None:
+            r = conn.execute("SELECT id FROM products_catalog WHERE LOWER(name)=LOWER(?)", (name,)).fetchone()
+            if r:
+                existing_id = r[0]
 
-            data = {
-                "asin":          asin,
-                "sku":           _s(row, "sku"),
-                "upc":           _s(row, "upc"),
-                "name":          name,
-                "product_type":  _s(row, "product_type"),
-                "width_cm":      _f(row, "width_cm") or None,
-                "length_cm":     _f(row, "length_cm") or None,
-                "height_cm":     _f(row, "height_cm") or None,
-                "weight_gr":     _f(row, "weight_gr") or None,
-                "shipping_cost": _f(row, "shipping_cost"),
-                "fba_fee":       _f(row, "fba_fee"),
-                "is_new_product": 1 if str(row.get("is_new_product", "")).strip().lower() in ("1", "true", "yes") else 0,
-                "notes":         _s(row, "notes"),
-            }
-            try:
-                pid = upsert_product_catalog(data, product_id=existing_id)
-                processed[group_key] = pid
-                saved += 1
-            except Exception as e:
-                warnings.append(f"Product '{name}' skipped: {e}")
-                continue
+        # Validate part_id references
+        p1_raw = _s(row, "part_id_1")
+        p2_raw = _s(row, "part_id_2")
+        p1 = p1_raw if p1_raw and p1_raw in valid_part_ids else None
+        p2 = p2_raw if p2_raw and p2_raw in valid_part_ids else None
+        if p1_raw and not p1:
+            warnings.append(f"Product '{name}': part_id_1 '{p1_raw}' not found in items — ignored.")
+        if p2_raw and not p2:
+            warnings.append(f"Product '{name}': part_id_2 '{p2_raw}' not found in items — ignored.")
 
-        pid = processed[group_key]
-
-        # Handle optional component — look up by part_id first, then item_name
-        item_part_id_raw = _s(row, "part_id") or _s(row, "item_part_id")
-        item_name_raw    = _s(row, "item_name")
-        item_ref         = item_part_id_raw or item_name_raw
-        if item_ref:
-            item_id = (
-                item_map_by_part_id.get(item_part_id_raw)
-                if item_part_id_raw else None
-            ) or item_map.get((item_name_raw or "").lower())
-            if item_id is None:
-                warnings.append(f"Product '{name}': item '{item_ref}' not found — skipped component.")
-            else:
-                qty = int(_f(row, "item_quantity", 1) or 1)
-                try:
-                    conn.execute("""
-                        INSERT INTO product_components (product_id, item_id, quantity)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(product_id, item_id) DO UPDATE SET quantity=excluded.quantity
-                    """, (pid, item_id, qty))
-                    conn.commit()
-                except Exception as e:
-                    warnings.append(f"Product '{name}' component '{item_ref}': {e}")
+        data = {
+            "asin":           asin,
+            "sku":            _s(row, "sku"),
+            "upc":            _s(row, "upc"),
+            "name":           name,
+            "product_type":   _s(row, "product_type"),
+            "width_cm":       _f(row, "width_cm") or None,
+            "length_cm":      _f(row, "length_cm") or None,
+            "height_cm":      _f(row, "height_cm") or None,
+            "weight_gr":      _f(row, "weight_gr") or None,
+            "is_new_product": 1 if str(row.get("is_new_product", "")).strip().lower() in ("1", "true", "yes") else 0,
+            "notes":          _s(row, "notes"),
+            "carton_units":       int(_f(row, "carton_units") or 0) or None,
+            "carton_length_cm":   _f(row, "carton_length_cm") or None,
+            "carton_width_cm":    _f(row, "carton_width_cm") or None,
+            "carton_height_cm":   _f(row, "carton_height_cm") or None,
+            "carton_nw_kg":       _f(row, "carton_nw_kg") or None,
+            "carton_gw_kg":       _f(row, "carton_gw_kg") or None,
+            "carton_cbm":         _f(row, "carton_cbm") or None,
+            "part_id_1":      p1,
+            "part_id_2":      p2,
+        }
+        try:
+            upsert_product_catalog(data, product_id=existing_id)
+            saved += 1
+        except Exception as e:
+            warnings.append(f"Product '{name}' skipped: {e}")
 
     conn.close()
     return saved, warnings
