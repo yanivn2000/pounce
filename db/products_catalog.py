@@ -202,16 +202,22 @@ def delete_all_products_catalog() -> str:
     raw.execute("DELETE FROM product_components")
     raw.execute("DELETE FROM products_catalog")
     after = raw.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
-    # Force a full WAL checkpoint so changes are visible to ALL new connections.
+    # Force a full WAL checkpoint
     ckpt = raw.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    raw.close()
+
+    # Open a SECOND independent connection immediately — does it also see 0?
+    raw2 = _sq.connect(DB_PATH, isolation_level=None, check_same_thread=False)
+    verify = raw2.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
+    raw2.close()
+
     import time as _time
     mtime_after = os.path.getmtime(os.path.abspath(DB_PATH))
-    raw.close()
-    # Write sentinel file — if DB is externally replaced this file will outlive the delete
     _sentinel = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "_delete_sentinel.txt")
     with open(_sentinel, "w") as _f:
-        _f.write(f"deleted_at={_time.time():.3f} mtime_after_delete={mtime_after:.3f}")
+        _f.write(f"deleted_at={_time.time():.3f} mtime={mtime_after:.3f}")
     return (f"DB: {os.path.abspath(DB_PATH)} | before={before} after={after} "
+            f"verify(2nd-conn)={verify} "
             f"| ckpt(blocked={ckpt[0]} log={ckpt[1]} done={ckpt[2]}) "
             f"| db_mtime={mtime_after:.3f}")
 
