@@ -244,7 +244,9 @@ def calc_product_cost(product_id: int) -> dict:
         conn.close()
         return {}
 
-    shipping_cost = product["shipping_cost"] or 0.0
+    # TODO: compute dynamically from product dimensions once size tiers are set up.
+    # For now use a flat $0.50 USD per product.
+    shipping_cost = 0.50
 
     components = conn.execute("""
         SELECT pc.quantity, i.part_id, i.name, i.manufacturer_cost, i.service_cost,
