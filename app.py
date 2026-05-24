@@ -921,9 +921,14 @@ with _catalog_tab:
     _dbg_pc_type  = _dbg_conn.execute("SELECT type FROM sqlite_master WHERE name='product_costs'").fetchone()
     _dbg_pc_type  = _dbg_pc_type[0] if _dbg_pc_type else "missing"
     _dbg_conn.close()
-    import builtins as _bi
+    import builtins as _bi, os as _os, time as _time
     _mig_counts = getattr(_bi, "_pounce_migration_counts", "not set")
-    st.caption(f"🔬 DEBUG — after init_db: {st.session_state.get('_dbg_post_init_count','?')} | rows at render: {_dbg_pc_count} | returned: {len(_cat_list)}")
+    _db_abs = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "data", "pounce.db"))
+    _db_mtime_now = _os.path.getmtime(_db_abs) if _os.path.exists(_db_abs) else -1
+    _sentinel_path = _os.path.join(_os.path.dirname(_db_abs), "_delete_sentinel.txt")
+    _sentinel_txt = open(_sentinel_path).read() if _os.path.exists(_sentinel_path) else "no sentinel"
+    st.caption(f"🔬 DEBUG — after init_db: {st.session_state.get('_dbg_post_init_count','?')} | rows at render: {_dbg_pc_count} | returned: {len(_cat_list)} | db_mtime_now={_db_mtime_now:.3f}")
+    st.caption(f"🔬 SENTINEL — {_sentinel_txt}")
     st.caption(f"🔬 MIGRATIONS — {_mig_counts}")
     # ── END DEBUG ─────────────────────────────────────────────────────────────
     _items_for_cat = get_items()
