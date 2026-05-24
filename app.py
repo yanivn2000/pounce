@@ -21,9 +21,6 @@ from products import (
     load_products_db, save_products_db, get_cost_map_db, products_exist_db,
     delete_product_db, migrate_csv_to_db, DB_COLUMNS,
 )
-# One-time migration from CSV to DB on startup
-if products_exist() and not products_exist_db():
-    migrate_csv_to_db()
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
 from db.performance import save_performance_snapshot, get_performance_alerts, reset_snapshots, get_snapshot_count, get_snapshot_summary
 from db.settings import get_alert_thresholds, save_setting
@@ -52,10 +49,6 @@ from db.products_catalog import (
 )
 
 init_db()
-_post_init_conn = get_conn()
-st.session_state["_dbg_post_init_count"] = _post_init_conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
-_post_init_conn.close()
-
 # ── Session isolation ─────────────────────────────────────────────────────────
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
@@ -915,31 +908,6 @@ with _catalog_tab:
     st.divider()
 
     _cat_list = get_products_catalog()
-    # ── DEBUG: show DB state at render time ───────────────────────────────────
-    _dbg_conn = get_conn()
-    _dbg_pc_count = _dbg_conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
-    _dbg_pc_type  = _dbg_conn.execute("SELECT type FROM sqlite_master WHERE name='product_costs'").fetchone()
-    _dbg_pc_type  = _dbg_pc_type[0] if _dbg_pc_type else "missing"
-    _dbg_conn.close()
-    import builtins as _bi, os as _os, time as _time
-    _mig_counts = getattr(_bi, "_pounce_migration_counts", "not set")
-    _db_abs = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "data", "pounce.db"))
-    _db_mtime_now = _os.path.getmtime(_db_abs) if _os.path.exists(_db_abs) else -1
-    _sentinel_path = _os.path.join(_os.path.dirname(_db_abs), "_delete_sentinel.txt")
-    _sentinel_txt = open(_sentinel_path).read() if _os.path.exists(_sentinel_path) else "no sentinel"
-    # Read the insert log (populated by trigger after delete)
-    try:
-        _ilog_conn = get_conn()
-        _ilog = _ilog_conn.execute("SELECT name, ts FROM _insert_log ORDER BY id LIMIT 5").fetchall()
-        _ilog_conn.close()
-        _ilog_txt = str([dict(r) for r in _ilog]) if _ilog else "empty"
-    except Exception as _ie:
-        _ilog_txt = f"no table ({_ie})"
-    st.caption(f"🔬 DEBUG — after init_db: {st.session_state.get('_dbg_post_init_count','?')} | rows at render: {_dbg_pc_count} | returned: {len(_cat_list)} | db_mtime_now={_db_mtime_now:.3f}")
-    st.caption(f"🔬 SENTINEL — {_sentinel_txt}")
-    st.caption(f"🔬 INSERT LOG — {_ilog_txt}")
-    st.caption(f"🔬 MIGRATIONS — {_mig_counts}")
-    # ── END DEBUG ─────────────────────────────────────────────────────────────
     _items_for_cat = get_items()
     _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}
     _prod_types = ["single_mug", "set_two_mugs", "mug_with_socks", "silicon_coaster", "other"]
@@ -982,11 +950,6 @@ with _catalog_tab:
             key=f"catalog_import_csv_{st.session_state['catalog_import_key']}",
         )
         if _cat_csv:
-            import time as _ct, traceback as _tb
-            with open("/tmp/pounce_upload_debug.txt", "a") as _uf:
-                _uf.write(f"\n--- {_ct.time():.3f} upload triggered ---\n"
-                          f"key={st.session_state['catalog_import_key']} file={_cat_csv.name}\n")
-                _tb.print_stack(file=_uf)
             _cat_n, _cat_warns = import_products_catalog_csv(_cat_csv)
             st.session_state["catalog_import_result"] = (_cat_n, _cat_warns)
             st.session_state["catalog_import_key"] += 1  # resets the uploader
@@ -1217,8 +1180,8 @@ with _catalog_tab:
         _del_all_confirm = st.checkbox("Confirm — delete ALL products", key="del_all_cat_confirm")
         if st.button("🗑️ Delete All Products", disabled=not _del_all_confirm, type="primary", key="del_all_cat_btn"):
             try:
-                _dbg = delete_all_products_catalog()
-                st.session_state["catalog_delete_msg"] = f"✅ All products deleted. | {_dbg}"
+                delete_all_products_catalog()
+                st.session_state["catalog_delete_msg"] = "✅ All products deleted."
                 st.rerun()
             except Exception as _e:
                 st.error(f"Delete failed: {_e}")
