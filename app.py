@@ -1404,8 +1404,34 @@ with tab_sales:
                     flag = " ⚑" if (str(asin), col) in change_set else ""
                     display_marked.iloc[pos, col_idx] = num_str + flag
 
+            # ── Per-ASIN row totals ───────────────────────────────────────────
+            asin_row_totals = matrix[date_cols].sum(axis=1).astype(int)
+            display_marked["Total"] = [f"{t:,}" for t in asin_row_totals.values]
+
+            # ── Column totals row — prepended at TOP ──────────────────────────
+            _col_sums = {col: int(matrix[col].sum()) for col in date_cols}
+            _grand_total = sum(_col_sums.values())
+            _totals_data = {
+                "Last Change": "📊 TOTAL",
+                **{col: f"{_col_sums[col]:,}" for col in date_cols},
+                "Total": f"{_grand_total:,}",
+            }
+            _totals_row = pd.DataFrame(
+                [_totals_data],
+                index=pd.MultiIndex.from_tuples(
+                    [("", "")], names=display_marked.index.names
+                ),
+            )
+            display_marked = pd.concat([_totals_row, display_marked])
+
             def _color_matrix(df):
                 styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                # Row 0 is the totals row — style it as a bold header, skip coloring
+                _total_col_loc = styles.columns.get_loc("Total") if "Total" in styles.columns else None
+                for _c in styles.columns:
+                    styles.iloc[0, styles.columns.get_loc(_c)] = (
+                        "background-color:#e8edf2;color:#24292f;font-weight:700;"
+                    )
                 for col in date_cols:
                     if col not in df.columns:
                         continue
@@ -1416,12 +1442,15 @@ with tab_sales:
                         except (TypeError, ValueError):
                             continue
                         col_loc = styles.columns.get_loc(col)
+                        # +1 offset: row 0 is the prepended totals row
                         if p >= threshold:
-                            styles.iloc[pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
+                            styles.iloc[pos + 1, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
                         elif p <= -threshold:
-                            styles.iloc[pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                            styles.iloc[pos + 1, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
                 if change_set:
                     for pos, (asin, title) in enumerate(df.index):
+                        if pos == 0:  # skip totals row
+                            continue
                         for col in date_cols:
                             if col in df.columns and (str(asin), col) in change_set:
                                 col_loc = styles.columns.get_loc(col)
@@ -1434,6 +1463,7 @@ with tab_sales:
                 "asin":        st.column_config.TextColumn("ASIN",        width=120),
                 "title":       st.column_config.TextColumn("Title",       width=200),
                 "Last Change": st.column_config.TextColumn("Last Change", width=220),
+                "Total":       st.column_config.TextColumn("Total",       width=90),
             }
             st.dataframe(styled, use_container_width=True, column_config=col_cfg)
 
