@@ -35,7 +35,7 @@ from db.inventory import (
 )
 from db.importer import import_orders_csv, save_recommendation, save_recommendations_batch, update_recommendation_outcome
 from db.fba_fees import (
-    import_fee_preview_csv, get_fba_fees_map, get_all_fba_fees_df,
+    import_fee_preview_csv, get_fba_fees_map, get_all_fba_fees_df, clear_all_fba_fees,
     get_fx_rates, get_fx_rates_df, save_fx_rate,
 )
 from db.queries import (
@@ -60,10 +60,10 @@ if "session_id" not in st.session_state:
 
 # File-uploader key counters — incrementing resets the widget and breaks
 # the import→rerun→re-import infinite loop.
-for _k in ("items_import_key", "catalog_import_key"):
+for _k in ("items_import_key", "catalog_import_key", "fba_fees_import_key"):
     if _k not in st.session_state:
         st.session_state[_k] = 0
-for _k in ("items_import_result", "catalog_import_result"):
+for _k in ("items_import_result", "catalog_import_result", "fba_fees_import_result"):
     if _k not in st.session_state:
         st.session_state[_k] = None
 
@@ -530,34 +530,6 @@ with tab_inv:
 
         st.divider()
 
-        # ── FBA Fee Preview ───────────────────────────────────────────────────
-        st.markdown("### 💰 FBA Fee Preview")
-        st.markdown(
-            f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>"
-            f"Download from Seller Central → Reports → Fulfillment → Fee Preview. "
-            f"Marketplace is read automatically from the <code>amazon-store</code> column — "
-            f"one upload covers all marketplaces in the file.</p>",
-            unsafe_allow_html=True,
-        )
-        _fee_file = st.file_uploader(
-            "Fee Preview CSV", type=["csv", "txt"], key="fee_preview_upload"
-        )
-        if _fee_file and st.button("Import Fee Preview", key="btn_fee_preview"):
-            _n_fees, _w_fees = import_fee_preview_csv(_fee_file)
-            if _w_fees:
-                for w in _w_fees:
-                    st.warning(w)
-            if _n_fees:
-                st.success(f"✅ {_n_fees} ASIN/marketplace fee rows imported.")
-                st.rerun()
-
-        _fba_fees_df = get_all_fba_fees_df()
-        if not _fba_fees_df.empty:
-            with st.expander("📋 Current FBA Fees", expanded=False):
-                st.dataframe(_fba_fees_df, use_container_width=True, hide_index=True)
-
-        st.divider()
-
         # ── FX Rates ──────────────────────────────────────────────────────────
         st.markdown("### 💱 Exchange Rates (USD → local)")
         st.markdown(
@@ -628,8 +600,8 @@ with tab_inv:
 # TAB — PROFIT
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_profit:
-    _suppliers_tab, _items_tab, _catalog_tab = st.tabs([
-        "🏭 Suppliers", "🧩 Items", "📋 Products Catalog"
+    _suppliers_tab, _items_tab, _catalog_tab, _fba_tab = st.tabs([
+        "🏭 Suppliers", "🧩 Items", "📋 Products Catalog", "💰 FBA Fees"
     ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -965,7 +937,7 @@ with _catalog_tab:
         _PROD_COLS = [
             "asin", "sku", "upc", "name", "product_type",
             "width_cm", "length_cm", "height_cm",
-            "shipping_cost", "fba_fee", "is_new_product",
+            "shipping_cost", "is_new_product",
             "carton_units", "carton_length_cm", "carton_width_cm", "carton_height_cm",
             "carton_nw_kg", "carton_gw_kg", "carton_cbm",
             "notes", "item_part_id", "item_quantity",
@@ -997,7 +969,7 @@ with _catalog_tab:
         st.markdown(
             "**Product columns:** `asin`, `sku`, `upc`, `name`, `product_type`, "
             "`width_cm`, `length_cm`, `height_cm`, "
-            "`shipping_cost`, `fba_fee`, `is_new_product`, "
+            "`shipping_cost`, `is_new_product`, "
             "`carton_units`, `carton_length_cm`, `carton_width_cm`, `carton_height_cm`, "
             "`carton_nw_kg`, `carton_gw_kg`, `carton_cbm`, `notes`  \n"
             "**Component columns (optional):** `item_part_id`, `item_quantity`  \n"
@@ -1112,13 +1084,8 @@ with _catalog_tab:
                 _cat_h = st.number_input("Height (cm)", min_value=0.0, step=0.1, format="%.1f",
                                           value=float(_cat_rec.get("height_cm") or 0))
 
-            _ce1, _ce2 = st.columns(2)
-            with _ce1:
-                _cat_ship = st.number_input("Shipping cost ($)", min_value=0.0, step=0.01, format="%.2f",
-                                             value=float(_cat_rec.get("shipping_cost") or 0))
-            with _ce2:
-                _cat_fba = st.number_input("FBA fee ($)", min_value=0.0, step=0.01, format="%.2f",
-                                            value=float(_cat_rec.get("fba_fee") or 0))
+            _cat_ship = st.number_input("Shipping cost ($)", min_value=0.0, step=0.01, format="%.2f",
+                                         value=float(_cat_rec.get("shipping_cost") or 0))
 
             st.markdown("**Master Carton**")
             _mc1, _mc2, _mc3, _mc4 = st.columns(4)
@@ -1207,7 +1174,6 @@ with _catalog_tab:
                             "length_cm": _cat_l if _cat_l else None,
                             "height_cm": _cat_h if _cat_h else None,
                             "shipping_cost": _cat_ship,
-                            "fba_fee": _cat_fba,
                             "is_new_product": _cat_is_new,
                             "notes": _cat_notes.strip() or None,
                             "carton_units":     _cat_carton_units if _cat_carton_units else None,
@@ -1244,6 +1210,59 @@ with _catalog_tab:
             delete_product_catalog(_del_cat_id)
             st.success(f"✅ Product '{_del_cat_name}' deleted.")
             st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — FBA FEES
+# ══════════════════════════════════════════════════════════════════════════════
+with _fba_tab:
+    st.markdown("### 💰 FBA Fees")
+    st.markdown(
+        f"<p style='font-size:0.85rem;color:{T['text_secondary']};'>"
+        "Download from Seller Central → Reports → Fulfillment → Fee Preview. "
+        "Uploading a new file <strong>replaces all existing fees</strong>. "
+        "Marketplace is detected automatically from the <code>amazon-store</code> column.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Upload (replace-all) ──────────────────────────────────────────────────
+    _fee_csv = st.file_uploader(
+        "Upload Fee Preview CSV",
+        type=["csv", "txt"],
+        key=f"fba_fees_csv_{st.session_state['fba_fees_import_key']}",
+    )
+    if _fee_csv:
+        clear_all_fba_fees()
+        _nf, _wf = import_fee_preview_csv(_fee_csv)
+        st.session_state["fba_fees_import_result"] = (_nf, _wf)
+        st.session_state["fba_fees_import_key"] += 1
+        st.rerun()
+    if st.session_state["fba_fees_import_result"] is not None:
+        _nf, _wf = st.session_state["fba_fees_import_result"]
+        st.session_state["fba_fees_import_result"] = None
+        if _wf:
+            for w in _wf:
+                st.warning(w)
+        st.success(f"✅ {_nf} ASIN/marketplace fee rows imported.")
+
+    # ── Read-only table ───────────────────────────────────────────────────────
+    st.divider()
+    _fba_df = get_all_fba_fees_df()
+    if _fba_df.empty:
+        st.info("No FBA fees imported yet. Upload a Fee Preview CSV above.")
+    else:
+        st.markdown(f"**{len(_fba_df):,} rows** · last updated from Fee Preview report")
+        st.dataframe(
+            _fba_df.rename(columns={
+                "asin":          "ASIN",
+                "marketplace":   "Marketplace",
+                "pick_pack_fee": "Pick & Pack ($)",
+                "referral_fee":  "Referral ($)",
+                "currency":      "Currency",
+                "updated_at":    "Updated",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — SALES DASHBOARD

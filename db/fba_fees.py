@@ -32,6 +32,14 @@ _STORE_MAP = {
 }
 
 
+def clear_all_fba_fees():
+    """Delete all rows from fba_fees (used before a full re-import)."""
+    conn = get_conn()
+    with conn:
+        conn.execute("DELETE FROM fba_fees")
+    conn.close()
+
+
 def import_fee_preview_csv(file_obj) -> tuple[int, list[str]]:
     """
     Parse an Amazon Fee Preview CSV and upsert into fba_fees.
