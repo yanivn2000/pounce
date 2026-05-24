@@ -62,7 +62,7 @@ if "session_id" not in st.session_state:
 for _k in ("items_import_key", "catalog_import_key", "fba_fees_import_key"):
     if _k not in st.session_state:
         st.session_state[_k] = 0
-for _k in ("items_import_result", "catalog_import_result", "fba_fees_import_result"):
+for _k in ("items_import_result", "catalog_import_result", "fba_fees_import_result", "catalog_delete_msg"):
     if _k not in st.session_state:
         st.session_state[_k] = None
 
@@ -1161,6 +1161,11 @@ with _catalog_tab:
                 else:
                     st.warning("Product name is required.")
 
+    # Show post-delete confirmation (stored before rerun)
+    if st.session_state["catalog_delete_msg"]:
+        st.success(st.session_state["catalog_delete_msg"])
+        st.session_state["catalog_delete_msg"] = None
+
     if _cat_list:
         st.divider()
         st.markdown("#### 🗑️ Delete Product")
@@ -1171,7 +1176,7 @@ with _catalog_tab:
         if st.button("🗑️ Delete Product", disabled=not _del_cat_confirm, key="del_cat_btn"):
             _del_cat_id = next(p["id"] for p in _cat_list if p["name"] == _del_cat_name)
             delete_product_catalog(_del_cat_id)
-            st.success(f"✅ Product '{_del_cat_name}' deleted.")
+            st.session_state["catalog_delete_msg"] = f"✅ Product '{_del_cat_name}' deleted."
             st.rerun()
 
         st.divider()
@@ -1179,7 +1184,7 @@ with _catalog_tab:
         _del_all_confirm = st.checkbox("Confirm — delete ALL products", key="del_all_cat_confirm")
         if st.button("🗑️ Delete All Products", disabled=not _del_all_confirm, type="primary", key="del_all_cat_btn"):
             delete_all_products_catalog()
-            st.success("✅ All products deleted.")
+            st.session_state["catalog_delete_msg"] = "✅ All products deleted."
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
