@@ -1100,26 +1100,29 @@ with _catalog_tab:
             st.markdown("**Components** *(each contributes qty 1)*")
             if _items_for_cat:
                 _none_label = "— none —"
-                _part_id_options = [i["part_id"] for i in _items_for_cat if i.get("part_id")]
-                _part_id_options_with_none = [_none_label] + _part_id_options
+                _part_id_options_with_none = [_none_label] + [i["part_id"] for i in _items_for_cat if i.get("part_id")]
 
                 _existing_p1 = _cat_rec.get("part_id_1") or _none_label
                 _existing_p2 = _cat_rec.get("part_id_2") or _none_label
+
+                # Key includes product id so Streamlit resets the widget when switching products
+                _p1_key = f"cat_part_id_1_{_cat_edit_id}"
+                _p2_key = f"cat_part_id_2_{_cat_edit_id}"
 
                 _cp1, _cp2 = st.columns(2)
                 with _cp1:
                     _cat_p1 = st.selectbox(
                         "Part ID 1",
-                        _part_id_options,
-                        index=_part_id_options.index(_existing_p1) if _existing_p1 in _part_id_options else 0,
-                        key="cat_part_id_1",
+                        _part_id_options_with_none,
+                        index=_part_id_options_with_none.index(_existing_p1) if _existing_p1 in _part_id_options_with_none else 0,
+                        key=_p1_key,
                     )
                 with _cp2:
                     _cat_p2 = st.selectbox(
                         "Part ID 2 (optional)",
                         _part_id_options_with_none,
                         index=_part_id_options_with_none.index(_existing_p2) if _existing_p2 in _part_id_options_with_none else 0,
-                        key="cat_part_id_2",
+                        key=_p2_key,
                     )
             else:
                 st.info("Add items in the 🧩 Items tab first.")
