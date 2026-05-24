@@ -764,7 +764,7 @@ with _items_tab:
 
         # ── Download current items ─────────────────────────────────────────────
         _ITEMS_COLS = [
-            "name", "item_type", "supplier_name", "manufacturer_cost",
+            "part_id", "name", "item_type", "supplier_name", "manufacturer_cost",
             "service_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
             "supplier_code", "currency", "notes",
         ]
@@ -782,7 +782,7 @@ with _items_tab:
             use_container_width=True,
         )
         st.markdown(
-            "**Upload columns:** `name`\\*, `item_type`\\*, `supplier_name`, "
+            "**Upload columns:** `part_id`\\*, `name`\\*, `item_type`\\*, `supplier_name`, "
             "`manufacturer_cost`, `service_cost`, `net_weight_grams`, "
             "`hst_code_na`, `hst_code_uk`, `supplier_code`, `currency`, `notes`"
         )
@@ -800,15 +800,16 @@ with _items_tab:
         _item_df = pd.DataFrame(_item_list)
         st.dataframe(
             _item_df[[
-                "name", "item_type", "supplier_name", "manufacturer_cost",
-                "service_cost", "total_cost", "hst_code_na", "hst_code_uk",
-                    "supplier_code", "net_weight_grams", "currency"
+                "part_id", "name", "item_type", "supplier_name", "manufacturer_cost",
+                "service_cost", "total_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
+                "supplier_code", "currency"
             ]].rename(columns={
-                "name": "Name", "item_type": "Type", "supplier_name": "Supplier",
+                "part_id": "Part ID", "name": "Name", "item_type": "Type",
+                "supplier_name": "Supplier",
                 "manufacturer_cost": "Mfg Cost ($)", "service_cost": "Service Cost ($)",
-                "total_cost": "Total Cost ($)", "hst_code_na": "HS Code (NA)",
-                "hst_code_uk": "HS Code (UK)", "supplier_code": "Supplier Code",
-                "net_weight_grams": "Net Weight (g)", "currency": "Currency",
+                "total_cost": "Total Cost ($)", "net_weight_grams": "Net Weight (g)",
+                "hst_code_na": "HS Code (NA)", "hst_code_uk": "HS Code (UK)",
+                "supplier_code": "Supplier Code", "currency": "Currency",
             }),
             use_container_width=True, hide_index=True
         )
@@ -821,10 +822,13 @@ with _items_tab:
         _item_edit_id = None
         _item_rec = {}
         if _item_list:
-            _item_names = ["— New item —"] + [i["name"] for i in _item_list]
-            _item_sel = st.selectbox("Edit existing item", _item_names, key="item_edit_sel")
+            _item_labels = ["— New item —"] + [
+                f"{i['part_id']} — {i['name']}" if i.get("part_id") else i["name"]
+                for i in _item_list
+            ]
+            _item_sel = st.selectbox("Edit existing item", _item_labels, key="item_edit_sel")
             if _item_sel != "— New item —":
-                _item_rec = next(i for i in _item_list if i["name"] == _item_sel)
+                _item_rec = _item_list[_item_labels.index(_item_sel) - 1]
                 _item_edit_id = _item_rec["id"]
 
         _item_types = ["mug", "socks", "silicon_coaster", "other"]
@@ -833,6 +837,7 @@ with _items_tab:
         _sup_ids_by_name = {s["name"]: s["id"] for s in _sup_list_for_items}
 
         with st.form("item_form"):
+            _item_part_id = st.text_input("Part ID *", value=_item_rec.get("part_id", "") or "")
             _item_name = st.text_input("Name *", value=_item_rec.get("name", ""))
             _item_type = st.selectbox(
                 "Item type",
@@ -881,6 +886,7 @@ with _items_tab:
                 if _item_name.strip():
                     upsert_item(
                         data={
+                            "part_id": _item_part_id.strip() or None,
                             "name": _item_name.strip(),
                             "item_type": _item_type,
                             "supplier_id": _sup_ids_by_name.get(_item_sup_name) if _item_sup_name else None,
@@ -928,6 +934,13 @@ with _catalog_tab:
     _cat_list = get_products_catalog()
     _items_for_cat = get_items()
     _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}
+    # Build display labels for component builder: "PART — Name" when part_id exists
+    _item_comp_labels = [
+        f"{i['part_id']} — {i['name']}" if i.get("part_id") else i["name"]
+        for i in _items_for_cat
+    ]
+    _item_ids_by_label = {label: item["id"] for label, item in zip(_item_comp_labels, _items_for_cat)}
+    _item_label_by_name = {item["name"]: label for label, item in zip(_item_comp_labels, _items_for_cat)}
     _prod_types = ["single_mug", "set_two_mugs", "mug_with_socks", "silicon_coaster", "other"]
 
     with st.expander("📥 Import / Export Products CSV"):
@@ -935,22 +948,26 @@ with _catalog_tab:
         #    components get one row with blank item_name/item_quantity) ────────
         _PROD_COLS = [
             "asin", "sku", "upc", "name", "product_type",
-            "width_cm", "length_cm", "height_cm", "weight_gr",
+            "width_cm", "length_cm", "height_cm",
             "shipping_cost", "fba_fee", "is_new_product",
             "carton_units", "carton_length_cm", "carton_width_cm", "carton_height_cm",
             "carton_nw_kg", "carton_gw_kg", "carton_cbm",
-            "notes", "item_name", "item_quantity",
+            "notes", "item_part_id", "item_quantity",
         ]
         _prod_export_rows = []
         for _pe in _cat_list:
             _pe_comps = get_product_components(_pe["id"])
-            _pe_base = {c: _pe.get(c, "") for c in _PROD_COLS if c not in ("item_name", "item_quantity")}
+            _pe_base = {c: _pe.get(c, "") for c in _PROD_COLS if c not in ("item_part_id", "item_quantity")}
             _pe_base["is_new_product"] = 1 if _pe.get("is_new_product") else 0
             if _pe_comps:
                 for _pec in _pe_comps:
-                    _prod_export_rows.append({**_pe_base, "item_name": _pec["item_name"], "item_quantity": _pec["quantity"]})
+                    _prod_export_rows.append({
+                        **_pe_base,
+                        "item_part_id": _pec.get("part_id") or _pec["item_name"],
+                        "item_quantity": _pec["quantity"],
+                    })
             else:
-                _prod_export_rows.append({**_pe_base, "item_name": "", "item_quantity": ""})
+                _prod_export_rows.append({**_pe_base, "item_part_id": "", "item_quantity": ""})
         _prod_export_df = pd.DataFrame(_prod_export_rows if _prod_export_rows else [], columns=_PROD_COLS).fillna("")
         _prod_csv_buf = io.StringIO()
         _prod_export_df.to_csv(_prod_csv_buf, index=False)
@@ -963,11 +980,11 @@ with _catalog_tab:
         )
         st.markdown(
             "**Product columns:** `asin`, `sku`, `upc`, `name`, `product_type`, "
-            "`width_cm`, `length_cm`, `height_cm`, `weight_gr`, "
+            "`width_cm`, `length_cm`, `height_cm`, "
             "`shipping_cost`, `fba_fee`, `is_new_product`, "
             "`carton_units`, `carton_length_cm`, `carton_width_cm`, `carton_height_cm`, "
             "`carton_nw_kg`, `carton_gw_kg`, `carton_cbm`, `notes`  \n"
-            "**Component columns (optional):** `item_name`, `item_quantity`  \n"
+            "**Component columns (optional):** `item_part_id`, `item_quantity`  \n"
             "Use multiple rows with the same `asin` to add multiple components."
         )
         # ── Upload ────────────────────────────────────────────────────────────
@@ -995,7 +1012,7 @@ with _catalog_tab:
                     f"{_cp['width_cm'] or '?'} × {_cp['length_cm'] or '?'} × {_cp['height_cm'] or '?'}"
                     if any([_cp["width_cm"], _cp["length_cm"], _cp["height_cm"]]) else ""
                 ),
-                "Weight (g)": _cp.get("weight_gr") or "",
+                "Weight (g)": f"{_breakdown.get('total_weight_gr', 0):.0f}" if _breakdown else "",
                 "Landed Cost ($)": f"${_breakdown.get('landed_cost', 0):.2f}" if _breakdown else "—",
             })
         st.dataframe(pd.DataFrame(_cat_rows), use_container_width=True, hide_index=True)
@@ -1012,16 +1029,19 @@ with _catalog_tab:
         if _bd:
             if _bd["items"]:
                 _bd_df = pd.DataFrame([{
+                    "Part ID": r.get("part_id") or "",
                     "Item": r["name"],
                     "Qty": r["qty"],
                     "Mfg Cost ($)": f"${r['mfg_cost']:.2f}",
                     "Service Cost ($)": f"${r['service_cost']:.2f}",
                     "Subtotal ($)": f"${r['subtotal']:.2f}",
+                    "Weight (g)": f"{r['weight_gr']:.0f}",
                 } for r in _bd["items"]])
                 st.dataframe(_bd_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No components assigned to this product.")
             st.markdown(
+                f"**Net Weight:** {_bd.get('total_weight_gr', 0):.0f} g  \n"
                 f"**+ Shipping:** ${_bd['shipping_cost']:.2f}  \n"
                 f"───────────────────────  \n"
                 f"**Landed Cost: ${_bd['landed_cost']:.2f}**"
@@ -1056,8 +1076,8 @@ with _catalog_tab:
                     if _cat_rec.get("product_type") in _prod_types else 0,
                 )
 
-            st.markdown("**Dimensions**")
-            _d1, _d2, _d3, _d4 = st.columns(4)
+            st.markdown("**Dimensions** *(Weight is computed from assembled items)*")
+            _d1, _d2, _d3 = st.columns(3)
             with _d1:
                 _cat_w = st.number_input("Width (cm)", min_value=0.0, step=0.1, format="%.1f",
                                           value=float(_cat_rec.get("width_cm") or 0))
@@ -1067,9 +1087,6 @@ with _catalog_tab:
             with _d3:
                 _cat_h = st.number_input("Height (cm)", min_value=0.0, step=0.1, format="%.1f",
                                           value=float(_cat_rec.get("height_cm") or 0))
-            with _d4:
-                _cat_wt = st.number_input("Weight (g)", min_value=0.0, step=1.0, format="%.1f",
-                                           value=float(_cat_rec.get("weight_gr") or 0))
 
             _ce1, _ce2 = st.columns(2)
             with _ce1:
@@ -1131,12 +1148,13 @@ with _catalog_tab:
                 _existing_comps = {}
                 if _cat_edit_id:
                     for _ec in get_product_components(_cat_edit_id):
-                        _existing_comps[_ec["item_name"]] = _ec["quantity"]
+                        _lbl = _item_label_by_name.get(_ec["item_name"], _ec["item_name"])
+                        _existing_comps[_lbl] = _ec["quantity"]
 
                 _selected_items = st.multiselect(
                     "Select items in this product",
-                    [i["name"] for i in _items_for_cat],
-                    default=list(_existing_comps.keys()),
+                    _item_comp_labels,
+                    default=[lbl for lbl in _existing_comps if lbl in _item_ids_by_label],
                     key="cat_components_sel",
                 )
                 _comp_quantities = {}
@@ -1164,7 +1182,6 @@ with _catalog_tab:
                             "width_cm": _cat_w if _cat_w else None,
                             "length_cm": _cat_l if _cat_l else None,
                             "height_cm": _cat_h if _cat_h else None,
-                            "weight_gr": _cat_wt if _cat_wt else None,
                             "shipping_cost": _cat_ship,
                             "fba_fee": _cat_fba,
                             "is_new_product": _cat_is_new,
@@ -1181,9 +1198,9 @@ with _catalog_tab:
                     )
                     # Save components
                     _components = [
-                        {"item_id": _item_ids_by_name[_sn], "quantity": _comp_quantities[_sn]}
+                        {"item_id": _item_ids_by_label[_sn], "quantity": _comp_quantities[_sn]}
                         for _sn in _selected_items
-                        if _sn in _item_ids_by_name
+                        if _sn in _item_ids_by_label
                     ]
                     set_product_components(_saved_pid, _components)
                     st.success("✅ Product saved.")

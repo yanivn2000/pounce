@@ -77,14 +77,14 @@ def delete_supplier(supplier_id: int):
 def get_items() -> list[dict]:
     conn = get_conn()
     rows = conn.execute("""
-        SELECT i.id, i.name, i.item_type, i.supplier_id,
+        SELECT i.id, i.part_id, i.name, i.item_type, i.supplier_id,
                s.name AS supplier_name,
                i.manufacturer_cost, i.service_cost,
                (i.manufacturer_cost + i.service_cost) AS total_cost,
                i.net_weight_grams, i.hst_code_na, i.hst_code_uk, i.supplier_code, i.currency, i.notes
         FROM items i
         LEFT JOIN suppliers s ON s.id = i.supplier_id
-        ORDER BY i.name
+        ORDER BY i.part_id, i.name
     """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -93,7 +93,7 @@ def get_items() -> list[dict]:
 def upsert_item(data: dict, item_id: int | None = None) -> int:
     conn = get_conn()
     fields = (
-        data.get("name"), data.get("item_type"), data.get("supplier_id"),
+        data.get("part_id"), data.get("name"), data.get("item_type"), data.get("supplier_id"),
         data.get("manufacturer_cost", 0), data.get("service_cost", 0),
         data.get("net_weight_grams"), data.get("hst_code_na"), data.get("hst_code_uk"),
         data.get("supplier_code"), data.get("currency", "USD"), data.get("notes"),
@@ -102,7 +102,7 @@ def upsert_item(data: dict, item_id: int | None = None) -> int:
         if item_id:
             conn.execute("""
                 UPDATE items
-                SET name=?, item_type=?, supplier_id=?, manufacturer_cost=?,
+                SET part_id=?, name=?, item_type=?, supplier_id=?, manufacturer_cost=?,
                     service_cost=?, net_weight_grams=?, hst_code_na=?, hst_code_uk=?,
                     supplier_code=?, currency=?, notes=?, updated_at=datetime('now')
                 WHERE id=?
@@ -111,9 +111,9 @@ def upsert_item(data: dict, item_id: int | None = None) -> int:
         else:
             cur = conn.execute("""
                 INSERT INTO items
-                    (name, item_type, supplier_id, manufacturer_cost, service_cost,
+                    (part_id, name, item_type, supplier_id, manufacturer_cost, service_cost,
                      net_weight_grams, hst_code_na, hst_code_uk, supplier_code, currency, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, fields)
             result_id = cur.lastrowid
     conn.close()
@@ -194,14 +194,14 @@ def get_product_components(product_id: int) -> list[dict]:
     conn = get_conn()
     rows = conn.execute("""
         SELECT pc.id, pc.item_id, pc.quantity,
-               i.name AS item_name, i.item_type,
-               i.manufacturer_cost, i.service_cost,
+               i.part_id, i.name AS item_name, i.item_type,
+               i.manufacturer_cost, i.service_cost, i.net_weight_grams,
                s.name AS supplier_name
         FROM product_components pc
         JOIN items i ON i.id = pc.item_id
         LEFT JOIN suppliers s ON s.id = i.supplier_id
         WHERE pc.product_id = ?
-        ORDER BY i.name
+        ORDER BY i.part_id, i.name
     """, (product_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -247,7 +247,8 @@ def calc_product_cost(product_id: int) -> dict:
     shipping_cost = product["shipping_cost"] or 0.0
 
     components = conn.execute("""
-        SELECT pc.quantity, i.name, i.manufacturer_cost, i.service_cost
+        SELECT pc.quantity, i.part_id, i.name, i.manufacturer_cost, i.service_cost,
+               i.net_weight_grams
         FROM product_components pc
         JOIN items i ON i.id = pc.item_id
         WHERE pc.product_id = ?
@@ -257,19 +258,24 @@ def calc_product_cost(product_id: int) -> dict:
     item_rows = []
     total_manufacturer = 0.0
     total_service = 0.0
+    total_weight_gr = 0.0
     for comp in components:
         qty = comp["quantity"]
         mfg = (comp["manufacturer_cost"] or 0.0) * qty
         svc = (comp["service_cost"] or 0.0) * qty
+        wt  = (comp["net_weight_grams"] or 0.0) * qty
         item_rows.append({
+            "part_id": comp["part_id"] or "",
             "name": comp["name"],
             "qty": qty,
             "mfg_cost": mfg,
             "service_cost": svc,
             "subtotal": mfg + svc,
+            "weight_gr": wt,
         })
         total_manufacturer += mfg
         total_service += svc
+        total_weight_gr += wt
 
     landed_cost = total_manufacturer + total_service + shipping_cost
 
@@ -279,6 +285,7 @@ def calc_product_cost(product_id: int) -> dict:
         "total_service": total_service,
         "shipping_cost": shipping_cost,
         "landed_cost": landed_cost,
+        "total_weight_gr": total_weight_gr,
     }
 
 
@@ -361,6 +368,7 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
             return v if v and v != "nan" else None
 
         data = {
+            "part_id":           _s("part_id"),
             "name":              name,
             "item_type":         item_type,
             "supplier_id":       sup_id,
@@ -375,10 +383,17 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
         }
 
         try:
-            # Look up existing item by name (case-insensitive)
-            existing = conn.execute(
-                "SELECT id FROM items WHERE LOWER(name)=LOWER(?)", (name,)
-            ).fetchone()
+            # Match by part_id first, then by name
+            part_id_val = data.get("part_id")
+            existing = None
+            if part_id_val:
+                existing = conn.execute(
+                    "SELECT id FROM items WHERE part_id=?", (part_id_val,)
+                ).fetchone()
+            if not existing:
+                existing = conn.execute(
+                    "SELECT id FROM items WHERE LOWER(name)=LOWER(?)", (name,)
+                ).fetchone()
             item_id = existing[0] if existing else None
             upsert_item(data, item_id=item_id)
             imported += 1
@@ -423,8 +438,9 @@ def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
     if "name" not in df.columns:
         return 0, ["Missing required column: 'name'"]
 
-    # Build item name → id lookup
+    # Build item lookup: part_id → id (primary), name → id (fallback)
     items_list = get_items()
+    item_map_by_part_id = {i["part_id"]: i["id"] for i in items_list if i.get("part_id")}
     item_map = {i["name"].lower(): i["id"] for i in items_list}
 
     warnings: list[str] = []
@@ -493,13 +509,17 @@ def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
 
         pid = processed[group_key]
 
-        # Handle optional component
-        item_name_raw = _s(row, "item_name")
-        if item_name_raw:
-            key = item_name_raw.lower()
-            item_id = item_map.get(key)
+        # Handle optional component — look up by part_id first, then item_name
+        item_part_id_raw = _s(row, "part_id") or _s(row, "item_part_id")
+        item_name_raw    = _s(row, "item_name")
+        item_ref         = item_part_id_raw or item_name_raw
+        if item_ref:
+            item_id = (
+                item_map_by_part_id.get(item_part_id_raw)
+                if item_part_id_raw else None
+            ) or item_map.get((item_name_raw or "").lower())
             if item_id is None:
-                warnings.append(f"Product '{name}': item '{item_name_raw}' not found — skipped component.")
+                warnings.append(f"Product '{name}': item '{item_ref}' not found — skipped component.")
             else:
                 qty = int(_f(row, "item_quantity", 1) or 1)
                 try:
@@ -510,7 +530,7 @@ def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
                     """, (pid, item_id, qty))
                     conn.commit()
                 except Exception as e:
-                    warnings.append(f"Product '{name}' component '{item_name_raw}': {e}")
+                    warnings.append(f"Product '{name}' component '{item_ref}': {e}")
 
     conn.close()
     return saved, warnings

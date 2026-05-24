@@ -242,6 +242,7 @@ def init_db():
     _migrate_items_supplier_code(conn)
     _migrate_products_upc(conn)
     _migrate_products_weight_gr(conn)
+    _migrate_items_part_id(conn)
     conn.close()
 
 
@@ -711,6 +712,18 @@ def _migrate_products_carton(conn: sqlite3.Connection):
             if col not in cols:
                 conn.execute(f"ALTER TABLE products_catalog ADD COLUMN {col} {typedef}")
         conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_items_part_id(conn: sqlite3.Connection):
+    """Add part_id column to items (user-defined unique identifier)."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(items)").fetchall()]
+        if "part_id" not in cols:
+            conn.execute("ALTER TABLE items ADD COLUMN part_id TEXT")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_items_part_id ON items(part_id) WHERE part_id IS NOT NULL")
+            conn.commit()
     except Exception:
         pass
 
