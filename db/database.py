@@ -241,6 +241,7 @@ def init_db():
     _migrate_products_carton(conn)
     _migrate_items_supplier_code(conn)
     _migrate_products_upc(conn)
+    _migrate_products_weight_gr(conn)
     conn.close()
 
 
@@ -710,6 +711,20 @@ def _migrate_products_carton(conn: sqlite3.Connection):
             if col not in cols:
                 conn.execute(f"ALTER TABLE products_catalog ADD COLUMN {col} {typedef}")
         conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_products_weight_gr(conn: sqlite3.Connection):
+    """Rename products_catalog.weight_kg → weight_gr."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(products_catalog)").fetchall()]
+        if "weight_gr" not in cols:
+            if "weight_kg" in cols:
+                conn.execute("ALTER TABLE products_catalog RENAME COLUMN weight_kg TO weight_gr")
+            else:
+                conn.execute("ALTER TABLE products_catalog ADD COLUMN weight_gr REAL")
+            conn.commit()
     except Exception:
         pass
 

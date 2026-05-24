@@ -934,12 +934,12 @@ with _catalog_tab:
         # ── Download current data (one row per component; products with no
         #    components get one row with blank item_name/item_quantity) ────────
         _PROD_COLS = [
-            "name", "asin", "sku", "upc", "product_type",
-            "width_cm", "length_cm", "height_cm", "weight_kg",
-            "shipping_cost", "fba_fee", "is_new_product", "notes",
+            "asin", "sku", "upc", "name", "product_type",
+            "width_cm", "length_cm", "height_cm", "weight_gr",
+            "shipping_cost", "fba_fee", "is_new_product",
             "carton_units", "carton_length_cm", "carton_width_cm", "carton_height_cm",
             "carton_nw_kg", "carton_gw_kg", "carton_cbm",
-            "item_name", "item_quantity",
+            "notes", "item_name", "item_quantity",
         ]
         _prod_export_rows = []
         for _pe in _cat_list:
@@ -962,13 +962,13 @@ with _catalog_tab:
             use_container_width=True,
         )
         st.markdown(
-            "**Product columns:** `name`\\*, `asin`, `sku`, `upc`, `product_type`, "
-            "`width_cm`, `length_cm`, `height_cm`, `weight_kg`, "
-            "`shipping_cost`, `fba_fee`, `is_new_product`, `notes`, "
+            "**Product columns:** `asin`, `sku`, `upc`, `name`, `product_type`, "
+            "`width_cm`, `length_cm`, `height_cm`, `weight_gr`, "
+            "`shipping_cost`, `fba_fee`, `is_new_product`, "
             "`carton_units`, `carton_length_cm`, `carton_width_cm`, `carton_height_cm`, "
-            "`carton_nw_kg`, `carton_gw_kg`, `carton_cbm`  \n"
+            "`carton_nw_kg`, `carton_gw_kg`, `carton_cbm`, `notes`  \n"
             "**Component columns (optional):** `item_name`, `item_quantity`  \n"
-            "Use multiple rows with the same `name`/`asin` to add multiple components."
+            "Use multiple rows with the same `asin` to add multiple components."
         )
         # ── Upload ────────────────────────────────────────────────────────────
         _cat_csv = st.file_uploader("Upload Products CSV", type=["csv"], key="catalog_import_csv")
@@ -995,7 +995,7 @@ with _catalog_tab:
                     f"{_cp['width_cm'] or '?'} × {_cp['length_cm'] or '?'} × {_cp['height_cm'] or '?'}"
                     if any([_cp["width_cm"], _cp["length_cm"], _cp["height_cm"]]) else ""
                 ),
-                "Weight (kg)": _cp["weight_kg"] or "",
+                "Weight (g)": _cp.get("weight_gr") or "",
                 "Landed Cost ($)": f"${_breakdown.get('landed_cost', 0):.2f}" if _breakdown else "—",
             })
         st.dataframe(pd.DataFrame(_cat_rows), use_container_width=True, hide_index=True)
@@ -1068,8 +1068,8 @@ with _catalog_tab:
                 _cat_h = st.number_input("Height (cm)", min_value=0.0, step=0.1, format="%.1f",
                                           value=float(_cat_rec.get("height_cm") or 0))
             with _d4:
-                _cat_wt = st.number_input("Weight (kg)", min_value=0.0, step=0.01, format="%.3f",
-                                           value=float(_cat_rec.get("weight_kg") or 0))
+                _cat_wt = st.number_input("Weight (g)", min_value=0.0, step=1.0, format="%.1f",
+                                           value=float(_cat_rec.get("weight_gr") or 0))
 
             _ce1, _ce2 = st.columns(2)
             with _ce1:
@@ -1164,7 +1164,7 @@ with _catalog_tab:
                             "width_cm": _cat_w if _cat_w else None,
                             "length_cm": _cat_l if _cat_l else None,
                             "height_cm": _cat_h if _cat_h else None,
-                            "weight_kg": _cat_wt if _cat_wt else None,
+                            "weight_gr": _cat_wt if _cat_wt else None,
                             "shipping_cost": _cat_ship,
                             "fba_fee": _cat_fba,
                             "is_new_product": _cat_is_new,

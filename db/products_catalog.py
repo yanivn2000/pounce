@@ -146,7 +146,7 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
         data.get("asin"), data.get("sku"), data.get("upc"), data.get("name"),
         data.get("product_type"),
         data.get("width_cm"), data.get("length_cm"), data.get("height_cm"),
-        data.get("weight_kg"), data.get("shipping_cost", 0),
+        data.get("weight_gr"), data.get("shipping_cost", 0),
         data.get("fba_fee", 0),
         int(data.get("is_new_product", 0)), data.get("notes"),
         data.get("carton_units"), data.get("carton_length_cm"),
@@ -158,7 +158,7 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
             conn.execute("""
                 UPDATE products_catalog
                 SET asin=?, sku=?, upc=?, name=?, product_type=?,
-                    width_cm=?, length_cm=?, height_cm=?, weight_kg=?,
+                    width_cm=?, length_cm=?, height_cm=?, weight_gr=?,
                     shipping_cost=?, fba_fee=?,
                     is_new_product=?, notes=?,
                     carton_units=?, carton_length_cm=?, carton_width_cm=?,
@@ -171,7 +171,7 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
             cur = conn.execute("""
                 INSERT INTO products_catalog
                     (asin, sku, upc, name, product_type,
-                     width_cm, length_cm, height_cm, weight_kg,
+                     width_cm, length_cm, height_cm, weight_gr,
                      shipping_cost, fba_fee, is_new_product, notes,
                      carton_units, carton_length_cm, carton_width_cm,
                      carton_height_cm, carton_nw_kg, carton_gw_kg, carton_cbm)
@@ -396,7 +396,7 @@ def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
 
     Product columns (case-insensitive, spaces→underscores):
       name*, asin, sku, product_type,
-      width_cm, length_cm, height_cm, weight_kg,
+      width_cm, length_cm, height_cm, weight_gr,
       shipping_cost, fba_fee, is_new_product, notes
 
     Component columns (optional):
@@ -477,7 +477,7 @@ def import_products_catalog_csv(file_obj) -> tuple[int, list[str]]:
                 "width_cm":      _f(row, "width_cm") or None,
                 "length_cm":     _f(row, "length_cm") or None,
                 "height_cm":     _f(row, "height_cm") or None,
-                "weight_kg":     _f(row, "weight_kg") or None,
+                "weight_gr":     _f(row, "weight_gr") or None,
                 "shipping_cost": _f(row, "shipping_cost"),
                 "fba_fee":       _f(row, "fba_fee"),
                 "is_new_product": 1 if str(row.get("is_new_product", "")).strip().lower() in ("1", "true", "yes") else 0,
