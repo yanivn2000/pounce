@@ -324,7 +324,7 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
 
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    missing = [c for c in ("name", "item_type") if c not in df.columns]
+    missing = [c for c in ("name",) if c not in df.columns]
     if missing:
         return 0, [f"Missing required columns: {missing}"]
 
@@ -341,7 +341,7 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
         name = str(row.get("name", "")).strip()
         if not name:
             continue
-        item_type = str(row.get("item_type", "fabric")).strip()
+        item_type = str(row.get("item_type", "other")).strip() or "other"
 
         # Resolve supplier — must exist in the closed list
         sup_id = None

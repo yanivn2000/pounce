@@ -744,7 +744,7 @@ with _items_tab:
 
         # ── Download current items ─────────────────────────────────────────────
         _ITEMS_COLS = [
-            "part_id", "name", "item_type", "supplier_name", "manufacturer_cost",
+            "part_id", "name", "supplier_name", "manufacturer_cost",
             "service_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
             "currency", "notes",
         ]
@@ -762,7 +762,7 @@ with _items_tab:
             use_container_width=True,
         )
         st.markdown(
-            "**Upload columns:** `part_id`\\*, `name`\\*, `item_type`\\*, `supplier_name`, "
+            "**Upload columns:** `part_id`\\*, `name`\\*, `supplier_name`, "
             "`manufacturer_cost`, `service_cost`, `net_weight_grams`, "
             "`hst_code_na`, `hst_code_uk`, `currency`, `notes`"
         )
@@ -790,11 +790,11 @@ with _items_tab:
         _item_df = pd.DataFrame(_item_list)
         st.dataframe(
             _item_df[[
-                "part_id", "name", "item_type", "supplier_name", "manufacturer_cost",
+                "part_id", "name", "supplier_name", "manufacturer_cost",
                 "service_cost", "total_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
                 "currency"
             ]].rename(columns={
-                "part_id": "Part ID", "name": "Name", "item_type": "Type",
+                "part_id": "Part ID", "name": "Name",
                 "supplier_name": "Supplier",
                 "manufacturer_cost": "Mfg Cost ($)", "service_cost": "Service Cost ($)",
                 "total_cost": "Total Cost ($)", "net_weight_grams": "Net Weight (g)",
@@ -821,7 +821,6 @@ with _items_tab:
                 _item_rec = _item_list[_item_labels.index(_item_sel) - 1]
                 _item_edit_id = _item_rec["id"]
 
-        _item_types = ["mug", "socks", "silicon_coaster", "other"]
         _item_currencies = ["USD", "GBP", "EUR", "CAD", "AUD"]
         _sup_options = [None] + [s["name"] for s in _sup_list_for_items]
         _sup_ids_by_name = {s["name"]: s["id"] for s in _sup_list_for_items}
@@ -829,12 +828,6 @@ with _items_tab:
         with st.form("item_form"):
             _item_part_id = st.text_input("Part ID *", value=_item_rec.get("part_id", "") or "")
             _item_name = st.text_input("Name *", value=_item_rec.get("name", ""))
-            _item_type = st.selectbox(
-                "Item type",
-                _item_types,
-                index=_item_types.index(_item_rec["item_type"])
-                if _item_rec.get("item_type") in _item_types else 0,
-            )
             _item_sup_name = st.selectbox(
                 "Supplier",
                 _sup_options,
@@ -876,7 +869,7 @@ with _items_tab:
                         data={
                             "part_id": _item_part_id.strip() or None,
                             "name": _item_name.strip(),
-                            "item_type": _item_type,
+                            "item_type": "other",
                             "supplier_id": _sup_ids_by_name.get(_item_sup_name) if _item_sup_name else None,
                             "manufacturer_cost": _item_mfg_cost,
                             "service_cost": _item_svc_cost,
