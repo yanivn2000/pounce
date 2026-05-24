@@ -58,6 +58,15 @@ init_db()
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
+# File-uploader key counters — incrementing resets the widget and breaks
+# the import→rerun→re-import infinite loop.
+for _k in ("items_import_key", "catalog_import_key"):
+    if _k not in st.session_state:
+        st.session_state[_k] = 0
+for _k in ("items_import_result", "catalog_import_result"):
+    if _k not in st.session_state:
+        st.session_state[_k] = None
+
 SESSION_DIR = os.path.join(tempfile.gettempdir(), f"amazon_ads_{st.session_state.session_id}")
 os.makedirs(SESSION_DIR, exist_ok=True)
 
@@ -787,14 +796,24 @@ with _items_tab:
             "`hst_code_na`, `hst_code_uk`, `supplier_code`, `currency`, `notes`"
         )
         # ── Upload ────────────────────────────────────────────────────────────
-        _items_csv = st.file_uploader("Upload Items CSV", type=["csv"], key="items_import_csv")
+        # Key is incremented after import so the widget resets and doesn't
+        # re-trigger the import on the next rerun (avoids infinite loop).
+        _items_csv = st.file_uploader(
+            "Upload Items CSV", type=["csv"],
+            key=f"items_import_csv_{st.session_state['items_import_key']}",
+        )
         if _items_csv:
             _imp_n, _imp_warns = import_items_csv(_items_csv)
+            st.session_state["items_import_result"] = (_imp_n, _imp_warns)
+            st.session_state["items_import_key"] += 1  # resets the uploader
+            st.rerun()
+        if st.session_state["items_import_result"] is not None:
+            _imp_n, _imp_warns = st.session_state["items_import_result"]
+            st.session_state["items_import_result"] = None
             if _imp_warns:
                 for w in _imp_warns:
                     st.warning(w)
             st.success(f"✅ {_imp_n} items imported.")
-            st.rerun()
 
     if _item_list:
         _item_df = pd.DataFrame(_item_list)
@@ -988,14 +1007,22 @@ with _catalog_tab:
             "Use multiple rows with the same `asin` to add multiple components."
         )
         # ── Upload ────────────────────────────────────────────────────────────
-        _cat_csv = st.file_uploader("Upload Products CSV", type=["csv"], key="catalog_import_csv")
+        _cat_csv = st.file_uploader(
+            "Upload Products CSV", type=["csv"],
+            key=f"catalog_import_csv_{st.session_state['catalog_import_key']}",
+        )
         if _cat_csv:
             _cat_n, _cat_warns = import_products_catalog_csv(_cat_csv)
+            st.session_state["catalog_import_result"] = (_cat_n, _cat_warns)
+            st.session_state["catalog_import_key"] += 1  # resets the uploader
+            st.rerun()
+        if st.session_state["catalog_import_result"] is not None:
+            _cat_n, _cat_warns = st.session_state["catalog_import_result"]
+            st.session_state["catalog_import_result"] = None
             if _cat_warns:
                 for w in _cat_warns:
                     st.warning(w)
             st.success(f"✅ {_cat_n} products saved.")
-            st.rerun()
 
     if _cat_list:
         # Build display table with computed landed cost
