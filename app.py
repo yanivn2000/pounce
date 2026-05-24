@@ -982,6 +982,11 @@ with _catalog_tab:
             key=f"catalog_import_csv_{st.session_state['catalog_import_key']}",
         )
         if _cat_csv:
+            import time as _ct, traceback as _tb
+            with open("/tmp/pounce_upload_debug.txt", "a") as _uf:
+                _uf.write(f"\n--- {_ct.time():.3f} upload triggered ---\n"
+                          f"key={st.session_state['catalog_import_key']} file={_cat_csv.name}\n")
+                _tb.print_stack(file=_uf)
             _cat_n, _cat_warns = import_products_catalog_csv(_cat_csv)
             st.session_state["catalog_import_result"] = (_cat_n, _cat_warns)
             st.session_state["catalog_import_key"] += 1  # resets the uploader
