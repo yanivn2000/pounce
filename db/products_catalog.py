@@ -194,16 +194,19 @@ def delete_product_catalog(product_id: int):
 def delete_all_products_catalog() -> str:
     """Delete every product and its components. Returns a debug summary."""
     from .database import DB_PATH
-    import os
-    conn = get_conn()
-    before = conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
-    conn.executescript("""
-        DELETE FROM product_components;
-        DELETE FROM products_catalog;
-    """)
-    after = conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
-    conn.close()
-    return f"DB: {os.path.abspath(DB_PATH)} | before={before} after={after}"
+    import os, sqlite3 as _sq
+    # Use a raw autocommit connection (isolation_level=None) — bypasses Python's
+    # implicit transaction management entirely, so each statement auto-commits.
+    raw = _sq.connect(DB_PATH, isolation_level=None, check_same_thread=False)
+    before = raw.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
+    raw.execute("DELETE FROM product_components")
+    raw.execute("DELETE FROM products_catalog")
+    after = raw.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
+    # Force a full WAL checkpoint so changes are visible to ALL new connections.
+    ckpt = raw.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    raw.close()
+    return (f"DB: {os.path.abspath(DB_PATH)} | before={before} after={after} "
+            f"| ckpt(blocked={ckpt[0]} log={ckpt[1]} done={ckpt[2]})")
 
 
 def get_product_components(product_id: int) -> list[dict]:
