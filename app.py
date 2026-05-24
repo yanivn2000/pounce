@@ -1183,9 +1183,12 @@ with _catalog_tab:
         st.markdown("#### 🗑️ Delete All Products")
         _del_all_confirm = st.checkbox("Confirm — delete ALL products", key="del_all_cat_confirm")
         if st.button("🗑️ Delete All Products", disabled=not _del_all_confirm, type="primary", key="del_all_cat_btn"):
-            delete_all_products_catalog()
-            st.session_state["catalog_delete_msg"] = "✅ All products deleted."
-            st.rerun()
+            try:
+                delete_all_products_catalog()
+                st.session_state["catalog_delete_msg"] = "✅ All products deleted."
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Delete failed: {_e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — FBA FEES
