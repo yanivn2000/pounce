@@ -912,6 +912,14 @@ with _catalog_tab:
     st.divider()
 
     _cat_list = get_products_catalog()
+    # ── DEBUG: show DB state at render time ───────────────────────────────────
+    _dbg_conn = get_conn()
+    _dbg_pc_count = _dbg_conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
+    _dbg_pc_type  = _dbg_conn.execute("SELECT type FROM sqlite_master WHERE name='product_costs'").fetchone()
+    _dbg_pc_type  = _dbg_pc_type[0] if _dbg_pc_type else "missing"
+    _dbg_conn.close()
+    st.caption(f"🔬 DEBUG — products_catalog rows: {_dbg_pc_count} | product_costs is: {_dbg_pc_type} | get_products_catalog() returned: {len(_cat_list)}")
+    # ── END DEBUG ─────────────────────────────────────────────────────────────
     _items_for_cat = get_items()
     _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}
     _prod_types = ["single_mug", "set_two_mugs", "mug_with_socks", "silicon_coaster", "other"]
