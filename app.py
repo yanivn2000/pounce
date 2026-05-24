@@ -52,6 +52,9 @@ from db.products_catalog import (
 )
 
 init_db()
+_post_init_conn = get_conn()
+st.session_state["_dbg_post_init_count"] = _post_init_conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
+_post_init_conn.close()
 
 # ── Session isolation ─────────────────────────────────────────────────────────
 if "session_id" not in st.session_state:
@@ -918,7 +921,7 @@ with _catalog_tab:
     _dbg_pc_type  = _dbg_conn.execute("SELECT type FROM sqlite_master WHERE name='product_costs'").fetchone()
     _dbg_pc_type  = _dbg_pc_type[0] if _dbg_pc_type else "missing"
     _dbg_conn.close()
-    st.caption(f"🔬 DEBUG — products_catalog rows: {_dbg_pc_count} | product_costs is: {_dbg_pc_type} | get_products_catalog() returned: {len(_cat_list)}")
+    st.caption(f"🔬 DEBUG — after init_db: {st.session_state.get('_dbg_post_init_count','?')} | products_catalog rows: {_dbg_pc_count} | product_costs is: {_dbg_pc_type} | get_products_catalog() returned: {len(_cat_list)}")
     # ── END DEBUG ─────────────────────────────────────────────────────────────
     _items_for_cat = get_items()
     _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}
