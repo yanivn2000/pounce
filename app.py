@@ -937,7 +937,7 @@ with _catalog_tab:
         _PROD_COLS = [
             "asin", "sku", "upc", "name", "product_type",
             "width_cm", "length_cm", "height_cm",
-            "shipping_cost", "is_new_product",
+            "is_new_product",
             "carton_units", "carton_length_cm", "carton_width_cm", "carton_height_cm",
             "carton_nw_kg", "carton_gw_kg", "carton_cbm",
             "notes", "item_part_id", "item_quantity",
@@ -969,7 +969,7 @@ with _catalog_tab:
         st.markdown(
             "**Product columns:** `asin`, `sku`, `upc`, `name`, `product_type`, "
             "`width_cm`, `length_cm`, `height_cm`, "
-            "`shipping_cost`, `is_new_product`, "
+            "`is_new_product`, "
             "`carton_units`, `carton_length_cm`, `carton_width_cm`, `carton_height_cm`, "
             "`carton_nw_kg`, `carton_gw_kg`, `carton_cbm`, `notes`  \n"
             "**Component columns (optional):** `item_part_id`, `item_quantity`  \n"
@@ -1058,9 +1058,8 @@ with _catalog_tab:
                 _cat_edit_id = _cat_rec["id"]
 
         with st.form("catalog_form"):
-            _cfa, _cfb = st.columns(2)
+            _cfa, _cfb, _cfc = st.columns(3)
             with _cfa:
-                _cat_name = st.text_input("Product name *", value=_cat_rec.get("name", ""))
                 _cat_asin = st.text_input("ASIN", value=_cat_rec.get("asin", "") or "")
                 _cat_sku  = st.text_input("SKU",  value=_cat_rec.get("sku",  "") or "")
                 _cat_upc  = st.text_input("UPC",  value=_cat_rec.get("upc",  "") or "")
@@ -1071,6 +1070,8 @@ with _catalog_tab:
                     index=_prod_types.index(_cat_rec["product_type"])
                     if _cat_rec.get("product_type") in _prod_types else 0,
                 )
+            with _cfc:
+                _cat_name = st.text_input("Product name *", value=_cat_rec.get("name", ""))
 
             st.markdown("**Dimensions** *(Weight is computed from assembled items)*")
             _d1, _d2, _d3 = st.columns(3)
@@ -1083,9 +1084,6 @@ with _catalog_tab:
             with _d3:
                 _cat_h = st.number_input("Height (cm)", min_value=0.0, step=0.1, format="%.1f",
                                           value=float(_cat_rec.get("height_cm") or 0))
-
-            _cat_ship = st.number_input("Shipping cost ($)", min_value=0.0, step=0.01, format="%.2f",
-                                         value=float(_cat_rec.get("shipping_cost") or 0))
 
             st.markdown("**Master Carton**")
             _mc1, _mc2, _mc3, _mc4 = st.columns(4)
@@ -1173,7 +1171,6 @@ with _catalog_tab:
                             "width_cm": _cat_w if _cat_w else None,
                             "length_cm": _cat_l if _cat_l else None,
                             "height_cm": _cat_h if _cat_h else None,
-                            "shipping_cost": _cat_ship,
                             "is_new_product": _cat_is_new,
                             "notes": _cat_notes.strip() or None,
                             "carton_units":     _cat_carton_units if _cat_carton_units else None,
