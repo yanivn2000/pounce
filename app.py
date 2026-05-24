@@ -775,7 +775,7 @@ with _items_tab:
         _ITEMS_COLS = [
             "part_id", "name", "item_type", "supplier_name", "manufacturer_cost",
             "service_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
-            "supplier_code", "currency", "notes",
+            "currency", "notes",
         ]
         if _item_list:
             _items_export_df = pd.DataFrame(_item_list).reindex(columns=_ITEMS_COLS).fillna("")
@@ -793,7 +793,7 @@ with _items_tab:
         st.markdown(
             "**Upload columns:** `part_id`\\*, `name`\\*, `item_type`\\*, `supplier_name`, "
             "`manufacturer_cost`, `service_cost`, `net_weight_grams`, "
-            "`hst_code_na`, `hst_code_uk`, `supplier_code`, `currency`, `notes`"
+            "`hst_code_na`, `hst_code_uk`, `currency`, `notes`"
         )
         # ── Upload ────────────────────────────────────────────────────────────
         # Key is incremented after import so the widget resets and doesn't
@@ -821,14 +821,14 @@ with _items_tab:
             _item_df[[
                 "part_id", "name", "item_type", "supplier_name", "manufacturer_cost",
                 "service_cost", "total_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
-                "supplier_code", "currency"
+                "currency"
             ]].rename(columns={
                 "part_id": "Part ID", "name": "Name", "item_type": "Type",
                 "supplier_name": "Supplier",
                 "manufacturer_cost": "Mfg Cost ($)", "service_cost": "Service Cost ($)",
                 "total_cost": "Total Cost ($)", "net_weight_grams": "Net Weight (g)",
                 "hst_code_na": "HS Code (NA)", "hst_code_uk": "HS Code (UK)",
-                "supplier_code": "Supplier Code", "currency": "Currency",
+                "currency": "Currency",
             }),
             use_container_width=True, hide_index=True
         )
@@ -886,13 +886,11 @@ with _items_tab:
                 "Net weight (g)", min_value=0.0, step=1.0, format="%.1f",
                 value=float(_item_rec.get("net_weight_grams", 0) or 0),
             )
-            _c3, _c4, _c5 = st.columns(3)
+            _c3, _c4 = st.columns(2)
             with _c3:
                 _item_hst_na = st.text_input("HS Code (NA — US & CA)", value=_item_rec.get("hst_code_na", "") or "")
             with _c4:
                 _item_hst_uk = st.text_input("HS Code (UK)", value=_item_rec.get("hst_code_uk", "") or "")
-            with _c5:
-                _item_supplier_code = st.text_input("Supplier Code", value=_item_rec.get("supplier_code", "") or "")
             _item_currency = st.selectbox(
                 "Currency",
                 _item_currencies,
@@ -914,7 +912,6 @@ with _items_tab:
                             "net_weight_grams": _item_net_weight if _item_net_weight else None,
                             "hst_code_na": _item_hst_na.strip() or None,
                             "hst_code_uk": _item_hst_uk.strip() or None,
-                            "supplier_code": _item_supplier_code.strip() or None,
                             "currency": _item_currency,
                             "notes": _item_notes.strip() or None,
                         },

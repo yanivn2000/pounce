@@ -81,7 +81,7 @@ def get_items() -> list[dict]:
                s.name AS supplier_name,
                i.manufacturer_cost, i.service_cost,
                (i.manufacturer_cost + i.service_cost) AS total_cost,
-               i.net_weight_grams, i.hst_code_na, i.hst_code_uk, i.supplier_code, i.currency, i.notes
+               i.net_weight_grams, i.hst_code_na, i.hst_code_uk, i.currency, i.notes
         FROM items i
         LEFT JOIN suppliers s ON s.id = i.supplier_id
         ORDER BY i.part_id, i.name
@@ -96,7 +96,7 @@ def upsert_item(data: dict, item_id: int | None = None) -> int:
         data.get("part_id"), data.get("name"), data.get("item_type"), data.get("supplier_id"),
         data.get("manufacturer_cost", 0), data.get("service_cost", 0),
         data.get("net_weight_grams"), data.get("hst_code_na"), data.get("hst_code_uk"),
-        data.get("supplier_code"), data.get("currency", "USD"), data.get("notes"),
+        data.get("currency", "USD"), data.get("notes"),
     )
     with conn:
         if item_id:
@@ -104,7 +104,7 @@ def upsert_item(data: dict, item_id: int | None = None) -> int:
                 UPDATE items
                 SET part_id=?, name=?, item_type=?, supplier_id=?, manufacturer_cost=?,
                     service_cost=?, net_weight_grams=?, hst_code_na=?, hst_code_uk=?,
-                    supplier_code=?, currency=?, notes=?, updated_at=datetime('now')
+                    currency=?, notes=?, updated_at=datetime('now')
                 WHERE id=?
             """, (*fields, item_id))
             result_id = item_id
@@ -112,8 +112,8 @@ def upsert_item(data: dict, item_id: int | None = None) -> int:
             cur = conn.execute("""
                 INSERT INTO items
                     (part_id, name, item_type, supplier_id, manufacturer_cost, service_cost,
-                     net_weight_grams, hst_code_na, hst_code_uk, supplier_code, currency, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     net_weight_grams, hst_code_na, hst_code_uk, currency, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, fields)
             result_id = cur.lastrowid
     conn.close()
@@ -377,7 +377,6 @@ def import_items_csv(file_obj) -> tuple[int, list[str]]:
             "net_weight_grams":  _f("net_weight_grams") or _f("net_width_cm") or None,
             "hst_code_na":       _s("hst_code_na") or _s("hst_code"),
             "hst_code_uk":       _s("hst_code_uk"),
-            "supplier_code":     _s("supplier_code"),
             "currency":          _s("currency") or "USD",
             "notes":             _s("notes"),
         }
