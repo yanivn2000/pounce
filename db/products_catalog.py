@@ -185,24 +185,22 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
 
 def delete_product_catalog(product_id: int):
     conn = get_conn()
-    with conn:
-        conn.execute("DELETE FROM product_components WHERE product_id=?", (product_id,))
-        conn.execute("DELETE FROM products_catalog WHERE id=?", (product_id,))
+    conn.execute("DELETE FROM product_components WHERE product_id=?", (product_id,))
+    conn.execute("DELETE FROM products_catalog WHERE id=?", (product_id,))
+    conn.commit()
     conn.close()
 
 
 def delete_all_products_catalog():
     """Delete every product and its components."""
     conn = get_conn()
-    try:
-        conn.execute("DELETE FROM product_components")
-        conn.execute("DELETE FROM products_catalog")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    # executescript issues an implicit COMMIT before running, guaranteeing the
+    # deletes are persisted even if a transaction was already open on this conn.
+    conn.executescript("""
+        DELETE FROM product_components;
+        DELETE FROM products_catalog;
+    """)
+    conn.close()
 
 
 def get_product_components(product_id: int) -> list[dict]:
