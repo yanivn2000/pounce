@@ -46,7 +46,7 @@ from db.queries import (
 from db.products_catalog import (
     get_suppliers, upsert_supplier, delete_supplier,
     get_items, upsert_item, delete_item,
-    get_products_catalog, upsert_product_catalog, delete_product_catalog,
+    get_products_catalog, upsert_product_catalog, delete_product_catalog, delete_all_products_catalog,
     calc_product_cost,
     import_items_csv, import_products_catalog_csv,
 )
@@ -1172,6 +1172,14 @@ with _catalog_tab:
             _del_cat_id = next(p["id"] for p in _cat_list if p["name"] == _del_cat_name)
             delete_product_catalog(_del_cat_id)
             st.success(f"✅ Product '{_del_cat_name}' deleted.")
+            st.rerun()
+
+        st.divider()
+        st.markdown("#### 🗑️ Delete All Products")
+        _del_all_confirm = st.checkbox("Confirm — delete ALL products", key="del_all_cat_confirm")
+        if st.button("🗑️ Delete All Products", disabled=not _del_all_confirm, type="primary", key="del_all_cat_btn"):
+            delete_all_products_catalog()
+            st.success("✅ All products deleted.")
             st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
