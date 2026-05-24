@@ -1404,17 +1404,18 @@ with tab_sales:
                     flag = " ⚑" if (str(asin), col) in change_set else ""
                     display_marked.iloc[pos, col_idx] = num_str + flag
 
-            # ── Per-ASIN row totals ───────────────────────────────────────────
+            # ── Per-ASIN row totals — inserted right after "Last Change" ──────
             asin_row_totals = matrix[date_cols].sum(axis=1).astype(int)
-            display_marked["Total"] = [f"{t:,}" for t in asin_row_totals.values]
+            _lc_pos = display_marked.columns.get_loc("Last Change")
+            display_marked.insert(_lc_pos + 1, "Total", [f"{t:,}" for t in asin_row_totals.values])
 
             # ── Column totals row — prepended at TOP ──────────────────────────
             _col_sums = {col: int(matrix[col].sum()) for col in date_cols}
             _grand_total = sum(_col_sums.values())
             _totals_data = {
                 "Last Change": "📊 TOTAL",
-                **{col: f"{_col_sums[col]:,}" for col in date_cols},
                 "Total": f"{_grand_total:,}",
+                **{col: f"{_col_sums[col]:,}" for col in date_cols},
             }
             _totals_row = pd.DataFrame(
                 [_totals_data],
