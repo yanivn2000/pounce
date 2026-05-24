@@ -963,20 +963,32 @@ with _catalog_tab:
             st.success(f"✅ {_cat_n} products saved.")
 
     if _cat_list:
-        # Build display table with computed landed cost
+        # Build display table with all product fields + computed landed cost
         _cat_rows = []
         for _cp in _cat_list:
             _breakdown = calc_product_cost(_cp["id"])
             _cat_rows.append({
-                "ASIN": _cp["asin"] or "",
-                "SKU":  _cp["sku"]  or "",
-                "Part ID 1": _cp.get("part_id_1") or "",
-                "Part ID 2": _cp.get("part_id_2") or "",
-                "Name": _cp["name"],
-                "Type": _cp["product_type"] or "",
-                "UPC":  _cp.get("upc") or "",
-                "Weight (g)": f"{_breakdown.get('total_weight_gr', 0):.0f}" if _breakdown else "",
-                "Landed Cost ($)": f"${_breakdown.get('landed_cost', 0):.2f}" if _breakdown else "—",
+                "ASIN":          _cp.get("asin") or "",
+                "SKU":           _cp.get("sku")  or "",
+                "UPC":           _cp.get("upc")  or "",
+                "Name":          _cp["name"],
+                "Type":          _cp.get("product_type") or "",
+                "Part ID 1":     _cp.get("part_id_1") or "",
+                "Part ID 2":     _cp.get("part_id_2") or "",
+                "W (cm)":        _cp.get("width_cm")  or "",
+                "L (cm)":        _cp.get("length_cm") or "",
+                "H (cm)":        _cp.get("height_cm") or "",
+                "Carton Units":  _cp.get("carton_units") or "",
+                "Carton L":      _cp.get("carton_length_cm") or "",
+                "Carton W":      _cp.get("carton_width_cm")  or "",
+                "Carton H":      _cp.get("carton_height_cm") or "",
+                "NW (kg)":       _cp.get("carton_nw_kg") or "",
+                "GW (kg)":       _cp.get("carton_gw_kg") or "",
+                "CBM":           _cp.get("carton_cbm")   or "",
+                "New?":          "✓" if _cp.get("is_new_product") else "",
+                "Weight (g)":    f"{_breakdown.get('total_weight_gr', 0):.0f}" if _breakdown else "",
+                "Landed Cost":   f"${_breakdown.get('landed_cost', 0):.2f}" if _breakdown else "—",
+                "Notes":         _cp.get("notes") or "",
             })
         st.dataframe(pd.DataFrame(_cat_rows), use_container_width=True, hide_index=True)
 
