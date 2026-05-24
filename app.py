@@ -921,7 +921,10 @@ with _catalog_tab:
     _dbg_pc_type  = _dbg_conn.execute("SELECT type FROM sqlite_master WHERE name='product_costs'").fetchone()
     _dbg_pc_type  = _dbg_pc_type[0] if _dbg_pc_type else "missing"
     _dbg_conn.close()
-    st.caption(f"🔬 DEBUG — after init_db: {st.session_state.get('_dbg_post_init_count','?')} | products_catalog rows: {_dbg_pc_count} | product_costs is: {_dbg_pc_type} | get_products_catalog() returned: {len(_cat_list)}")
+    import builtins as _bi
+    _mig_counts = getattr(_bi, "_pounce_migration_counts", "not set")
+    st.caption(f"🔬 DEBUG — after init_db: {st.session_state.get('_dbg_post_init_count','?')} | rows at render: {_dbg_pc_count} | returned: {len(_cat_list)}")
+    st.caption(f"🔬 MIGRATIONS — {_mig_counts}")
     # ── END DEBUG ─────────────────────────────────────────────────────────────
     _items_for_cat = get_items()
     _item_ids_by_name = {i["name"]: i["id"] for i in _items_for_cat}

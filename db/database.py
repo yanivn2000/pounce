@@ -222,28 +222,40 @@ def init_db():
                 UNIQUE(product_id, item_id)
             );
         """)
-    _migrate_product_costs(conn)
-    _migrate_recommendations_score(conn)
-    _migrate_recommendations_source(conn)
-    _migrate_product_costs_new_product(conn)
-    _migrate_recommendations_end_date(conn)
-    _migrate_fba_fees(conn)
-    _migrate_fx_rates(conn)
-    _migrate_recommendations_dedup_index(conn)
-    _migrate_recommendations_debug_json(conn)
-    _migrate_campaign_performance(conn)
-    _migrate_app_settings(conn)
-    _migrate_product_catalog(conn)
-    _migrate_product_costs_to_view(conn)
-    _migrate_suppliers_contact_fields(conn)
-    _migrate_products_schema_v2(conn)
-    _migrate_items_net_weight(conn)
-    _migrate_products_carton(conn)
-    _migrate_items_supplier_code(conn)
-    _migrate_products_upc(conn)
-    _migrate_products_weight_gr(conn)
-    _migrate_items_part_id(conn)
-    _migrate_products_part_ids(conn)
+    def _pc(label):
+        try:
+            n = conn.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
+            _migration_counts.append(f"{label}={n}")
+        except Exception as _e:
+            _migration_counts.append(f"{label}=ERR({_e})")
+
+    _migration_counts = []
+    _pc("start")
+    _migrate_product_costs(conn);            _pc("product_costs")
+    _migrate_recommendations_score(conn);    _pc("recs_score")
+    _migrate_recommendations_source(conn);   _pc("recs_source")
+    _migrate_product_costs_new_product(conn);_pc("pc_new_prod")
+    _migrate_recommendations_end_date(conn); _pc("recs_end_date")
+    _migrate_fba_fees(conn);                 _pc("fba_fees")
+    _migrate_fx_rates(conn);                 _pc("fx_rates")
+    _migrate_recommendations_dedup_index(conn); _pc("recs_dedup")
+    _migrate_recommendations_debug_json(conn);  _pc("recs_debug_json")
+    _migrate_campaign_performance(conn);     _pc("camp_perf")
+    _migrate_app_settings(conn);             _pc("app_settings")
+    _migrate_product_catalog(conn);          _pc("product_catalog")
+    _migrate_product_costs_to_view(conn);    _pc("pc_to_view")
+    _migrate_suppliers_contact_fields(conn); _pc("suppliers")
+    _migrate_products_schema_v2(conn);       _pc("schema_v2")
+    _migrate_items_net_weight(conn);         _pc("items_weight")
+    _migrate_products_carton(conn);          _pc("carton")
+    _migrate_items_supplier_code(conn);      _pc("supplier_code")
+    _migrate_products_upc(conn);             _pc("upc")
+    _migrate_products_weight_gr(conn);       _pc("weight_gr")
+    _migrate_items_part_id(conn);            _pc("part_id")
+    _migrate_products_part_ids(conn);        _pc("part_ids")
+
+    import builtins
+    builtins._pounce_migration_counts = " | ".join(_migration_counts)
     conn.close()
 
 
