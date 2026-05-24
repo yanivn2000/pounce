@@ -209,6 +209,28 @@ def delete_all_products_catalog() -> str:
     # Open a SECOND independent connection immediately — does it also see 0?
     raw2 = _sq.connect(DB_PATH, isolation_level=None, check_same_thread=False)
     verify = raw2.execute("SELECT COUNT(*) FROM products_catalog").fetchone()[0]
+
+    # Install a trigger to catch future INSERTs into products_catalog
+    raw2.execute("""
+        CREATE TABLE IF NOT EXISTS _insert_log (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            ts   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now'))
+        )
+    """)
+    raw2.execute("DELETE FROM _insert_log")
+    raw2.execute("DROP TRIGGER IF EXISTS _log_catalog_insert")
+    raw2.execute("""
+        CREATE TRIGGER _log_catalog_insert
+        AFTER INSERT ON products_catalog
+        BEGIN
+            INSERT INTO _insert_log (name) VALUES (NEW.name);
+        END
+    """)
+    # Also list any existing triggers on products_catalog
+    triggers = raw2.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='products_catalog'"
+    ).fetchall()
     raw2.close()
 
     import time as _time
@@ -216,10 +238,11 @@ def delete_all_products_catalog() -> str:
     _sentinel = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "_delete_sentinel.txt")
     with open(_sentinel, "w") as _f:
         _f.write(f"deleted_at={_time.time():.3f} mtime={mtime_after:.3f}")
+    trigger_names = [t[0] for t in triggers]
     return (f"DB: {os.path.abspath(DB_PATH)} | before={before} after={after} "
             f"verify(2nd-conn)={verify} "
             f"| ckpt(blocked={ckpt[0]} log={ckpt[1]} done={ckpt[2]}) "
-            f"| db_mtime={mtime_after:.3f}")
+            f"| db_mtime={mtime_after:.3f} | triggers={trigger_names}")
 
 
 def get_product_components(product_id: int) -> list[dict]:

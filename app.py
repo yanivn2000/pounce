@@ -927,8 +927,17 @@ with _catalog_tab:
     _db_mtime_now = _os.path.getmtime(_db_abs) if _os.path.exists(_db_abs) else -1
     _sentinel_path = _os.path.join(_os.path.dirname(_db_abs), "_delete_sentinel.txt")
     _sentinel_txt = open(_sentinel_path).read() if _os.path.exists(_sentinel_path) else "no sentinel"
+    # Read the insert log (populated by trigger after delete)
+    try:
+        _ilog_conn = get_conn()
+        _ilog = _ilog_conn.execute("SELECT name, ts FROM _insert_log ORDER BY id LIMIT 5").fetchall()
+        _ilog_conn.close()
+        _ilog_txt = str([dict(r) for r in _ilog]) if _ilog else "empty"
+    except Exception as _ie:
+        _ilog_txt = f"no table ({_ie})"
     st.caption(f"🔬 DEBUG — after init_db: {st.session_state.get('_dbg_post_init_count','?')} | rows at render: {_dbg_pc_count} | returned: {len(_cat_list)} | db_mtime_now={_db_mtime_now:.3f}")
     st.caption(f"🔬 SENTINEL — {_sentinel_txt}")
+    st.caption(f"🔬 INSERT LOG — {_ilog_txt}")
     st.caption(f"🔬 MIGRATIONS — {_mig_counts}")
     # ── END DEBUG ─────────────────────────────────────────────────────────────
     _items_for_cat = get_items()
