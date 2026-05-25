@@ -50,7 +50,7 @@ from db.products_catalog import (
 from db.productions import (
     get_productions, get_production, save_production, delete_production,
     get_production_lines, save_production_lines,
-    get_production_summary, get_catalog_skus,
+    get_production_summary, get_catalog_skus, get_sku_catalog_info,
 )
 
 init_db()
@@ -1294,12 +1294,11 @@ with tab_production:
         st.session_state.pop("prod_saved_id", None)
 
     # ── Fragment: right-side form reruns only itself on editor interactions ─────
-    # (full app rerun only on Save / Delete / radio change)
     @st.fragment
     def _prod_form(sel_prod, all_skus):
         ctx = str(sel_prod["id"]) if sel_prod else "new"
 
-        # Header — one compact row
+        # ── Header — one compact row ───────────────────────────────────────────
         _pf1, _pf2, _pf3 = st.columns([3, 2, 2])
         with _pf1:
             prod_name = st.text_input(
@@ -1336,39 +1335,105 @@ with tab_production:
             key=f"prod_notes_{ctx}",
         )
 
-        # ── SKU line items ─────────────────────────────────────────────────────
-        st.markdown("#### SKUs & Cartons")
+        # ── Single combined table ──────────────────────────────────────────────
         if not all_skus:
-            st.info("No SKUs in the Products catalog yet. Add products with SKUs in the 📦 Products tab first.")
+            st.info("No SKUs in the Products catalog yet — add products with SKUs in the 📦 Products tab first.")
         else:
-            if sel_prod:
-                _lines = get_production_lines(sel_prod["id"])
-                editor_data = (
-                    pd.DataFrame([
-                        {"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
-                        for ln in _lines
-                    ])
-                    if _lines
-                    else pd.DataFrame({"SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int)})
-                )
-            else:
-                editor_data = pd.DataFrame({"SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int)})
+            # Pre-load catalog info once (avoids N+1 queries)
+            sku_info = get_sku_catalog_info()
 
-            st.caption("Click ＋ at the bottom-left to add a row · select a row and press Delete / Backspace to remove it")
-            edited_lines = st.data_editor(
-                editor_data,
+            def _make_full_row(sku, num_cartons):
+                info = sku_info.get(sku or "", {})
+                cu    = info.get("carton_units", 0) or 0
+                units = cu * num_cartons
+                return {
+                    "SKU":               sku or "",
+                    "# Cartons":         num_cartons,
+                    "Product":           info.get("name", "") if sku else "",
+                    "# Units":           units,
+                    "Product Cost ($)":  round(info.get("unit_mfg", 0.0) * units, 2),
+                    "Service Cost ($)":  round(info.get("unit_svc", 0.0) * units, 2),
+                    "Net Weight (kg)":   round(info.get("nw_kg", 0.0) * num_cartons, 2),
+                    "Gross Weight (kg)": round(info.get("gw_kg", 0.0) * num_cartons, 2),
+                    "CBM":               round(info.get("cbm",  0.0) * num_cartons, 3),
+                }
+
+            # Read current editor diffs from session state (so computed cols
+            # reflect the in-progress edits, not just the last saved DB state)
+            _editor_key  = f"prod_lines_{ctx}"
+            _editor_diffs = st.session_state.get(_editor_key, {})
+
+            if sel_prod:
+                _db_lines = get_production_lines(sel_prod["id"])
+                _base = [
+                    {"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
+                    for ln in _db_lines
+                ]
+            else:
+                _base = []
+
+            # Apply diffs (edits / adds / deletes) made since last Save
+            _cur = {i: dict(r) for i, r in enumerate(_base)}
+            for _ri, _changes in (_editor_diffs.get("edited_rows") or {}).items():
+                _ri = int(_ri)
+                if _ri in _cur:
+                    _cur[_ri].update(_changes)
+            for _ri in sorted(_editor_diffs.get("deleted_rows") or [], reverse=True):
+                _cur.pop(_ri, None)
+            _cur_list = [_cur[k] for k in sorted(_cur)]
+            for _added in (_editor_diffs.get("added_rows") or []):
+                _cur_list.append({"SKU": _added.get("SKU", ""), "# Cartons": int(_added.get("# Cartons") or 0)})
+
+            # Build full df with computed columns
+            _full_rows = [_make_full_row(r["SKU"], int(r.get("# Cartons") or 0)) for r in _cur_list]
+            _SCHEMA = {
+                "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
+                "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
+                "Product Cost ($)": pd.Series(dtype=float),
+                "Service Cost ($)": pd.Series(dtype=float),
+                "Net Weight (kg)": pd.Series(dtype=float),
+                "Gross Weight (kg)": pd.Series(dtype=float),
+                "CBM": pd.Series(dtype=float),
+            }
+            full_df = pd.DataFrame(_full_rows) if _full_rows else pd.DataFrame(_SCHEMA)
+
+            _COMPUTED = ["Product", "# Units", "Product Cost ($)", "Service Cost ($)",
+                         "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
+
+            st.caption("Click ＋ (bottom-left) to add a row · select a row and press Delete/Backspace to remove it · computed columns update after Save")
+            edited_df = st.data_editor(
+                full_df,
                 use_container_width=True,
                 num_rows="dynamic",
-                key=f"prod_lines_{ctx}",
+                key=_editor_key,
+                disabled=_COMPUTED,
                 column_config={
-                    "SKU": st.column_config.SelectboxColumn(
-                        "SKU", options=all_skus, required=True, width=220,
-                    ),
-                    "# Cartons": st.column_config.NumberColumn(
-                        "# Cartons", min_value=0, step=1, width=130,
-                    ),
+                    "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=180),
+                    "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=110),
+                    "Product":           st.column_config.TextColumn("Product", width=200),
+                    "# Units":           st.column_config.NumberColumn("# Units", width=85),
+                    "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
+                    "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
+                    "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
+                    "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
+                    "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
                 },
             )
+
+            # Totals — single metrics line, not a second table
+            _valid = edited_df.dropna(subset=["SKU"]) if not edited_df.empty else edited_df
+            if not _valid.empty:
+                st.markdown(
+                    f"**📊 TOTAL** &nbsp;·&nbsp; "
+                    f"{int(_valid['# Cartons'].sum())} cartons &nbsp;·&nbsp; "
+                    f"{int(_valid['# Units'].sum())} units &nbsp;·&nbsp; "
+                    f"${_valid['Product Cost ($)'].sum():.2f} prod cost &nbsp;·&nbsp; "
+                    f"${_valid['Service Cost ($)'].sum():.2f} svc cost &nbsp;·&nbsp; "
+                    f"{_valid['Net Weight (kg)'].sum():.2f} kg NW &nbsp;·&nbsp; "
+                    f"{_valid['Gross Weight (kg)'].sum():.2f} kg GW &nbsp;·&nbsp; "
+                    f"{_valid['CBM'].sum():.3f} CBM",
+                    unsafe_allow_html=True,
+                )
 
             # ── Buttons ────────────────────────────────────────────────────────
             _sb1, _sb2, _sb3 = st.columns([2, 1, 7])
@@ -1387,11 +1452,11 @@ with tab_production:
                             })
                             save_production_lines(
                                 prod_id,
-                                edited_lines.dropna(subset=["SKU"]).to_dict("records"),
+                                edited_df[["SKU", "# Cartons"]].dropna(subset=["SKU"]).to_dict("records"),
                             )
                             st.session_state["prod_saved_id"] = prod_id
                             st.success(f"✅ '{prod_name.strip()}' saved.")
-                            st.rerun()  # full app rerun to refresh the left panel
+                            st.rerun()
                         except Exception as _pe:
                             st.error(f"Save failed: {_pe}")
 
@@ -1412,51 +1477,6 @@ with tab_production:
                     if st.button("Cancel", key=f"prod_del_no_{ctx}"):
                         st.session_state.pop(f"prod_del_confirm_{ctx}", None)
                         st.rerun()
-
-        # ── Summary ────────────────────────────────────────────────────────────
-        summary_id = sel_prod["id"] if sel_prod else st.session_state.get("prod_saved_id")
-        if summary_id:
-            summary = get_production_summary(summary_id)
-            if summary:
-                st.divider()
-                st.markdown("#### Summary")
-                sum_df = pd.DataFrame(summary)
-
-                totals_row = {
-                    "SKU":               "📊 TOTAL",
-                    "Product":           "",
-                    "# Cartons":         int(sum_df["# Cartons"].sum()),
-                    "# Units":           int(sum_df["# Units"].sum()),
-                    "Product Cost ($)":  round(sum_df["Product Cost ($)"].sum(), 2),
-                    "Service Cost ($)":  round(sum_df["Service Cost ($)"].sum(), 2),
-                    "Net Weight (kg)":   round(sum_df["Net Weight (kg)"].sum(), 2),
-                    "Gross Weight (kg)": round(sum_df["Gross Weight (kg)"].sum(), 2),
-                    "CBM":               round(sum_df["CBM"].sum(), 3),
-                }
-                sum_with_totals = pd.concat(
-                    [sum_df, pd.DataFrame([totals_row])], ignore_index=True
-                )
-
-                def _style_prod_summary(df):
-                    styles = pd.DataFrame("", index=df.index, columns=df.columns)
-                    for col in df.columns:
-                        styles.iloc[len(df) - 1, styles.columns.get_loc(col)] = (
-                            "background-color:#e8edf2;color:#24292f;font-weight:700;"
-                        )
-                    return styles
-
-                st.dataframe(
-                    sum_with_totals.style.apply(_style_prod_summary, axis=None),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Product Cost ($)":  st.column_config.NumberColumn(format="$%.2f"),
-                        "Service Cost ($)":  st.column_config.NumberColumn(format="$%.2f"),
-                        "Net Weight (kg)":   st.column_config.NumberColumn(format="%.2f kg"),
-                        "Gross Weight (kg)": st.column_config.NumberColumn(format="%.2f kg"),
-                        "CBM":               st.column_config.NumberColumn(format="%.3f"),
-                    },
-                )
 
     with _pcol_form:
         _prod_form(_sel_prod, _all_skus)

@@ -196,3 +196,30 @@ def get_catalog_skus() -> list[str]:
     ).fetchall()
     conn.close()
     return [r["sku"] for r in rows]
+
+
+def get_sku_catalog_info() -> dict:
+    """
+    Return {sku: {name, carton_units, nw_kg, gw_kg, cbm, unit_mfg, unit_svc}}
+    for all SKU-bearing products. One DB round-trip.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, sku, name, carton_units, carton_nw_kg, carton_gw_kg, carton_cbm "
+        "FROM products_catalog WHERE sku IS NOT NULL AND sku != '' ORDER BY sku"
+    ).fetchall()
+    conn.close()
+
+    result = {}
+    for row in rows:
+        breakdown = calc_product_cost(row["id"])
+        result[row["sku"]] = {
+            "name":         row["name"] or "",
+            "carton_units": row["carton_units"] or 0,
+            "nw_kg":        row["carton_nw_kg"]  or 0.0,
+            "gw_kg":        row["carton_gw_kg"]  or 0.0,
+            "cbm":          row["carton_cbm"]    or 0.0,
+            "unit_mfg":     breakdown.get("total_manufacturer", 0.0),
+            "unit_svc":     breakdown.get("total_service",      0.0),
+        }
+    return result
