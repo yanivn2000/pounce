@@ -1270,94 +1270,95 @@ with tab_production:
         unsafe_allow_html=True,
     )
 
-    _all_skus = get_catalog_skus()
-
-    # ── Left: production list ──────────────────────────────────────────────────
-    _productions     = get_productions()
-    _prod_names      = [p["name"] for p in _productions]
-    _prod_list_opts  = ["➕ New Production"] + _prod_names
+    _all_skus    = get_catalog_skus()
+    _productions = get_productions()
+    _prod_names  = [p["name"] for p in _productions]
 
     _pcol_list, _pcol_form = st.columns([1, 3], gap="large")
 
+    # ── Left: production list ──────────────────────────────────────────────────
     with _pcol_list:
         st.markdown("#### Productions")
         _prod_sel_name = st.radio(
             "Select",
-            _prod_list_opts,
+            ["➕ New"] + _prod_names,
             key="prod_radio",
             label_visibility="collapsed",
         )
 
     _sel_prod = None
-    if _prod_sel_name != "➕ New Production":
+    if _prod_sel_name != "➕ New":
         _sel_prod = next((p for p in _productions if p["name"] == _prod_sel_name), None)
 
-    with _pcol_form:
-        # ── Header form ───────────────────────────────────────────────────────
-        st.markdown("#### Production details")
-        _ph1, _ph2 = st.columns(2)
-        with _ph1:
-            _prod_name = st.text_input(
-                "Name *",
-                value=_sel_prod["name"] if _sel_prod else "",
-                placeholder="e.g. Spring 2026 Run",
-                key="prod_name",
-            )
-        with _ph2:
-            pass  # spacer
+    # Key includes prod id (or "new") so all widgets re-render fresh when switching
+    _ctx = str(_sel_prod["id"]) if _sel_prod else "new"
 
-        _pd1, _pd2 = st.columns(2)
-        with _pd1:
+    # ── Right: form ───────────────────────────────────────────────────────────
+    with _pcol_form:
+        # Header fields — one compact row
+        _pf1, _pf2, _pf3 = st.columns([3, 2, 2])
+        with _pf1:
+            _prod_name = st.text_input(
+                "Production name *",
+                value=_sel_prod["name"] if _sel_prod else "",
+                placeholder="e.g. YD26099",
+                key=f"prod_name_{_ctx}",
+            )
+        with _pf2:
             _prod_start = st.date_input(
                 "Est. Start",
-                value=date.fromisoformat(_sel_prod["est_start_date"]) if _sel_prod and _sel_prod.get("est_start_date") else date.today(),
-                key="prod_start",
+                value=(
+                    date.fromisoformat(_sel_prod["est_start_date"])
+                    if _sel_prod and _sel_prod.get("est_start_date")
+                    else date.today()
+                ),
+                key=f"prod_start_{_ctx}",
             )
-        with _pd2:
+        with _pf3:
             _prod_delivery = st.date_input(
                 "Est. Delivery",
-                value=date.fromisoformat(_sel_prod["est_delivery_date"]) if _sel_prod and _sel_prod.get("est_delivery_date") else date.today(),
-                key="prod_delivery",
+                value=(
+                    date.fromisoformat(_sel_prod["est_delivery_date"])
+                    if _sel_prod and _sel_prod.get("est_delivery_date")
+                    else date.today()
+                ),
+                key=f"prod_delivery_{_ctx}",
             )
 
         _prod_notes = st.text_input(
-            "Notes",
-            value=_sel_prod.get("notes") or "" if _sel_prod else "",
-            placeholder="Optional notes",
-            key="prod_notes",
+            "Notes (optional)",
+            value=(_sel_prod.get("notes") or "") if _sel_prod else "",
+            placeholder="Factory, PO number, etc.",
+            key=f"prod_notes_{_ctx}",
         )
 
-        st.markdown("#### Line items")
+        # ── SKU line items ─────────────────────────────────────────────────────
+        st.markdown("#### SKUs & Cartons")
         if not _all_skus:
-            st.info("No SKUs found in the Products catalog. Add products with SKUs in the 📦 Products tab first.")
+            st.info("No SKUs in the Products catalog yet. Add products with SKUs in the 📦 Products tab first.")
         else:
-            # Load existing lines (or start with 1 empty row)
+            # Pre-fill from DB for existing production, else one starter row
             if _sel_prod:
                 _existing_lines = get_production_lines(_sel_prod["id"])
-                _editor_init = pd.DataFrame([
-                    {
-                        "SKU":       ln["sku"],
-                        "# Cartons": int(ln["num_cartons"] or 0),
-                    }
+                _editor_data = pd.DataFrame([
+                    {"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
                     for ln in _existing_lines
-                ])
+                ]) if _existing_lines else pd.DataFrame({"SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int)})
             else:
-                _editor_init = pd.DataFrame([{
-                    "SKU":       _all_skus[0],
-                    "# Cartons": 0,
-                }])
+                _editor_data = pd.DataFrame({"SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int)})
 
+            st.caption("Add rows with the ＋ button at the bottom-left of the table. Delete a row by selecting it and pressing Backspace / Delete.")
             _edited_lines = st.data_editor(
-                _editor_init,
+                _editor_data,
                 use_container_width=True,
                 num_rows="dynamic",
-                key="prod_lines_editor",
+                key=f"prod_lines_{_ctx}",
                 column_config={
                     "SKU": st.column_config.SelectboxColumn(
                         "SKU",
                         options=_all_skus,
                         required=True,
-                        width=200,
+                        width=220,
                     ),
                     "# Cartons": st.column_config.NumberColumn(
                         "# Cartons",
@@ -1368,52 +1369,66 @@ with tab_production:
                 },
             )
 
-            # ── Action buttons ─────────────────────────────────────────────────
-            _btn_save, _btn_del, _ = st.columns([2, 2, 6])
-            with _btn_save:
-                if st.button("💾 Save", type="primary", key="prod_save"):
-                    if not _prod_name.strip():
-                        st.error("Production name is required.")
-                    else:
-                        try:
-                            _prod_id = save_production({
-                                "id":               _sel_prod["id"] if _sel_prod else None,
-                                "name":             _prod_name.strip(),
-                                "est_start_date":   str(_prod_start),
-                                "est_delivery_date": str(_prod_delivery),
-                                "notes":            _prod_notes.strip() or None,
-                            })
-                            _lines_to_save = _edited_lines.to_dict("records")
-                            save_production_lines(_prod_id, _lines_to_save)
-                            st.session_state["prod_saved_id"] = _prod_id
-                            st.success("✅ Production saved.")
-                            st.rerun()
-                        except Exception as _pe:
-                            st.error(f"Save failed: {_pe}")
-
-            with _btn_del:
-                if _sel_prod:
-                    _del_prod_confirm = st.checkbox("Confirm delete", key="prod_del_confirm")
-                    if st.button("🗑️ Delete", disabled=not _del_prod_confirm, key="prod_del_btn"):
-                        delete_production(_sel_prod["id"])
-                        st.success("Production deleted.")
+        # ── Save / Delete ──────────────────────────────────────────────────────
+        _sb1, _sb2, _sb3 = st.columns([2, 1, 7])
+        with _sb1:
+            if st.button("💾 Save", type="primary", key=f"prod_save_{_ctx}"):
+                if not _prod_name.strip():
+                    st.error("Production name is required.")
+                else:
+                    try:
+                        _prod_id = save_production({
+                            "id":                _sel_prod["id"] if _sel_prod else None,
+                            "name":              _prod_name.strip(),
+                            "est_start_date":    str(_prod_start),
+                            "est_delivery_date": str(_prod_delivery),
+                            "notes":             _prod_notes.strip() or None,
+                        })
+                        _lines_to_save = (
+                            _edited_lines.dropna(subset=["SKU"]).to_dict("records")
+                            if not _all_skus == []
+                            else []
+                        )
+                        save_production_lines(_prod_id, _lines_to_save)
+                        st.session_state["prod_saved_id"] = _prod_id
+                        st.success(f"✅ '{_prod_name.strip()}' saved.")
                         st.rerun()
+                    except Exception as _pe:
+                        st.error(f"Save failed: {_pe}")
 
-        # ── Summary table ──────────────────────────────────────────────────────
-        _show_summary_for = _sel_prod["id"] if _sel_prod else st.session_state.get("prod_saved_id")
-        if _show_summary_for:
-            _summary = get_production_summary(_show_summary_for)
+        with _sb2:
+            if _sel_prod:
+                if st.button("🗑️ Delete", key=f"prod_del_{_ctx}"):
+                    st.session_state[f"prod_del_confirm_{_ctx}"] = True
+
+        if _sel_prod and st.session_state.get(f"prod_del_confirm_{_ctx}"):
+            st.warning(f"Delete **{_sel_prod['name']}** and all its lines?")
+            _dc1, _dc2, _ = st.columns([2, 2, 6])
+            with _dc1:
+                if st.button("Yes, delete", type="primary", key=f"prod_del_yes_{_ctx}"):
+                    delete_production(_sel_prod["id"])
+                    st.session_state.pop(f"prod_del_confirm_{_ctx}", None)
+                    st.session_state.pop("prod_saved_id", None)
+                    st.rerun()
+            with _dc2:
+                if st.button("Cancel", key=f"prod_del_no_{_ctx}"):
+                    st.session_state.pop(f"prod_del_confirm_{_ctx}", None)
+                    st.rerun()
+
+        # ── Summary — always visible for the selected / just-saved production ──
+        _summary_id = _sel_prod["id"] if _sel_prod else st.session_state.get("prod_saved_id")
+        if _summary_id:
+            _summary = get_production_summary(_summary_id)
             if _summary:
                 st.divider()
                 st.markdown("#### Summary")
                 _sum_df = pd.DataFrame(_summary)
 
-                # Totals row
-                _totals = {
+                _totals_row = {
                     "SKU":               "📊 TOTAL",
                     "Product":           "",
-                    "# Cartons":         _sum_df["# Cartons"].sum(),
-                    "# Units":           _sum_df["# Units"].sum(),
+                    "# Cartons":         int(_sum_df["# Cartons"].sum()),
+                    "# Units":           int(_sum_df["# Units"].sum()),
                     "Product Cost ($)":  round(_sum_df["Product Cost ($)"].sum(), 2),
                     "Service Cost ($)":  round(_sum_df["Service Cost ($)"].sum(), 2),
                     "Net Weight (kg)":   round(_sum_df["Net Weight (kg)"].sum(), 2),
@@ -1421,14 +1436,13 @@ with tab_production:
                     "CBM":               round(_sum_df["CBM"].sum(), 3),
                 }
                 _sum_with_totals = pd.concat(
-                    [_sum_df, pd.DataFrame([_totals])], ignore_index=True
+                    [_sum_df, pd.DataFrame([_totals_row])], ignore_index=True
                 )
 
                 def _style_prod_summary(df):
                     styles = pd.DataFrame("", index=df.index, columns=df.columns)
-                    last = len(df) - 1
                     for col in df.columns:
-                        styles.iloc[last, styles.columns.get_loc(col)] = (
+                        styles.iloc[len(df) - 1, styles.columns.get_loc(col)] = (
                             "background-color:#e8edf2;color:#24292f;font-weight:700;"
                         )
                     return styles
