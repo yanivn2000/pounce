@@ -1292,7 +1292,6 @@ with tab_production:
     else:
         # Clear any lingering state so New always starts with an empty table
         st.session_state.pop("prod_saved_id", None)
-        st.session_state.pop("prod_lines_state_new", None)
         st.session_state.pop("prod_lines_new", None)
 
     # ── Fragment: right-side form reruns only itself on editor interactions ─────
@@ -1360,23 +1359,7 @@ with tab_production:
                     "CBM":               round(info.get("cbm",  0.0) * num_cartons, 3),
                 }
 
-            # ── State management ──────────────────────────────────────────────
-            # We keep our own list in session_state (separate from the
-            # data_editor's internal diff key) so that baking computed columns
-            # into full_df doesn't conflict with data_editor re-adding rows.
-            _state_key  = f"prod_lines_state_{ctx}"
             _editor_key = f"prod_lines_{ctx}"
-
-            # Initialise from DB on first load (or after Save clears the key)
-            if _state_key not in st.session_state:
-                if sel_prod:
-                    _db_lines = get_production_lines(sel_prod["id"])
-                    st.session_state[_state_key] = [
-                        {"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
-                        for ln in _db_lines
-                    ]
-                else:
-                    st.session_state[_state_key] = []
 
             def _safe_int(v):
                 """int() that returns 0 for None / NaN / bad values."""
@@ -1385,9 +1368,17 @@ with tab_production:
                 except (TypeError, ValueError):
                     return 0
 
-            # Build full df with computed columns from our authoritative state
-            _cur_list = st.session_state[_state_key]
-            _full_rows = [_make_full_row(r["SKU"], _safe_int(r.get("# Cartons"))) for r in _cur_list]
+            # full_df = only the DB-saved rows with pre-computed columns.
+            # data_editor tracks all in-progress edits / adds / deletes internally
+            # via its own session-state key.  We never bake user-added rows back
+            # into full_df — that caused double-display and carton resets.
+            if sel_prod:
+                _db_lines = get_production_lines(sel_prod["id"])
+                _db_rows = [{"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
+                            for ln in _db_lines]
+            else:
+                _db_rows = []
+
             _SCHEMA = {
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
                 "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
@@ -1397,6 +1388,7 @@ with tab_production:
                 "Gross Weight (kg)": pd.Series(dtype=float),
                 "CBM": pd.Series(dtype=float),
             }
+            _full_rows = [_make_full_row(r["SKU"], r["# Cartons"]) for r in _db_rows]
             full_df = pd.DataFrame(_full_rows) if _full_rows else pd.DataFrame(_SCHEMA)
 
             _COMPUTED = ["Product", "# Units", "Product Cost ($)", "Service Cost ($)",
@@ -1422,27 +1414,36 @@ with tab_production:
                 },
             )
 
-            # Sync our own state from what the editor returned (SKU+Cartons only).
-            # This keeps computed columns accurate on the next fragment rerun
-            # without conflicting with data_editor's internal diff tracking.
-            st.session_state[_state_key] = [
-                {"SKU": str(row.get("SKU") or "").strip(), "# Cartons": _safe_int(row.get("# Cartons"))}
-                for _, row in edited_df.iterrows()
-                if str(row.get("SKU") or "").strip()
-            ]
+            # Totals — computed from edited_df using sku_info so the numbers
+            # are always correct (edited_df has the live SKU + # Cartons values).
+            _tot_cartons = _tot_units = 0
+            _tot_prod = _tot_svc = _tot_nw = _tot_gw = _tot_cbm = 0.0
+            for _, _r in edited_df.iterrows():
+                _sku = str(_r.get("SKU") or "").strip()
+                if not _sku:
+                    continue
+                _nc = _safe_int(_r.get("# Cartons"))
+                _info = sku_info.get(_sku, {})
+                _cu = _info.get("carton_units", 0) or 0
+                _u  = _cu * _nc
+                _tot_cartons += _nc
+                _tot_units   += _u
+                _tot_prod    += _info.get("unit_mfg", 0.0) * _u
+                _tot_svc     += _info.get("unit_svc", 0.0) * _u
+                _tot_nw      += _info.get("nw_kg", 0.0) * _nc
+                _tot_gw      += _info.get("gw_kg", 0.0) * _nc
+                _tot_cbm     += _info.get("cbm",   0.0) * _nc
 
-            # Totals — single metrics line, not a second table
-            _valid = edited_df.dropna(subset=["SKU"]) if not edited_df.empty else edited_df
-            if not _valid.empty:
+            if _tot_cartons:
                 st.markdown(
                     f"**📊 TOTAL** &nbsp;·&nbsp; "
-                    f"{int(_valid['# Cartons'].sum())} cartons &nbsp;·&nbsp; "
-                    f"{int(_valid['# Units'].sum())} units &nbsp;·&nbsp; "
-                    f"${_valid['Product Cost ($)'].sum():.2f} prod cost &nbsp;·&nbsp; "
-                    f"${_valid['Service Cost ($)'].sum():.2f} svc cost &nbsp;·&nbsp; "
-                    f"{_valid['Net Weight (kg)'].sum():.2f} kg NW &nbsp;·&nbsp; "
-                    f"{_valid['Gross Weight (kg)'].sum():.2f} kg GW &nbsp;·&nbsp; "
-                    f"{_valid['CBM'].sum():.3f} CBM",
+                    f"{_tot_cartons} cartons &nbsp;·&nbsp; "
+                    f"{_tot_units} units &nbsp;·&nbsp; "
+                    f"${_tot_prod:.2f} prod cost &nbsp;·&nbsp; "
+                    f"${_tot_svc:.2f} svc cost &nbsp;·&nbsp; "
+                    f"{_tot_nw:.2f} kg NW &nbsp;·&nbsp; "
+                    f"{_tot_gw:.2f} kg GW &nbsp;·&nbsp; "
+                    f"{_tot_cbm:.3f} CBM",
                     unsafe_allow_html=True,
                 )
 
@@ -1465,8 +1466,7 @@ with tab_production:
                                 prod_id,
                                 edited_df[["SKU", "# Cartons"]].dropna(subset=["SKU"]).to_dict("records"),
                             )
-                            # Clear our state + editor state so next load re-reads from DB
-                            st.session_state.pop(_state_key, None)
+                            # Clear editor state so next load re-reads fresh from DB
                             st.session_state.pop(_editor_key, None)
                             st.session_state["prod_saved_id"] = prod_id
                             st.success(f"✅ '{prod_name.strip()}' saved.")
@@ -1486,7 +1486,6 @@ with tab_production:
                         delete_production(sel_prod["id"])
                         st.session_state.pop(f"prod_del_confirm_{ctx}", None)
                         st.session_state.pop("prod_saved_id", None)
-                        st.session_state.pop(_state_key, None)
                         st.session_state.pop(_editor_key, None)
                         st.rerun()
                 with _dc2:
