@@ -267,11 +267,19 @@ def init_db():
 
 
 def _migrate_product_costs_new_product(conn: sqlite3.Connection):
-    """Add is_new_product column to product_costs if missing."""
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(product_costs)").fetchall()]
-    if "is_new_product" not in cols:
-        conn.execute("ALTER TABLE product_costs ADD COLUMN is_new_product INTEGER DEFAULT 0")
-        conn.commit()
+    """Add is_new_product column to the product_costs TABLE if it still exists as a table."""
+    try:
+        obj = conn.execute(
+            "SELECT type FROM sqlite_master WHERE name='product_costs'"
+        ).fetchone()
+        if not obj or obj[0] != 'table':
+            return  # already a VIEW, or doesn't exist yet — nothing to do
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(product_costs)").fetchall()]
+        if "is_new_product" not in cols:
+            conn.execute("ALTER TABLE product_costs ADD COLUMN is_new_product INTEGER DEFAULT 0")
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _migrate_recommendations_source(conn: sqlite3.Connection):
