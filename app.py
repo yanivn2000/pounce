@@ -1289,6 +1289,9 @@ with tab_production:
     _sel_prod = None
     if _prod_sel_name != "➕ New":
         _sel_prod = next((p for p in _productions if p["name"] == _prod_sel_name), None)
+    else:
+        # Clear any lingering "just saved" state so the summary doesn't persist
+        st.session_state.pop("prod_saved_id", None)
 
     # ── Fragment: right-side form reruns only itself on editor interactions ─────
     # (full app rerun only on Save / Delete / radio change)
