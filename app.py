@@ -1276,7 +1276,7 @@ with tab_production:
 
     _pcol_list, _pcol_form = st.columns([1, 3], gap="large")
 
-    # ── Left: production list ──────────────────────────────────────────────────
+    # ── Left: production list (full rerun when changed) ────────────────────────
     with _pcol_list:
         st.markdown("#### Productions")
         _prod_sel_name = st.radio(
@@ -1290,153 +1290,148 @@ with tab_production:
     if _prod_sel_name != "➕ New":
         _sel_prod = next((p for p in _productions if p["name"] == _prod_sel_name), None)
 
-    # Key includes prod id (or "new") so all widgets re-render fresh when switching
-    _ctx = str(_sel_prod["id"]) if _sel_prod else "new"
+    # ── Fragment: right-side form reruns only itself on editor interactions ─────
+    # (full app rerun only on Save / Delete / radio change)
+    @st.fragment
+    def _prod_form(sel_prod, all_skus):
+        ctx = str(sel_prod["id"]) if sel_prod else "new"
 
-    # ── Right: form ───────────────────────────────────────────────────────────
-    with _pcol_form:
-        # Header fields — one compact row
+        # Header — one compact row
         _pf1, _pf2, _pf3 = st.columns([3, 2, 2])
         with _pf1:
-            _prod_name = st.text_input(
+            prod_name = st.text_input(
                 "Production name *",
-                value=_sel_prod["name"] if _sel_prod else "",
+                value=sel_prod["name"] if sel_prod else "",
                 placeholder="e.g. YD26099",
-                key=f"prod_name_{_ctx}",
+                key=f"prod_name_{ctx}",
             )
         with _pf2:
-            _prod_start = st.date_input(
+            prod_start = st.date_input(
                 "Est. Start",
                 value=(
-                    date.fromisoformat(_sel_prod["est_start_date"])
-                    if _sel_prod and _sel_prod.get("est_start_date")
+                    date.fromisoformat(sel_prod["est_start_date"])
+                    if sel_prod and sel_prod.get("est_start_date")
                     else date.today()
                 ),
-                key=f"prod_start_{_ctx}",
+                key=f"prod_start_{ctx}",
             )
         with _pf3:
-            _prod_delivery = st.date_input(
+            prod_delivery = st.date_input(
                 "Est. Delivery",
                 value=(
-                    date.fromisoformat(_sel_prod["est_delivery_date"])
-                    if _sel_prod and _sel_prod.get("est_delivery_date")
+                    date.fromisoformat(sel_prod["est_delivery_date"])
+                    if sel_prod and sel_prod.get("est_delivery_date")
                     else date.today()
                 ),
-                key=f"prod_delivery_{_ctx}",
+                key=f"prod_delivery_{ctx}",
             )
 
-        _prod_notes = st.text_input(
+        prod_notes = st.text_input(
             "Notes (optional)",
-            value=(_sel_prod.get("notes") or "") if _sel_prod else "",
+            value=(sel_prod.get("notes") or "") if sel_prod else "",
             placeholder="Factory, PO number, etc.",
-            key=f"prod_notes_{_ctx}",
+            key=f"prod_notes_{ctx}",
         )
 
         # ── SKU line items ─────────────────────────────────────────────────────
         st.markdown("#### SKUs & Cartons")
-        if not _all_skus:
+        if not all_skus:
             st.info("No SKUs in the Products catalog yet. Add products with SKUs in the 📦 Products tab first.")
         else:
-            # Pre-fill from DB for existing production, else one starter row
-            if _sel_prod:
-                _existing_lines = get_production_lines(_sel_prod["id"])
-                _editor_data = pd.DataFrame([
-                    {"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
-                    for ln in _existing_lines
-                ]) if _existing_lines else pd.DataFrame({"SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int)})
+            if sel_prod:
+                _lines = get_production_lines(sel_prod["id"])
+                editor_data = (
+                    pd.DataFrame([
+                        {"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
+                        for ln in _lines
+                    ])
+                    if _lines
+                    else pd.DataFrame({"SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int)})
+                )
             else:
-                _editor_data = pd.DataFrame({"SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int)})
+                editor_data = pd.DataFrame({"SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int)})
 
-            st.caption("Add rows with the ＋ button at the bottom-left of the table. Delete a row by selecting it and pressing Backspace / Delete.")
-            _edited_lines = st.data_editor(
-                _editor_data,
+            st.caption("Click ＋ at the bottom-left to add a row · select a row and press Delete / Backspace to remove it")
+            edited_lines = st.data_editor(
+                editor_data,
                 use_container_width=True,
                 num_rows="dynamic",
-                key=f"prod_lines_{_ctx}",
+                key=f"prod_lines_{ctx}",
                 column_config={
                     "SKU": st.column_config.SelectboxColumn(
-                        "SKU",
-                        options=_all_skus,
-                        required=True,
-                        width=220,
+                        "SKU", options=all_skus, required=True, width=220,
                     ),
                     "# Cartons": st.column_config.NumberColumn(
-                        "# Cartons",
-                        min_value=0,
-                        step=1,
-                        width=130,
+                        "# Cartons", min_value=0, step=1, width=130,
                     ),
                 },
             )
 
-        # ── Save / Delete ──────────────────────────────────────────────────────
-        _sb1, _sb2, _sb3 = st.columns([2, 1, 7])
-        with _sb1:
-            if st.button("💾 Save", type="primary", key=f"prod_save_{_ctx}"):
-                if not _prod_name.strip():
-                    st.error("Production name is required.")
-                else:
-                    try:
-                        _prod_id = save_production({
-                            "id":                _sel_prod["id"] if _sel_prod else None,
-                            "name":              _prod_name.strip(),
-                            "est_start_date":    str(_prod_start),
-                            "est_delivery_date": str(_prod_delivery),
-                            "notes":             _prod_notes.strip() or None,
-                        })
-                        _lines_to_save = (
-                            _edited_lines.dropna(subset=["SKU"]).to_dict("records")
-                            if not _all_skus == []
-                            else []
-                        )
-                        save_production_lines(_prod_id, _lines_to_save)
-                        st.session_state["prod_saved_id"] = _prod_id
-                        st.success(f"✅ '{_prod_name.strip()}' saved.")
+            # ── Buttons ────────────────────────────────────────────────────────
+            _sb1, _sb2, _sb3 = st.columns([2, 1, 7])
+            with _sb1:
+                if st.button("💾 Save", type="primary", key=f"prod_save_{ctx}"):
+                    if not prod_name.strip():
+                        st.error("Production name is required.")
+                    else:
+                        try:
+                            prod_id = save_production({
+                                "id":                sel_prod["id"] if sel_prod else None,
+                                "name":              prod_name.strip(),
+                                "est_start_date":    str(prod_start),
+                                "est_delivery_date": str(prod_delivery),
+                                "notes":             prod_notes.strip() or None,
+                            })
+                            save_production_lines(
+                                prod_id,
+                                edited_lines.dropna(subset=["SKU"]).to_dict("records"),
+                            )
+                            st.session_state["prod_saved_id"] = prod_id
+                            st.success(f"✅ '{prod_name.strip()}' saved.")
+                            st.rerun()  # full app rerun to refresh the left panel
+                        except Exception as _pe:
+                            st.error(f"Save failed: {_pe}")
+
+            with _sb2:
+                if sel_prod and st.button("🗑️ Delete", key=f"prod_del_{ctx}"):
+                    st.session_state[f"prod_del_confirm_{ctx}"] = True
+
+            if sel_prod and st.session_state.get(f"prod_del_confirm_{ctx}"):
+                st.warning(f"Delete **{sel_prod['name']}** and all its lines?")
+                _dc1, _dc2, _ = st.columns([2, 2, 6])
+                with _dc1:
+                    if st.button("Yes, delete", type="primary", key=f"prod_del_yes_{ctx}"):
+                        delete_production(sel_prod["id"])
+                        st.session_state.pop(f"prod_del_confirm_{ctx}", None)
+                        st.session_state.pop("prod_saved_id", None)
                         st.rerun()
-                    except Exception as _pe:
-                        st.error(f"Save failed: {_pe}")
+                with _dc2:
+                    if st.button("Cancel", key=f"prod_del_no_{ctx}"):
+                        st.session_state.pop(f"prod_del_confirm_{ctx}", None)
+                        st.rerun()
 
-        with _sb2:
-            if _sel_prod:
-                if st.button("🗑️ Delete", key=f"prod_del_{_ctx}"):
-                    st.session_state[f"prod_del_confirm_{_ctx}"] = True
-
-        if _sel_prod and st.session_state.get(f"prod_del_confirm_{_ctx}"):
-            st.warning(f"Delete **{_sel_prod['name']}** and all its lines?")
-            _dc1, _dc2, _ = st.columns([2, 2, 6])
-            with _dc1:
-                if st.button("Yes, delete", type="primary", key=f"prod_del_yes_{_ctx}"):
-                    delete_production(_sel_prod["id"])
-                    st.session_state.pop(f"prod_del_confirm_{_ctx}", None)
-                    st.session_state.pop("prod_saved_id", None)
-                    st.rerun()
-            with _dc2:
-                if st.button("Cancel", key=f"prod_del_no_{_ctx}"):
-                    st.session_state.pop(f"prod_del_confirm_{_ctx}", None)
-                    st.rerun()
-
-        # ── Summary — always visible for the selected / just-saved production ──
-        _summary_id = _sel_prod["id"] if _sel_prod else st.session_state.get("prod_saved_id")
-        if _summary_id:
-            _summary = get_production_summary(_summary_id)
-            if _summary:
+        # ── Summary ────────────────────────────────────────────────────────────
+        summary_id = sel_prod["id"] if sel_prod else st.session_state.get("prod_saved_id")
+        if summary_id:
+            summary = get_production_summary(summary_id)
+            if summary:
                 st.divider()
                 st.markdown("#### Summary")
-                _sum_df = pd.DataFrame(_summary)
+                sum_df = pd.DataFrame(summary)
 
-                _totals_row = {
+                totals_row = {
                     "SKU":               "📊 TOTAL",
                     "Product":           "",
-                    "# Cartons":         int(_sum_df["# Cartons"].sum()),
-                    "# Units":           int(_sum_df["# Units"].sum()),
-                    "Product Cost ($)":  round(_sum_df["Product Cost ($)"].sum(), 2),
-                    "Service Cost ($)":  round(_sum_df["Service Cost ($)"].sum(), 2),
-                    "Net Weight (kg)":   round(_sum_df["Net Weight (kg)"].sum(), 2),
-                    "Gross Weight (kg)": round(_sum_df["Gross Weight (kg)"].sum(), 2),
-                    "CBM":               round(_sum_df["CBM"].sum(), 3),
+                    "# Cartons":         int(sum_df["# Cartons"].sum()),
+                    "# Units":           int(sum_df["# Units"].sum()),
+                    "Product Cost ($)":  round(sum_df["Product Cost ($)"].sum(), 2),
+                    "Service Cost ($)":  round(sum_df["Service Cost ($)"].sum(), 2),
+                    "Net Weight (kg)":   round(sum_df["Net Weight (kg)"].sum(), 2),
+                    "Gross Weight (kg)": round(sum_df["Gross Weight (kg)"].sum(), 2),
+                    "CBM":               round(sum_df["CBM"].sum(), 3),
                 }
-                _sum_with_totals = pd.concat(
-                    [_sum_df, pd.DataFrame([_totals_row])], ignore_index=True
+                sum_with_totals = pd.concat(
+                    [sum_df, pd.DataFrame([totals_row])], ignore_index=True
                 )
 
                 def _style_prod_summary(df):
@@ -1448,7 +1443,7 @@ with tab_production:
                     return styles
 
                 st.dataframe(
-                    _sum_with_totals.style.apply(_style_prod_summary, axis=None),
+                    sum_with_totals.style.apply(_style_prod_summary, axis=None),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -1459,6 +1454,9 @@ with tab_production:
                         "CBM":               st.column_config.NumberColumn(format="%.3f"),
                     },
                 )
+
+    with _pcol_form:
+        _prod_form(_sel_prod, _all_skus)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
