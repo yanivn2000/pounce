@@ -1378,9 +1378,16 @@ with tab_production:
                 else:
                     st.session_state[_state_key] = []
 
+            def _safe_int(v):
+                """int() that returns 0 for None / NaN / bad values."""
+                try:
+                    return 0 if v is None or (isinstance(v, float) and pd.isna(v)) else int(v)
+                except (TypeError, ValueError):
+                    return 0
+
             # Build full df with computed columns from our authoritative state
             _cur_list = st.session_state[_state_key]
-            _full_rows = [_make_full_row(r["SKU"], int(r.get("# Cartons") or 0)) for r in _cur_list]
+            _full_rows = [_make_full_row(r["SKU"], _safe_int(r.get("# Cartons"))) for r in _cur_list]
             _SCHEMA = {
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
                 "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
@@ -1419,7 +1426,7 @@ with tab_production:
             # This keeps computed columns accurate on the next fragment rerun
             # without conflicting with data_editor's internal diff tracking.
             st.session_state[_state_key] = [
-                {"SKU": str(row.get("SKU") or "").strip(), "# Cartons": int(row.get("# Cartons") or 0)}
+                {"SKU": str(row.get("SKU") or "").strip(), "# Cartons": _safe_int(row.get("# Cartons"))}
                 for _, row in edited_df.iterrows()
                 if str(row.get("SKU") or "").strip()
             ]
