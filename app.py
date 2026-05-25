@@ -1336,17 +1336,15 @@ with tab_production:
                 _existing_lines = get_production_lines(_sel_prod["id"])
                 _editor_init = pd.DataFrame([
                     {
-                        "SKU":              ln["sku"],
-                        "# Cartons":        int(ln["num_cartons"] or 0),
-                        "Service Cost ($)": float(ln["service_cost"] or 0),
+                        "SKU":       ln["sku"],
+                        "# Cartons": int(ln["num_cartons"] or 0),
                     }
                     for ln in _existing_lines
                 ])
             else:
                 _editor_init = pd.DataFrame([{
-                    "SKU": _all_skus[0],
+                    "SKU":       _all_skus[0],
                     "# Cartons": 0,
-                    "Service Cost ($)": 0.0,
                 }])
 
             _edited_lines = st.data_editor(
@@ -1359,19 +1357,13 @@ with tab_production:
                         "SKU",
                         options=_all_skus,
                         required=True,
-                        width=160,
+                        width=200,
                     ),
                     "# Cartons": st.column_config.NumberColumn(
                         "# Cartons",
                         min_value=0,
                         step=1,
-                        width=110,
-                    ),
-                    "Service Cost ($)": st.column_config.NumberColumn(
-                        "Service Cost ($)",
-                        min_value=0.0,
-                        format="$%.2f",
-                        width=140,
+                        width=130,
                     ),
                 },
             )

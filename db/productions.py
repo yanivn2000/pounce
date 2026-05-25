@@ -109,13 +109,9 @@ def save_production_lines(prod_id: int, lines: list[dict]):
                 num_cartons = int(float(line.get("# Cartons") or line.get("num_cartons") or 0))
             except (ValueError, TypeError):
                 num_cartons = 0
-            try:
-                service_cost = float(line.get("Service Cost ($)") or line.get("service_cost") or 0)
-            except (ValueError, TypeError):
-                service_cost = 0.0
             conn.execute(
-                "INSERT INTO production_lines (production_id, sku, num_cartons, service_cost) VALUES (?,?,?,?)",
-                (prod_id, sku, num_cartons, service_cost),
+                "INSERT INTO production_lines (production_id, sku, num_cartons) VALUES (?,?,?)",
+                (prod_id, sku, num_cartons),
             )
     conn.close()
 
@@ -126,7 +122,10 @@ def save_production_lines(prod_id: int, lines: list[dict]):
 
 def get_production_summary(prod_id: int) -> list[dict]:
     """
-    Return enriched line items with computed fields pulled from products_catalog.
+    Return enriched line items with all computed fields from products_catalog.
+    Product Cost and Service Cost are pulled from calc_product_cost() (items table),
+    not entered by the user.
+
     Each dict:
         SKU, Product, # Cartons, # Units,
         Product Cost ($), Service Cost ($),
@@ -134,7 +133,7 @@ def get_production_summary(prod_id: int) -> list[dict]:
     """
     conn = get_conn()
     lines = conn.execute(
-        "SELECT sku, num_cartons, service_cost FROM production_lines WHERE production_id=? ORDER BY id",
+        "SELECT sku, num_cartons FROM production_lines WHERE production_id=? ORDER BY id",
         (prod_id,)
     ).fetchall()
 
@@ -142,7 +141,6 @@ def get_production_summary(prod_id: int) -> list[dict]:
     for line in lines:
         sku         = line["sku"]
         num_cartons = line["num_cartons"] or 0
-        svc_cost    = line["service_cost"] or 0.0
 
         cat = conn.execute(
             "SELECT id, name, carton_units, carton_nw_kg, carton_gw_kg, carton_cbm FROM products_catalog WHERE sku=?",
@@ -156,17 +154,19 @@ def get_production_summary(prod_id: int) -> list[dict]:
             gross_wt     = (cat["carton_gw_kg"] or 0.0) * num_cartons
             cbm          = (cat["carton_cbm"]   or 0.0) * num_cartons
 
-            breakdown     = calc_product_cost(cat["id"])
-            unit_cost     = breakdown.get("total_manufacturer", 0.0) + breakdown.get("total_service", 0.0)
-            total_prod_cost = unit_cost * num_units
+            breakdown          = calc_product_cost(cat["id"])
+            unit_mfg_cost      = breakdown.get("total_manufacturer", 0.0)
+            unit_svc_cost      = breakdown.get("total_service", 0.0)
+            total_product_cost = unit_mfg_cost * num_units
+            total_service_cost = unit_svc_cost * num_units
 
             result.append({
                 "SKU":                sku,
                 "Product":            cat["name"],
                 "# Cartons":          num_cartons,
                 "# Units":            num_units,
-                "Product Cost ($)":   round(total_prod_cost, 2),
-                "Service Cost ($)":   round(svc_cost, 2),
+                "Product Cost ($)":   round(total_product_cost, 2),
+                "Service Cost ($)":   round(total_service_cost, 2),
                 "Net Weight (kg)":    round(net_wt, 2),
                 "Gross Weight (kg)":  round(gross_wt, 2),
                 "CBM":                round(cbm, 3),
@@ -178,7 +178,7 @@ def get_production_summary(prod_id: int) -> list[dict]:
                 "# Cartons":          num_cartons,
                 "# Units":            0,
                 "Product Cost ($)":   0.0,
-                "Service Cost ($)":   round(svc_cost, 2),
+                "Service Cost ($)":   0.0,
                 "Net Weight (kg)":    0.0,
                 "Gross Weight (kg)":  0.0,
                 "CBM":                0.0,
