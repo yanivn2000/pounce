@@ -1465,31 +1465,6 @@ with tab_sales:
             _lc_pos = display_marked.columns.get_loc("Last Change")
             display_marked.insert(_lc_pos + 1, "Total", [f"{t:,}" for t in asin_row_totals.values])
 
-            def _color_matrix(df):
-                styles = pd.DataFrame("", index=df.index, columns=df.columns)
-                for col in date_cols:
-                    if col not in df.columns:
-                        continue
-                    for pos, idx in enumerate(matrix.index):
-                        p = pct_indexed.loc[idx, col]
-                        try:
-                            p = float(p)
-                        except (TypeError, ValueError):
-                            continue
-                        col_loc = styles.columns.get_loc(col)
-                        if p >= threshold:
-                            styles.iloc[pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
-                        elif p <= -threshold:
-                            styles.iloc[pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
-                if change_set:
-                    for pos, (asin, title) in enumerate(df.index):
-                        for col in date_cols:
-                            if col in df.columns and (str(asin), col) in change_set:
-                                col_loc = styles.columns.get_loc(col)
-                                if styles.iloc[pos, col_loc] == "":
-                                    styles.iloc[pos, col_loc] = "background-color:#fff3b0;color:#7d4e00;font-weight:700"
-                return styles
-
             col_cfg = {
                 "asin":        st.column_config.TextColumn("ASIN",        width=120),
                 "title":       st.column_config.TextColumn("Title",       width=200),
@@ -1497,51 +1472,58 @@ with tab_sales:
                 "Total":       st.column_config.TextColumn("Total",       width=90),
             }
 
-            # ── Fixed totals row (same dataframe structure, toolbar hidden via CSS) ──
-            _col_sums = {col: int(matrix[col].sum()) for col in date_cols}
+            # ── Totals row — prepended as row 0 in the same dataframe ─────────
+            _col_sums    = {col: int(matrix[col].sum()) for col in date_cols}
             _grand_total = sum(_col_sums.values())
-            _totals_index = pd.MultiIndex.from_tuples(
-                [("", "")], names=display_marked.index.names
-            )
-            _totals_df = pd.DataFrame(
+            _totals_row  = pd.DataFrame(
                 [{
                     "Last Change": "📊 TOTAL",
-                    "Total": f"{_grand_total:,}",
+                    "Total":       f"{_grand_total:,}",
                     **{col: f"{_col_sums[col]:,}" for col in date_cols},
                 }],
-                index=_totals_index,
-            )
-            _totals_styled = _totals_df.style.apply(
-                lambda df: pd.DataFrame(
-                    "background-color:#e8edf2;color:#24292f;font-weight:700;",
-                    index=df.index, columns=df.columns,
+                index=pd.MultiIndex.from_tuples(
+                    [("📊 TOTAL", "")], names=display_marked.index.names
                 ),
-                axis=None,
             )
-            # Inject CSS: hide the toolbar on the totals dataframe only.
-            # The :has() selector finds the element-container that holds our
-            # anchor span, then targets the NEXT sibling's toolbar.
-            st.markdown(
-                """
-                <style>
-                [data-testid="stVerticalBlock"] > div:has(.sales-totals-anchor) + div [data-testid="stElementToolbar"] {
-                    display: none !important;
-                }
-                </style>
-                <span class="sales-totals-anchor" style="display:none;"></span>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.dataframe(
-                _totals_styled,
-                use_container_width=True,
-                hide_index=True,
-                height=46,
-                column_config=col_cfg,
-            )
+            display_with_totals = pd.concat([_totals_row, display_marked])
 
-            # ── Sortable data rows ─────────────────────────────────────────────
-            styled = display_marked.style.apply(_color_matrix, axis=None)
+            def _color_matrix(df):
+                styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                # Row 0 is always the totals row — bold gray, no pct coloring
+                for col_name in df.columns:
+                    styles.iloc[0, styles.columns.get_loc(col_name)] = (
+                        "background-color:#e8edf2;color:#24292f;font-weight:700;"
+                    )
+                # Rows 1+ are data rows — color by day-over-day pct change
+                for col in date_cols:
+                    if col not in df.columns:
+                        continue
+                    for data_pos, idx in enumerate(matrix.index):
+                        df_pos = data_pos + 1  # +1 because row 0 is totals
+                        p = pct_indexed.loc[idx, col]
+                        try:
+                            p = float(p)
+                        except (TypeError, ValueError):
+                            continue
+                        col_loc = styles.columns.get_loc(col)
+                        if p >= threshold:
+                            styles.iloc[df_pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
+                        elif p <= -threshold:
+                            styles.iloc[df_pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                # Change-set highlighting (skip totals row at pos 0)
+                if change_set:
+                    for pos, (asin, _title) in enumerate(df.index):
+                        if pos == 0:
+                            continue
+                        for col in date_cols:
+                            if col in df.columns and (str(asin), col) in change_set:
+                                col_loc = styles.columns.get_loc(col)
+                                if styles.iloc[pos, col_loc] == "":
+                                    styles.iloc[pos, col_loc] = "background-color:#fff3b0;color:#7d4e00;font-weight:700"
+                return styles
+
+            # ── Single dataframe: totals row + all data rows ───────────────────
+            styled = display_with_totals.style.apply(_color_matrix, axis=None)
             st.dataframe(styled, use_container_width=True, column_config=col_cfg)
 
             # ── Change log grouped by ASIN ────────────────────────────────────
