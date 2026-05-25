@@ -1290,8 +1290,10 @@ with tab_production:
     if _prod_sel_name != "➕ New":
         _sel_prod = next((p for p in _productions if p["name"] == _prod_sel_name), None)
     else:
-        # Clear any lingering "just saved" state so the summary doesn't persist
+        # Clear any lingering state so New always starts with an empty table
         st.session_state.pop("prod_saved_id", None)
+        st.session_state.pop("prod_lines_state_new", None)
+        st.session_state.pop("prod_lines_new", None)
 
     # ── Fragment: right-side form reruns only itself on editor interactions ─────
     @st.fragment
@@ -1358,33 +1360,26 @@ with tab_production:
                     "CBM":               round(info.get("cbm",  0.0) * num_cartons, 3),
                 }
 
-            # Read current editor diffs from session state (so computed cols
-            # reflect the in-progress edits, not just the last saved DB state)
-            _editor_key  = f"prod_lines_{ctx}"
-            _editor_diffs = st.session_state.get(_editor_key, {})
+            # ── State management ──────────────────────────────────────────────
+            # We keep our own list in session_state (separate from the
+            # data_editor's internal diff key) so that baking computed columns
+            # into full_df doesn't conflict with data_editor re-adding rows.
+            _state_key  = f"prod_lines_state_{ctx}"
+            _editor_key = f"prod_lines_{ctx}"
 
-            if sel_prod:
-                _db_lines = get_production_lines(sel_prod["id"])
-                _base = [
-                    {"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
-                    for ln in _db_lines
-                ]
-            else:
-                _base = []
+            # Initialise from DB on first load (or after Save clears the key)
+            if _state_key not in st.session_state:
+                if sel_prod:
+                    _db_lines = get_production_lines(sel_prod["id"])
+                    st.session_state[_state_key] = [
+                        {"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
+                        for ln in _db_lines
+                    ]
+                else:
+                    st.session_state[_state_key] = []
 
-            # Apply diffs (edits / adds / deletes) made since last Save
-            _cur = {i: dict(r) for i, r in enumerate(_base)}
-            for _ri, _changes in (_editor_diffs.get("edited_rows") or {}).items():
-                _ri = int(_ri)
-                if _ri in _cur:
-                    _cur[_ri].update(_changes)
-            for _ri in sorted(_editor_diffs.get("deleted_rows") or [], reverse=True):
-                _cur.pop(_ri, None)
-            _cur_list = [_cur[k] for k in sorted(_cur)]
-            for _added in (_editor_diffs.get("added_rows") or []):
-                _cur_list.append({"SKU": _added.get("SKU", ""), "# Cartons": int(_added.get("# Cartons") or 0)})
-
-            # Build full df with computed columns
+            # Build full df with computed columns from our authoritative state
+            _cur_list = st.session_state[_state_key]
             _full_rows = [_make_full_row(r["SKU"], int(r.get("# Cartons") or 0)) for r in _cur_list]
             _SCHEMA = {
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
@@ -1420,6 +1415,15 @@ with tab_production:
                 },
             )
 
+            # Sync our own state from what the editor returned (SKU+Cartons only).
+            # This keeps computed columns accurate on the next fragment rerun
+            # without conflicting with data_editor's internal diff tracking.
+            st.session_state[_state_key] = [
+                {"SKU": str(row.get("SKU") or "").strip(), "# Cartons": int(row.get("# Cartons") or 0)}
+                for _, row in edited_df.iterrows()
+                if str(row.get("SKU") or "").strip()
+            ]
+
             # Totals — single metrics line, not a second table
             _valid = edited_df.dropna(subset=["SKU"]) if not edited_df.empty else edited_df
             if not _valid.empty:
@@ -1454,6 +1458,9 @@ with tab_production:
                                 prod_id,
                                 edited_df[["SKU", "# Cartons"]].dropna(subset=["SKU"]).to_dict("records"),
                             )
+                            # Clear our state + editor state so next load re-reads from DB
+                            st.session_state.pop(_state_key, None)
+                            st.session_state.pop(_editor_key, None)
                             st.session_state["prod_saved_id"] = prod_id
                             st.success(f"✅ '{prod_name.strip()}' saved.")
                             st.rerun()
@@ -1472,6 +1479,8 @@ with tab_production:
                         delete_production(sel_prod["id"])
                         st.session_state.pop(f"prod_del_confirm_{ctx}", None)
                         st.session_state.pop("prod_saved_id", None)
+                        st.session_state.pop(_state_key, None)
+                        st.session_state.pop(_editor_key, None)
                         st.rerun()
                 with _dc2:
                     if st.button("Cancel", key=f"prod_del_no_{ctx}"):
