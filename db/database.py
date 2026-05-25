@@ -221,6 +221,24 @@ def init_db():
                 quantity    INTEGER NOT NULL DEFAULT 1,
                 UNIQUE(product_id, item_id)
             );
+
+            CREATE TABLE IF NOT EXISTS productions (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                name              TEXT NOT NULL UNIQUE,
+                est_start_date    TEXT,
+                est_delivery_date TEXT,
+                notes             TEXT,
+                created_at        TEXT DEFAULT (datetime('now')),
+                updated_at        TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS production_lines (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                sku           TEXT NOT NULL,
+                num_cartons   INTEGER DEFAULT 0,
+                service_cost  REAL    DEFAULT 0
+            );
         """)
     _migrate_product_costs(conn)
     _migrate_recommendations_score(conn)
@@ -244,6 +262,7 @@ def init_db():
     _migrate_products_weight_gr(conn)
     _migrate_items_part_id(conn)
     _migrate_products_part_ids(conn)
+    _migrate_productions(conn)
     conn.close()
 
 
@@ -796,5 +815,30 @@ def _migrate_products_upc(conn: sqlite3.Connection):
         if "upc" not in cols:
             conn.execute("ALTER TABLE products_catalog ADD COLUMN upc TEXT")
             conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_productions(conn: sqlite3.Connection):
+    """Ensure productions and production_lines tables exist (safe no-op if already created)."""
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS productions (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                name              TEXT NOT NULL UNIQUE,
+                est_start_date    TEXT,
+                est_delivery_date TEXT,
+                notes             TEXT,
+                created_at        TEXT DEFAULT (datetime('now')),
+                updated_at        TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS production_lines (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,
+                sku           TEXT NOT NULL,
+                num_cartons   INTEGER DEFAULT 0,
+                service_cost  REAL    DEFAULT 0
+            );
+        """)
     except Exception:
         pass

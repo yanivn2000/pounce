@@ -47,6 +47,11 @@ from db.products_catalog import (
     calc_product_cost,
     import_items_csv, import_products_catalog_csv,
 )
+from db.productions import (
+    get_productions, get_production, save_production, delete_production,
+    get_production_lines, save_production_lines,
+    get_production_summary, get_catalog_skus,
+)
 
 init_db()
 # ── Session isolation ─────────────────────────────────────────────────────────
@@ -291,12 +296,12 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_admin = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "⚙️ Admin"
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_production, tab_admin = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "🏭 Production", "⚙️ Admin"
     ])
 else:
-    tab_ads, tab_sales, tab_inv, tab_profit = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products"
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_production = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "🏭 Production"
     ])
     tab_admin = None
 
@@ -1253,6 +1258,202 @@ with _fba_tab:
             use_container_width=True,
             hide_index=True,
         )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — PRODUCTION
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_production:
+    st.markdown(
+        f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>🏭 Production &nbsp;"
+        f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
+        f"Plan and track production runs by SKU.</span></p>",
+        unsafe_allow_html=True,
+    )
+
+    _all_skus = get_catalog_skus()
+
+    # ── Left: production list ──────────────────────────────────────────────────
+    _productions     = get_productions()
+    _prod_names      = [p["name"] for p in _productions]
+    _prod_list_opts  = ["➕ New Production"] + _prod_names
+
+    _pcol_list, _pcol_form = st.columns([1, 3], gap="large")
+
+    with _pcol_list:
+        st.markdown("#### Productions")
+        _prod_sel_name = st.radio(
+            "Select",
+            _prod_list_opts,
+            key="prod_radio",
+            label_visibility="collapsed",
+        )
+
+    _sel_prod = None
+    if _prod_sel_name != "➕ New Production":
+        _sel_prod = next((p for p in _productions if p["name"] == _prod_sel_name), None)
+
+    with _pcol_form:
+        # ── Header form ───────────────────────────────────────────────────────
+        st.markdown("#### Production details")
+        _ph1, _ph2 = st.columns(2)
+        with _ph1:
+            _prod_name = st.text_input(
+                "Name *",
+                value=_sel_prod["name"] if _sel_prod else "",
+                placeholder="e.g. Spring 2026 Run",
+                key="prod_name",
+            )
+        with _ph2:
+            pass  # spacer
+
+        _pd1, _pd2 = st.columns(2)
+        with _pd1:
+            _prod_start = st.date_input(
+                "Est. Start",
+                value=date.fromisoformat(_sel_prod["est_start_date"]) if _sel_prod and _sel_prod.get("est_start_date") else date.today(),
+                key="prod_start",
+            )
+        with _pd2:
+            _prod_delivery = st.date_input(
+                "Est. Delivery",
+                value=date.fromisoformat(_sel_prod["est_delivery_date"]) if _sel_prod and _sel_prod.get("est_delivery_date") else date.today(),
+                key="prod_delivery",
+            )
+
+        _prod_notes = st.text_input(
+            "Notes",
+            value=_sel_prod.get("notes") or "" if _sel_prod else "",
+            placeholder="Optional notes",
+            key="prod_notes",
+        )
+
+        st.markdown("#### Line items")
+        if not _all_skus:
+            st.info("No SKUs found in the Products catalog. Add products with SKUs in the 📦 Products tab first.")
+        else:
+            # Load existing lines (or start with 1 empty row)
+            if _sel_prod:
+                _existing_lines = get_production_lines(_sel_prod["id"])
+                _editor_init = pd.DataFrame([
+                    {
+                        "SKU":              ln["sku"],
+                        "# Cartons":        int(ln["num_cartons"] or 0),
+                        "Service Cost ($)": float(ln["service_cost"] or 0),
+                    }
+                    for ln in _existing_lines
+                ])
+            else:
+                _editor_init = pd.DataFrame([{
+                    "SKU": _all_skus[0],
+                    "# Cartons": 0,
+                    "Service Cost ($)": 0.0,
+                }])
+
+            _edited_lines = st.data_editor(
+                _editor_init,
+                use_container_width=True,
+                num_rows="dynamic",
+                key="prod_lines_editor",
+                column_config={
+                    "SKU": st.column_config.SelectboxColumn(
+                        "SKU",
+                        options=_all_skus,
+                        required=True,
+                        width=160,
+                    ),
+                    "# Cartons": st.column_config.NumberColumn(
+                        "# Cartons",
+                        min_value=0,
+                        step=1,
+                        width=110,
+                    ),
+                    "Service Cost ($)": st.column_config.NumberColumn(
+                        "Service Cost ($)",
+                        min_value=0.0,
+                        format="$%.2f",
+                        width=140,
+                    ),
+                },
+            )
+
+            # ── Action buttons ─────────────────────────────────────────────────
+            _btn_save, _btn_del, _ = st.columns([2, 2, 6])
+            with _btn_save:
+                if st.button("💾 Save", type="primary", key="prod_save"):
+                    if not _prod_name.strip():
+                        st.error("Production name is required.")
+                    else:
+                        try:
+                            _prod_id = save_production({
+                                "id":               _sel_prod["id"] if _sel_prod else None,
+                                "name":             _prod_name.strip(),
+                                "est_start_date":   str(_prod_start),
+                                "est_delivery_date": str(_prod_delivery),
+                                "notes":            _prod_notes.strip() or None,
+                            })
+                            _lines_to_save = _edited_lines.to_dict("records")
+                            save_production_lines(_prod_id, _lines_to_save)
+                            st.session_state["prod_saved_id"] = _prod_id
+                            st.success("✅ Production saved.")
+                            st.rerun()
+                        except Exception as _pe:
+                            st.error(f"Save failed: {_pe}")
+
+            with _btn_del:
+                if _sel_prod:
+                    _del_prod_confirm = st.checkbox("Confirm delete", key="prod_del_confirm")
+                    if st.button("🗑️ Delete", disabled=not _del_prod_confirm, key="prod_del_btn"):
+                        delete_production(_sel_prod["id"])
+                        st.success("Production deleted.")
+                        st.rerun()
+
+        # ── Summary table ──────────────────────────────────────────────────────
+        _show_summary_for = _sel_prod["id"] if _sel_prod else st.session_state.get("prod_saved_id")
+        if _show_summary_for:
+            _summary = get_production_summary(_show_summary_for)
+            if _summary:
+                st.divider()
+                st.markdown("#### Summary")
+                _sum_df = pd.DataFrame(_summary)
+
+                # Totals row
+                _totals = {
+                    "SKU":               "📊 TOTAL",
+                    "Product":           "",
+                    "# Cartons":         _sum_df["# Cartons"].sum(),
+                    "# Units":           _sum_df["# Units"].sum(),
+                    "Product Cost ($)":  round(_sum_df["Product Cost ($)"].sum(), 2),
+                    "Service Cost ($)":  round(_sum_df["Service Cost ($)"].sum(), 2),
+                    "Net Weight (kg)":   round(_sum_df["Net Weight (kg)"].sum(), 2),
+                    "Gross Weight (kg)": round(_sum_df["Gross Weight (kg)"].sum(), 2),
+                    "CBM":               round(_sum_df["CBM"].sum(), 3),
+                }
+                _sum_with_totals = pd.concat(
+                    [_sum_df, pd.DataFrame([_totals])], ignore_index=True
+                )
+
+                def _style_prod_summary(df):
+                    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                    last = len(df) - 1
+                    for col in df.columns:
+                        styles.iloc[last, styles.columns.get_loc(col)] = (
+                            "background-color:#e8edf2;color:#24292f;font-weight:700;"
+                        )
+                    return styles
+
+                st.dataframe(
+                    _sum_with_totals.style.apply(_style_prod_summary, axis=None),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Product Cost ($)":  st.column_config.NumberColumn(format="$%.2f"),
+                        "Service Cost ($)":  st.column_config.NumberColumn(format="$%.2f"),
+                        "Net Weight (kg)":   st.column_config.NumberColumn(format="%.2f kg"),
+                        "Gross Weight (kg)": st.column_config.NumberColumn(format="%.2f kg"),
+                        "CBM":               st.column_config.NumberColumn(format="%.3f"),
+                    },
+                )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — SALES DASHBOARD
