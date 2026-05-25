@@ -1338,6 +1338,14 @@ with tab_sales:
             else:
                 yoy_mode = False
 
+        # ── ASIN / product search ─────────────────────────────────────────────
+        _asin_search = st.text_input(
+            "🔍 Search ASIN or product name",
+            value="",
+            placeholder="Filter rows by ASIN or title…",
+            key="dash_asin_search",
+        )
+
         # ── Load change log early so matrix can use it ────────────────────────
         cl_df = get_change_log(marketplace=sel_market, days=days_back_raw if view_mode == "Daily" else days_back_raw * 7)
 
@@ -1373,6 +1381,21 @@ with tab_sales:
         else:
             matrix = get_weekly_units_matrix(marketplace=sel_market, weeks=days_back_raw)
             threshold = 20
+
+        # Apply ASIN / title search filter
+        if _asin_search.strip():
+            _q = _asin_search.strip().upper()
+            _mask = (
+                matrix["asin"].str.upper().str.contains(_q, na=False) |
+                matrix["title"].str.upper().str.contains(_q, na=False)
+            )
+            matrix = matrix[_mask].reset_index(drop=True)
+            if yoy_mode and ly_matrix is not None and not ly_matrix.empty:
+                _ly_mask = (
+                    ly_matrix["asin"].str.upper().str.contains(_q, na=False) |
+                    ly_matrix["title"].str.upper().str.contains(_q, na=False)
+                )
+                ly_matrix = ly_matrix[_ly_mask].reset_index(drop=True)
 
         if matrix.empty:
             st.info("No data for the selected filters.")
