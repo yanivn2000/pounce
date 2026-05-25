@@ -1497,25 +1497,47 @@ with tab_sales:
                 "Total":       st.column_config.TextColumn("Total",       width=90),
             }
 
-            # ── Fixed totals row rendered as HTML (no toolbar) ────────────────
+            # ── Fixed totals row (same dataframe structure, toolbar hidden via CSS) ──
             _col_sums = {col: int(matrix[col].sum()) for col in date_cols}
             _grand_total = sum(_col_sums.values())
-            _date_cells = "".join(
-                f"<td style='padding:4px 12px;text-align:right;white-space:nowrap;'>{_col_sums[c]:,}</td>"
-                for c in date_cols
+            _totals_index = pd.MultiIndex.from_tuples(
+                [("", "")], names=display_marked.index.names
             )
+            _totals_df = pd.DataFrame(
+                [{
+                    "Last Change": "📊 TOTAL",
+                    "Total": f"{_grand_total:,}",
+                    **{col: f"{_col_sums[col]:,}" for col in date_cols},
+                }],
+                index=_totals_index,
+            )
+            _totals_styled = _totals_df.style.apply(
+                lambda df: pd.DataFrame(
+                    "background-color:#e8edf2;color:#24292f;font-weight:700;",
+                    index=df.index, columns=df.columns,
+                ),
+                axis=None,
+            )
+            # Inject CSS: hide the toolbar on the totals dataframe only.
+            # The :has() selector finds the element-container that holds our
+            # anchor span, then targets the NEXT sibling's toolbar.
             st.markdown(
-                f"<div style='overflow-x:auto;width:100%;'>"
-                f"<table style='width:100%;border-collapse:collapse;"
-                f"background:#e8edf2;color:#24292f;font-weight:700;"
-                f"font-size:0.875rem;border-radius:4px;'><tr>"
-                f"<td style='padding:4px 12px;width:120px;'>📊 TOTAL</td>"
-                f"<td style='padding:4px 12px;width:200px;'></td>"
-                f"<td style='padding:4px 12px;width:220px;'></td>"
-                f"<td style='padding:4px 12px;width:90px;text-align:right;'>{_grand_total:,}</td>"
-                f"{_date_cells}"
-                f"</tr></table></div>",
+                """
+                <style>
+                [data-testid="stVerticalBlock"] > div:has(.sales-totals-anchor) + div [data-testid="stElementToolbar"] {
+                    display: none !important;
+                }
+                </style>
+                <span class="sales-totals-anchor" style="display:none;"></span>
+                """,
                 unsafe_allow_html=True,
+            )
+            st.dataframe(
+                _totals_styled,
+                use_container_width=True,
+                hide_index=True,
+                height=46,
+                column_config=col_cfg,
             )
 
             # ── Sortable data rows ─────────────────────────────────────────────
