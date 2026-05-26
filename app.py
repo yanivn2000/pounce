@@ -1502,26 +1502,32 @@ with tab_production:
                 else:
                     st.session_state[_state_key] = []
 
-            # ── Fixed-key pattern: absorb diffs into state each rerun ─────────
-            # Streamlit forbids assigning to a widget key via session_state,
-            # but deletion (pop) is allowed.  Strategy:
-            #   • edited_rows only → absorb into _state_key, keep editor state
-            #     (the same values stay in edited_rows, which is a no-op overlay
-            #     on the already-updated full_df → correct display, no scroll reset)
-            #   • added_rows / deleted_rows → absorb into _state_key, then POP
-            #     the key BEFORE the widget call so it re-initialises fresh.
-            #     (structural change: one scroll reset is acceptable)
-            _diffs      = st.session_state.get(_ek, {})
-            _edit_map   = {int(k): v for k, v in (_diffs.get("edited_rows") or {}).items()}
-            _del_base   = set(_diffs.get("deleted_rows") or [])
-            _added      = _diffs.get("added_rows") or []
+            # ── Fixed-key, stable-data pattern ────────────────────────────────
+            # Root cause of "table refreshes": every time full_df changes,
+            # Streamlit sends new Arrow data to the frontend and the data_editor
+            # component re-renders — even with the same widget key.
+            #
+            # Solution: keep full_df constant for cell edits.
+            #   • edited_rows (SKU / # Cartons changes) → do NOT absorb into
+            #     _state_key.  full_df stays identical → no Arrow update sent →
+            #     component does not re-render → no scroll reset.
+            #   • added_rows / deleted_rows (structural) → absorb into
+            #     _state_key, pop the key, let editor re-init from new full_df.
+            #     One reset per structural change is acceptable.
+            #
+            # Totals + Save read from _eff_rows() = base state merged with
+            # current editor diffs, so they are always accurate.
+            _diffs    = st.session_state.get(_ek, {})
+            _edit_map = {int(k): v for k, v in (_diffs.get("edited_rows") or {}).items()}
+            _del_base = set(_diffs.get("deleted_rows") or [])
+            _added    = _diffs.get("added_rows") or []
 
-            if _edit_map or _del_base or _added:
+            if _del_base or _added:
+                # Structural change: commit everything into _state_key and reset
                 _s = {i: dict(r) for i, r in enumerate(st.session_state[_state_key])
                       if i not in _del_base}
                 for _ri, _chg in _edit_map.items():
                     if _ri in _s:
-                        # Only absorb the two editable columns; ignore computed ones
                         _s[_ri].update({k: v for k, v in _chg.items()
                                         if k in ("SKU", "# Cartons")})
                 _merged = [_s[k] for k in sorted(_s)]
@@ -1531,14 +1537,12 @@ with tab_production:
                         "# Cartons": _safe_int(_a.get("# Cartons")),
                     })
                 st.session_state[_state_key] = _merged
+                st.session_state.pop(_ek, None)   # deletion allowed by Streamlit
+                _edit_map = {}                    # diffs are now in _state_key
 
-                # For structural changes only: pop the widget key so it
-                # re-initialises from the fresh full_df (avoiding stale diffs).
-                # Deletion is permitted by Streamlit; assignment is not.
-                if _del_base or _added:
-                    st.session_state.pop(_ek, None)
-
-            # Build full_df from current state (computed columns always fresh)
+            # Build full_df from the STABLE base state.
+            # For cell edits this is identical to the previous render →
+            # Streamlit sends no Arrow update → component doesn't re-render.
             _cur_list = st.session_state[_state_key]
             _SCHEMA = {
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
@@ -1577,15 +1581,26 @@ with tab_production:
                 },
             )
 
-            # Totals — compute from sku_info using live state (always accurate
-            # regardless of which columns are disabled in the table).
+            # Effective rows = base state merged with any unsaved cell edits.
+            # Used for totals display and Save — always reflects what the user sees.
+            def _eff_rows():
+                _out = []
+                for _i, _r in enumerate(st.session_state[_state_key]):
+                    _m = dict(_r)
+                    if _i in _edit_map:
+                        _m.update({k: v for k, v in _edit_map[_i].items()
+                                   if k in ("SKU", "# Cartons")})
+                    _out.append(_m)
+                return _out
+
+            # Totals — computed from live effective rows, always accurate
             _tot_cartons = _tot_units = 0
             _tot_prod = _tot_svc = _tot_nw = _tot_gw = _tot_cbm = 0.0
-            for _r in st.session_state[_state_key]:
+            for _r in _eff_rows():
                 _sku = _r["SKU"]
                 if not _sku:
                     continue
-                _nc   = _r["# Cartons"]
+                _nc   = _safe_int(_r.get("# Cartons"))
                 _info = sku_info.get(_sku, {})
                 _cu   = _info.get("carton_units", 0) or 0
                 _u    = _cu * _nc
@@ -1598,7 +1613,6 @@ with tab_production:
                 _tot_cbm     += _info.get("cbm",   0.0) * _nc
 
             if _tot_cartons:
-                # Use \$ so markdown doesn't treat $ as a LaTeX delimiter
                 st.markdown(
                     f"**📊 TOTAL** · "
                     f"{_tot_cartons} cartons · "
@@ -1627,7 +1641,7 @@ with tab_production:
                             })
                             save_production_lines(
                                 prod_id,
-                                [r for r in st.session_state.get(_state_key, []) if r["SKU"]],
+                                [r for r in _eff_rows() if r["SKU"]],
                             )
                             # Clear state so next load re-reads fresh from DB
                             st.session_state.pop(_state_key, None)
