@@ -1503,11 +1503,14 @@ with tab_production:
                     st.session_state[_state_key] = []
 
             # ── Fixed-key pattern: absorb diffs into state each rerun ─────────
-            # We read whatever the editor sent since last render, apply it to
-            # _state_key, then RESET the editor state to {}.  That way:
-            #   • full_df is always recomputed with up-to-date computed columns
-            #   • the editor key stays constant → widget updates in-place
-            #     (no remount, scroll position preserved)
+            # Streamlit forbids assigning to a widget key via session_state,
+            # but deletion (pop) is allowed.  Strategy:
+            #   • edited_rows only → absorb into _state_key, keep editor state
+            #     (the same values stay in edited_rows, which is a no-op overlay
+            #     on the already-updated full_df → correct display, no scroll reset)
+            #   • added_rows / deleted_rows → absorb into _state_key, then POP
+            #     the key BEFORE the widget call so it re-initialises fresh.
+            #     (structural change: one scroll reset is acceptable)
             _diffs      = st.session_state.get(_ek, {})
             _edit_map   = {int(k): v for k, v in (_diffs.get("edited_rows") or {}).items()}
             _del_base   = set(_diffs.get("deleted_rows") or [])
@@ -1528,8 +1531,12 @@ with tab_production:
                         "# Cartons": _safe_int(_a.get("# Cartons")),
                     })
                 st.session_state[_state_key] = _merged
-                # Reset editor diffs — changes are now in _state_key / full_df
-                st.session_state[_ek] = {}
+
+                # For structural changes only: pop the widget key so it
+                # re-initialises from the fresh full_df (avoiding stale diffs).
+                # Deletion is permitted by Streamlit; assignment is not.
+                if _del_base or _added:
+                    st.session_state.pop(_ek, None)
 
             # Build full_df from current state (computed columns always fresh)
             _cur_list = st.session_state[_state_key]
