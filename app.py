@@ -1292,7 +1292,8 @@ with tab_production:
     else:
         # Clear any lingering state so New always starts with an empty table
         st.session_state.pop("prod_saved_id", None)
-        st.session_state.pop("prod_lines_new", None)
+        st.session_state.pop("prod_lines_state_new", None)
+        st.session_state.pop("prod_lines_ver_new", None)
 
     # ── Fragment: right-side form reruns only itself on editor interactions ─────
     @st.fragment
@@ -1359,7 +1360,8 @@ with tab_production:
                     "CBM":               round(info.get("cbm",  0.0) * num_cartons, 3),
                 }
 
-            _editor_key = f"prod_lines_{ctx}"
+            _state_key = f"prod_lines_state_{ctx}"
+            _ver_key   = f"prod_lines_ver_{ctx}"
 
             def _safe_int(v):
                 """int() that returns 0 for None / NaN / bad values."""
@@ -1368,17 +1370,27 @@ with tab_production:
                 except (TypeError, ValueError):
                     return 0
 
-            # full_df = only the DB-saved rows with pre-computed columns.
-            # data_editor tracks all in-progress edits / adds / deletes internally
-            # via its own session-state key.  We never bake user-added rows back
-            # into full_df — that caused double-display and carton resets.
-            if sel_prod:
-                _db_lines = get_production_lines(sel_prod["id"])
-                _db_rows = [{"SKU": ln["sku"], "# Cartons": int(ln["num_cartons"] or 0)}
-                            for ln in _db_lines]
-            else:
-                _db_rows = []
+            # Initialise state from DB on first load (or after Save/Delete clears it)
+            if _state_key not in st.session_state:
+                if sel_prod:
+                    _db_lines = get_production_lines(sel_prod["id"])
+                    st.session_state[_state_key] = [
+                        {"SKU": ln["sku"] or "", "# Cartons": int(ln["num_cartons"] or 0)}
+                        for ln in _db_lines
+                    ]
+                else:
+                    st.session_state[_state_key] = []
 
+            # Rotate the editor key on every fragment rerun so data_editor always
+            # starts with a clean base (no stale added_rows / edited_rows that would
+            # double-apply rows we've already materialised into full_df).
+            _ver = st.session_state.get(_ver_key, -1) + 1
+            st.session_state[_ver_key] = _ver
+            _editor_key = f"prod_lines_{ctx}_v{_ver}"
+
+            # Build full_df from our state — every row gets correct computed columns
+            # (including newly added rows whose SKU was just picked).
+            _cur_list = st.session_state[_state_key]
             _SCHEMA = {
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
                 "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
@@ -1388,13 +1400,14 @@ with tab_production:
                 "Gross Weight (kg)": pd.Series(dtype=float),
                 "CBM": pd.Series(dtype=float),
             }
-            _full_rows = [_make_full_row(r["SKU"], r["# Cartons"]) for r in _db_rows]
+            _full_rows = [_make_full_row(r["SKU"], _safe_int(r.get("# Cartons")))
+                          for r in _cur_list]
             full_df = pd.DataFrame(_full_rows) if _full_rows else pd.DataFrame(_SCHEMA)
 
             _COMPUTED = ["Product", "# Units", "Product Cost ($)", "Service Cost ($)",
                          "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
-            st.caption("Click ＋ (bottom-left) to add a row · select a row and press Delete/Backspace to remove it · computed columns update after Save")
+            st.caption("Click + (bottom-left) to add a row · select a row and press Delete/Backspace to remove it")
             edited_df = st.data_editor(
                 full_df,
                 use_container_width=True,
@@ -1414,18 +1427,26 @@ with tab_production:
                 },
             )
 
-            # Totals — computed from edited_df using sku_info so the numbers
-            # are always correct (edited_df has the live SKU + # Cartons values).
+            # Sync state from edited_df (all rows, including partially-filled
+            # ones, so a just-added empty row isn't lost before SKU is picked).
+            st.session_state[_state_key] = [
+                {"SKU": str(row.get("SKU") or "").strip(),
+                 "# Cartons": _safe_int(row.get("# Cartons"))}
+                for _, row in edited_df.iterrows()
+            ]
+
+            # Totals — compute from sku_info using live state (always accurate
+            # regardless of which columns are disabled in the table).
             _tot_cartons = _tot_units = 0
             _tot_prod = _tot_svc = _tot_nw = _tot_gw = _tot_cbm = 0.0
-            for _, _r in edited_df.iterrows():
-                _sku = str(_r.get("SKU") or "").strip()
+            for _r in st.session_state[_state_key]:
+                _sku = _r["SKU"]
                 if not _sku:
                     continue
-                _nc = _safe_int(_r.get("# Cartons"))
+                _nc   = _r["# Cartons"]
                 _info = sku_info.get(_sku, {})
-                _cu = _info.get("carton_units", 0) or 0
-                _u  = _cu * _nc
+                _cu   = _info.get("carton_units", 0) or 0
+                _u    = _cu * _nc
                 _tot_cartons += _nc
                 _tot_units   += _u
                 _tot_prod    += _info.get("unit_mfg", 0.0) * _u
@@ -1435,16 +1456,16 @@ with tab_production:
                 _tot_cbm     += _info.get("cbm",   0.0) * _nc
 
             if _tot_cartons:
+                # Use \$ so markdown doesn't treat $ as a LaTeX delimiter
                 st.markdown(
-                    f"**📊 TOTAL** &nbsp;·&nbsp; "
-                    f"{_tot_cartons} cartons &nbsp;·&nbsp; "
-                    f"{_tot_units} units &nbsp;·&nbsp; "
-                    f"${_tot_prod:.2f} prod cost &nbsp;·&nbsp; "
-                    f"${_tot_svc:.2f} svc cost &nbsp;·&nbsp; "
-                    f"{_tot_nw:.2f} kg NW &nbsp;·&nbsp; "
-                    f"{_tot_gw:.2f} kg GW &nbsp;·&nbsp; "
-                    f"{_tot_cbm:.3f} CBM",
-                    unsafe_allow_html=True,
+                    f"**📊 TOTAL** · "
+                    f"{_tot_cartons} cartons · "
+                    f"{_tot_units} units · "
+                    f"\\${_tot_prod:.2f} prod cost · "
+                    f"\\${_tot_svc:.2f} svc cost · "
+                    f"{_tot_nw:.2f} kg NW · "
+                    f"{_tot_gw:.2f} kg GW · "
+                    f"{_tot_cbm:.3f} CBM"
                 )
 
             # ── Buttons ────────────────────────────────────────────────────────
@@ -1464,10 +1485,11 @@ with tab_production:
                             })
                             save_production_lines(
                                 prod_id,
-                                edited_df[["SKU", "# Cartons"]].dropna(subset=["SKU"]).to_dict("records"),
+                                [r for r in st.session_state.get(_state_key, []) if r["SKU"]],
                             )
-                            # Clear editor state so next load re-reads fresh from DB
-                            st.session_state.pop(_editor_key, None)
+                            # Clear state so next load re-reads fresh from DB
+                            st.session_state.pop(_state_key, None)
+                            st.session_state.pop(_ver_key, None)
                             st.session_state["prod_saved_id"] = prod_id
                             st.success(f"✅ '{prod_name.strip()}' saved.")
                             st.rerun()
@@ -1486,7 +1508,8 @@ with tab_production:
                         delete_production(sel_prod["id"])
                         st.session_state.pop(f"prod_del_confirm_{ctx}", None)
                         st.session_state.pop("prod_saved_id", None)
-                        st.session_state.pop(_editor_key, None)
+                        st.session_state.pop(_state_key, None)
+                        st.session_state.pop(_ver_key, None)
                         st.rerun()
                 with _dc2:
                     if st.button("Cancel", key=f"prod_del_no_{ctx}"):
