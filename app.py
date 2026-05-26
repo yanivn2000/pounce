@@ -617,9 +617,9 @@ with _suppliers_tab:
 
     _sup_list = get_suppliers()
 
-    # ── Editable Suppliers table (diff-then-rotate pattern) ───────────────────
+    # ── Editable Suppliers table (fixed-key pattern — no scroll reset) ───────────
     _SEST = "sup_state"
-    _SVER = "sup_ver"
+    _SEK  = "sup_ed"   # fixed editor key; never rotated between edits
     _sup_categories = ["mugs", "socks", "silicon", "other"]
     _sup_types      = ["Direct Manufacturer", "Agent / Intermediary"]
 
@@ -642,39 +642,6 @@ with _suppliers_tab:
 
     @st.fragment
     def _sup_editor_fragment():
-        _prev_ver = st.session_state.get(_SVER, -1)
-        _prev_key = f"sup_ed_v{_prev_ver}"
-        _diffs    = st.session_state.get(_prev_key, {})
-
-        if _diffs:
-            _s = {i: dict(r) for i, r in enumerate(st.session_state[_SEST])}
-            for _ri, _chg in (_diffs.get("edited_rows") or {}).items():
-                _ri = int(_ri)
-                if _ri in _s:
-                    _s[_ri].update(_chg)
-            for _ri in sorted(_diffs.get("deleted_rows") or [], reverse=True):
-                _s.pop(int(_ri), None)
-            _merged = [_s[k] for k in sorted(_s)]
-            for _a in (_diffs.get("added_rows") or []):
-                _merged.append({
-                    "_id":      None,
-                    "Select":   False,
-                    "Name":     str(_a.get("Name") or "").strip(),
-                    "Category": str(_a.get("Category") or ""),
-                    "Type":     str(_a.get("Type") or "Agent / Intermediary"),
-                    "Contact":  str(_a.get("Contact") or ""),
-                    "Email":    str(_a.get("Email") or ""),
-                    "Tel":      str(_a.get("Tel") or ""),
-                    "Address":  str(_a.get("Address") or ""),
-                    "Notes":    str(_a.get("Notes") or ""),
-                })
-            st.session_state[_SEST] = _merged
-            st.session_state.pop(_prev_key, None)
-
-        _nv = _prev_ver + 1
-        st.session_state[_SVER] = _nv
-        _ek = f"sup_ed_v{_nv}"
-
         _df_rows = [{k: v for k, v in r.items() if k != "_id"}
                     for r in st.session_state[_SEST]]
         _SCHEMA_SUP = {
@@ -690,8 +657,9 @@ with _suppliers_tab:
             full_df,
             use_container_width=True,
             num_rows="dynamic",
-            key=_ek,
+            key=_SEK,
             hide_index=True,
+            height=400,
             column_config={
                 "Select":   st.column_config.CheckboxColumn("✔", default=False, width=50),
                 "Name":     st.column_config.TextColumn("Name", width=180),
@@ -705,17 +673,47 @@ with _suppliers_tab:
             },
         )
 
-        _selected = [r for r in st.session_state[_SEST] if r.get("Select")]
+        # Compute effective state (base + current editor diffs) for button logic
+        _diffs        = st.session_state.get(_SEK, {})
+        _edit_map     = {int(k): v for k, v in (_diffs.get("edited_rows") or {}).items()}
+        _deleted_base = set(_diffs.get("deleted_rows") or [])
+        _added        = _diffs.get("added_rows") or []
+
+        def _eff_sup_rows():
+            _out = []
+            for _i, _r in enumerate(st.session_state[_SEST]):
+                if _i in _deleted_base:
+                    continue
+                _merged = dict(_r)
+                if _i in _edit_map:
+                    _merged.update(_edit_map[_i])
+                _out.append(_merged)
+            for _a in _added:
+                _out.append({
+                    "_id": None, "Select": bool(_a.get("Select", False)),
+                    "Name":     str(_a.get("Name") or "").strip(),
+                    "Category": str(_a.get("Category") or ""),
+                    "Type":     str(_a.get("Type") or "Agent / Intermediary"),
+                    "Contact":  str(_a.get("Contact") or ""),
+                    "Email":    str(_a.get("Email") or ""),
+                    "Tel":      str(_a.get("Tel") or ""),
+                    "Address":  str(_a.get("Address") or ""),
+                    "Notes":    str(_a.get("Notes") or ""),
+                })
+            return _out
+
+        _selected = [r for r in _eff_sup_rows() if r.get("Select")]
         _sb1, _sb2, _ = st.columns([2, 2, 6])
 
         with _sb1:
             if st.button("💾 Save All", type="primary", key="sup_save_all"):
                 try:
-                    _orig_ids = {r["_id"] for r in st.session_state[_SEST] if r.get("_id")}
+                    _rows_to_save = _eff_sup_rows()
+                    _orig_ids = {r["_id"] for r in _rows_to_save if r.get("_id")}
                     _db_ids   = {s["id"] for s in get_suppliers()}
                     for _did in (_db_ids - _orig_ids):
                         delete_supplier(_did)
-                    for _r in st.session_state[_SEST]:
+                    for _r in _rows_to_save:
                         if not str(_r.get("Name") or "").strip():
                             continue
                         upsert_supplier(
@@ -730,7 +728,7 @@ with _suppliers_tab:
                             supplier_id=_r.get("_id"),
                         )
                     st.session_state.pop(_SEST, None)
-                    st.session_state.pop(_SVER, None)
+                    st.session_state.pop(_SEK, None)
                     st.success("✅ All suppliers saved.")
                     st.rerun()
                 except Exception as _e:
@@ -741,9 +739,8 @@ with _suppliers_tab:
                 _sel_ids = {r["_id"] for r in _selected if r.get("_id")}
                 for _did in _sel_ids:
                     delete_supplier(_did)
-                st.session_state[_SEST] = [
-                    r for r in st.session_state[_SEST] if not r.get("Select")
-                ]
+                st.session_state.pop(_SEST, None)
+                st.session_state.pop(_SEK, None)
                 st.rerun()
 
     _sup_editor_fragment()
@@ -828,9 +825,9 @@ with _items_tab:
                     st.warning(w)
             st.success(f"✅ {_imp_n} items imported.")
 
-    # ── Editable Items table (diff-then-rotate pattern) ───────────────────────
+    # ── Editable Items table (fixed-key pattern — no scroll reset) ───────────────
     _IEST = "item_state"   # session_state key: list of row dicts (includes _id)
-    _IVER = "item_ver"     # session_state key: version counter
+    _IEK  = "item_ed"      # fixed editor key; never rotated between edits
 
     def _isf(v, d=0.0):
         try:
@@ -863,41 +860,6 @@ with _items_tab:
 
     @st.fragment
     def _item_editor_fragment():
-        _prev_ver = st.session_state.get(_IVER, -1)
-        _prev_key = f"item_ed_v{_prev_ver}"
-        _diffs    = st.session_state.get(_prev_key, {})
-
-        if _diffs:
-            _s = {i: dict(r) for i, r in enumerate(st.session_state[_IEST])}
-            for _ri, _chg in (_diffs.get("edited_rows") or {}).items():
-                _ri = int(_ri)
-                if _ri in _s:
-                    _s[_ri].update(_chg)
-            for _ri in sorted(_diffs.get("deleted_rows") or [], reverse=True):
-                _s.pop(int(_ri), None)
-            _merged = [_s[k] for k in sorted(_s)]
-            for _a in (_diffs.get("added_rows") or []):
-                _merged.append({
-                    "_id":        None,
-                    "Select":     False,
-                    "Part ID":    str(_a.get("Part ID") or "").strip(),
-                    "Name":       str(_a.get("Name") or "").strip(),
-                    "Supplier":   str(_a.get("Supplier") or "—"),
-                    "Mfg ($)":    _isf(_a.get("Mfg ($)")),
-                    "Svc ($)":    _isf(_a.get("Svc ($)")),
-                    "Weight (g)": _isf(_a.get("Weight (g)")),
-                    "HS (NA)":    str(_a.get("HS (NA)") or ""),
-                    "HS (UK)":    str(_a.get("HS (UK)") or ""),
-                    "Currency":   str(_a.get("Currency") or "USD"),
-                    "Notes":      str(_a.get("Notes") or ""),
-                })
-            st.session_state[_IEST] = _merged
-            st.session_state.pop(_prev_key, None)
-
-        _nv = _prev_ver + 1
-        st.session_state[_IVER] = _nv
-        _ek = f"item_ed_v{_nv}"
-
         _df_rows = [{k: v for k, v in r.items() if k != "_id"}
                     for r in st.session_state[_IEST]]
         _SCHEMA_ITEM = {
@@ -915,8 +877,9 @@ with _items_tab:
             full_df,
             use_container_width=True,
             num_rows="dynamic",
-            key=_ek,
+            key=_IEK,
             hide_index=True,
+            height=740,
             column_config={
                 "Select":     st.column_config.CheckboxColumn("✔", default=False, width=50),
                 "Part ID":    st.column_config.TextColumn("Part ID", width=110),
@@ -932,26 +895,58 @@ with _items_tab:
             },
         )
 
-        _selected = [r for r in st.session_state[_IEST] if r.get("Select")]
+        # Compute effective state (base + current editor diffs) for button logic
+        _diffs        = st.session_state.get(_IEK, {})
+        _edit_map     = {int(k): v for k, v in (_diffs.get("edited_rows") or {}).items()}
+        _deleted_base = set(_diffs.get("deleted_rows") or [])
+        _added        = _diffs.get("added_rows") or []
+
+        def _eff_item_rows():
+            _out = []
+            for _i, _r in enumerate(st.session_state[_IEST]):
+                if _i in _deleted_base:
+                    continue
+                _merged = dict(_r)
+                if _i in _edit_map:
+                    _merged.update(_edit_map[_i])
+                _out.append(_merged)
+            for _a in _added:
+                _out.append({
+                    "_id": None, "Select": bool(_a.get("Select", False)),
+                    "Part ID":    str(_a.get("Part ID") or "").strip(),
+                    "Name":       str(_a.get("Name") or "").strip(),
+                    "Supplier":   str(_a.get("Supplier") or "—"),
+                    "Mfg ($)":    _isf(_a.get("Mfg ($)")),
+                    "Svc ($)":    _isf(_a.get("Svc ($)")),
+                    "Weight (g)": _isf(_a.get("Weight (g)")),
+                    "HS (NA)":    str(_a.get("HS (NA)") or ""),
+                    "HS (UK)":    str(_a.get("HS (UK)") or ""),
+                    "Currency":   str(_a.get("Currency") or "USD"),
+                    "Notes":      str(_a.get("Notes") or ""),
+                })
+            return _out
+
+        _selected = [r for r in _eff_item_rows() if r.get("Select")]
         _ib1, _ib2, _ = st.columns([2, 2, 6])
 
         with _ib1:
             if st.button("💾 Save All", type="primary", key="item_save_all"):
                 try:
-                    _orig_ids = {r["_id"] for r in st.session_state[_IEST] if r.get("_id")}
+                    _rows_to_save = _eff_item_rows()
+                    _orig_ids = {r["_id"] for r in _rows_to_save if r.get("_id")}
                     _db_ids   = {i["id"] for i in get_items()}
                     for _did in (_db_ids - _orig_ids):
                         delete_item(_did)
-                    for _r in st.session_state[_IEST]:
+                    for _r in _rows_to_save:
                         if not str(_r.get("Name") or "").strip():
                             continue
                         _sup = _r.get("Supplier")
                         upsert_item(
                             data={
-                                "part_id":          _r["Part ID"].strip() or None,
-                                "name":             _r["Name"].strip(),
-                                "item_type":        "other",
-                                "supplier_id":      _sup_ids_by_name.get(_sup) if _sup and _sup != "—" else None,
+                                "part_id":           _r["Part ID"].strip() or None,
+                                "name":              _r["Name"].strip(),
+                                "item_type":         "other",
+                                "supplier_id":       _sup_ids_by_name.get(_sup) if _sup and _sup != "—" else None,
                                 "manufacturer_cost": _r["Mfg ($)"],
                                 "service_cost":      _r["Svc ($)"],
                                 "net_weight_grams":  _r["Weight (g)"] or None,
@@ -963,7 +958,7 @@ with _items_tab:
                             item_id=_r.get("_id"),
                         )
                     st.session_state.pop(_IEST, None)
-                    st.session_state.pop(_IVER, None)
+                    st.session_state.pop(_IEK, None)
                     st.success("✅ All items saved.")
                     st.rerun()
                 except Exception as _e:
@@ -974,9 +969,8 @@ with _items_tab:
                 _sel_ids = {r["_id"] for r in _selected if r.get("_id")}
                 for _did in _sel_ids:
                     delete_item(_did)
-                st.session_state[_IEST] = [
-                    r for r in st.session_state[_IEST] if not r.get("Select")
-                ]
+                st.session_state.pop(_IEST, None)
+                st.session_state.pop(_IEK, None)
                 st.rerun()
 
     _item_editor_fragment()
@@ -1048,9 +1042,9 @@ with _catalog_tab:
                     st.warning(w)
             st.success(f"✅ {_cat_n} products saved.")
 
-    # ── Editable products table (diff-then-rotate pattern) ────────────────────
+    # ── Editable products table (fixed-key pattern — no scroll reset) ────────────
     _CEST = "cat_state"   # session_state key: list of row dicts (includes _id)
-    _CVER = "cat_ver"     # session_state key: version counter
+    _CEK  = "cat_ed"      # fixed editor key; never rotated between edits
 
     def _sf(v, d=0.0):
         try:
@@ -1099,51 +1093,6 @@ with _catalog_tab:
 
     @st.fragment
     def _cat_editor_fragment():
-        # ── diff-then-rotate: apply last render's diffs, then use a fresh key ─
-        _prev_ver = st.session_state.get(_CVER, -1)
-        _prev_key = f"cat_ed_v{_prev_ver}"
-        _diffs    = st.session_state.get(_prev_key, {})
-
-        if _diffs:
-            _s = {i: dict(r) for i, r in enumerate(st.session_state[_CEST])}
-            for _ri, _chg in (_diffs.get("edited_rows") or {}).items():
-                _ri = int(_ri)
-                if _ri in _s:
-                    _s[_ri].update(_chg)
-            for _ri in sorted(_diffs.get("deleted_rows") or [], reverse=True):
-                _s.pop(int(_ri), None)
-            _merged = [_s[k] for k in sorted(_s)]
-            for _a in (_diffs.get("added_rows") or []):
-                _merged.append({
-                    "_id": None, "Select": False,
-                    "Name":      str(_a.get("Name") or "").strip(),
-                    "ASIN":      str(_a.get("ASIN") or "").strip(),
-                    "SKU":       str(_a.get("SKU")  or "").strip(),
-                    "UPC":       str(_a.get("UPC")  or "").strip(),
-                    "Type":      str(_a.get("Type") or ""),
-                    "Part 1":    str(_a.get("Part 1") or "—"),
-                    "Part 2":    str(_a.get("Part 2") or "—"),
-                    "W (cm)":    _sf(_a.get("W (cm)")),
-                    "L (cm)":    _sf(_a.get("L (cm)")),
-                    "H (cm)":    _sf(_a.get("H (cm)")),
-                    "Ctn Units": _si(_a.get("Ctn Units")),
-                    "Ctn L":     _sf(_a.get("Ctn L")),
-                    "Ctn W":     _sf(_a.get("Ctn W")),
-                    "Ctn H":     _sf(_a.get("Ctn H")),
-                    "NW (kg)":   _sf(_a.get("NW (kg)")),
-                    "GW (kg)":   _sf(_a.get("GW (kg)")),
-                    "CBM":       _sf(_a.get("CBM")),
-                    "New?":      bool(_a.get("New?", False)),
-                    "Notes":     str(_a.get("Notes") or ""),
-                    "Wt (g)": 0.0, "Landed ($)": 0.0,
-                })
-            st.session_state[_CEST] = _merged
-            st.session_state.pop(_prev_key, None)
-
-        _nv = _prev_ver + 1
-        st.session_state[_CVER] = _nv
-        _ek = f"cat_ed_v{_nv}"
-
         _df_rows = [{k: v for k, v in r.items() if k != "_id"}
                     for r in st.session_state[_CEST]]
         _SCHEMA_CAT = {
@@ -1166,9 +1115,10 @@ with _catalog_tab:
             full_df,
             use_container_width=True,
             num_rows="dynamic",
-            key=_ek,
+            key=_CEK,
             disabled=["Wt (g)", "Landed ($)"],
             hide_index=True,
+            height=740,
             column_config={
                 "Select":     st.column_config.CheckboxColumn("✔", default=False, width=50),
                 "Name":       st.column_config.TextColumn("Name", width=200),
@@ -1195,17 +1145,59 @@ with _catalog_tab:
             },
         )
 
-        _selected = [r for r in st.session_state[_CEST] if r.get("Select")]
+        # Compute effective state (base + current editor diffs) for button logic
+        _diffs        = st.session_state.get(_CEK, {})
+        _edit_map     = {int(k): v for k, v in (_diffs.get("edited_rows") or {}).items()}
+        _deleted_base = set(_diffs.get("deleted_rows") or [])
+        _added        = _diffs.get("added_rows") or []
+
+        def _eff_cat_rows():
+            _out = []
+            for _i, _r in enumerate(st.session_state[_CEST]):
+                if _i in _deleted_base:
+                    continue
+                _merged = dict(_r)
+                if _i in _edit_map:
+                    _merged.update(_edit_map[_i])
+                _out.append(_merged)
+            for _a in _added:
+                _out.append({
+                    "_id": None, "Select": bool(_a.get("Select", False)),
+                    "Name":      str(_a.get("Name") or "").strip(),
+                    "ASIN":      str(_a.get("ASIN") or "").strip(),
+                    "SKU":       str(_a.get("SKU")  or "").strip(),
+                    "UPC":       str(_a.get("UPC")  or "").strip(),
+                    "Type":      str(_a.get("Type") or ""),
+                    "Part 1":    str(_a.get("Part 1") or "—"),
+                    "Part 2":    str(_a.get("Part 2") or "—"),
+                    "W (cm)":    _sf(_a.get("W (cm)")),
+                    "L (cm)":    _sf(_a.get("L (cm)")),
+                    "H (cm)":    _sf(_a.get("H (cm)")),
+                    "Ctn Units": _si(_a.get("Ctn Units")),
+                    "Ctn L":     _sf(_a.get("Ctn L")),
+                    "Ctn W":     _sf(_a.get("Ctn W")),
+                    "Ctn H":     _sf(_a.get("Ctn H")),
+                    "NW (kg)":   _sf(_a.get("NW (kg)")),
+                    "GW (kg)":   _sf(_a.get("GW (kg)")),
+                    "CBM":       _sf(_a.get("CBM")),
+                    "New?":      bool(_a.get("New?", False)),
+                    "Notes":     str(_a.get("Notes") or ""),
+                    "Wt (g)": 0.0, "Landed ($)": 0.0,
+                })
+            return _out
+
+        _selected = [r for r in _eff_cat_rows() if r.get("Select")]
         _bc1, _bc2, _bc3, _ = st.columns([2, 2, 2, 4])
 
         with _bc1:
             if st.button("💾 Save All", type="primary", key="cat_save_all"):
                 try:
-                    _orig_ids = {r["_id"] for r in st.session_state[_CEST] if r.get("_id")}
+                    _rows_to_save = _eff_cat_rows()
+                    _orig_ids = {r["_id"] for r in _rows_to_save if r.get("_id")}
                     _db_ids   = {p["id"] for p in get_products_catalog()}
                     for _did in (_db_ids - _orig_ids):
                         delete_product_catalog(_did)
-                    for _r in st.session_state[_CEST]:
+                    for _r in _rows_to_save:
                         if not str(_r.get("Name") or "").strip():
                             continue
                         _p1, _p2 = _r.get("Part 1"), _r.get("Part 2")
@@ -1234,7 +1226,7 @@ with _catalog_tab:
                             product_id=_r.get("_id"),
                         )
                     st.session_state.pop(_CEST, None)
-                    st.session_state.pop(_CVER, None)
+                    st.session_state.pop(_CEK, None)
                     st.success("✅ All products saved.")
                     st.rerun()
                 except Exception as _e:
@@ -1242,14 +1234,17 @@ with _catalog_tab:
 
         with _bc2:
             if st.button("📋 Duplicate selected", disabled=(not _selected), key="cat_duplicate"):
+                _eff = _eff_cat_rows()
                 _new_rows = []
-                for _r in _selected:
-                    _dup = dict(_r)
-                    _dup.update({"_id": None, "ASIN": "", "SKU": "", "Name": "", "Select": False})
-                    _new_rows.append(_dup)
-                for _r in st.session_state[_CEST]:
-                    _r["Select"] = False
-                st.session_state[_CEST].extend(_new_rows)
+                for _r in _eff:
+                    if _r.get("Select"):
+                        _dup = dict(_r)
+                        _dup.update({"_id": None, "ASIN": "", "SKU": "", "Name": "", "Select": False})
+                        _new_rows.append(_dup)
+                # Rebuild _CEST from effective state (deselected) + duplicates
+                _base = [{**_r, "Select": False} for _r in _eff]
+                st.session_state[_CEST] = _base + _new_rows
+                st.session_state.pop(_CEK, None)
                 st.rerun()
 
         with _bc3:
@@ -1257,9 +1252,8 @@ with _catalog_tab:
                 _sel_ids = {r["_id"] for r in _selected if r.get("_id")}
                 for _did in _sel_ids:
                     delete_product_catalog(_did)
-                st.session_state[_CEST] = [
-                    r for r in st.session_state[_CEST] if not r.get("Select")
-                ]
+                st.session_state.pop(_CEST, None)
+                st.session_state.pop(_CEK, None)
                 st.rerun()
 
     _cat_editor_fragment()
@@ -1307,7 +1301,7 @@ with _catalog_tab:
         try:
             delete_all_products_catalog()
             st.session_state.pop(_CEST, None)
-            st.session_state.pop(_CVER, None)
+            st.session_state.pop(_CEK, None)
             st.session_state["catalog_delete_msg"] = "✅ All products deleted."
             st.rerun()
         except Exception as _e:
