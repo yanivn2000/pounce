@@ -616,96 +616,137 @@ with _suppliers_tab:
     st.divider()
 
     _sup_list = get_suppliers()
-    if _sup_list:
-        _sup_df = pd.DataFrame(_sup_list)
-        _sup_df["Type"] = _sup_df["is_manufacturer"].apply(
-            lambda x: "Direct Manufacturer" if x else "Agent / Intermediary"
+
+    # ── Editable Suppliers table (diff-then-rotate pattern) ───────────────────
+    _SEST = "sup_state"
+    _SVER = "sup_ver"
+    _sup_categories = ["mugs", "socks", "silicon", "other"]
+    _sup_types      = ["Direct Manufacturer", "Agent / Intermediary"]
+
+    if _SEST not in st.session_state:
+        st.session_state[_SEST] = [
+            {
+                "_id":      s["id"],
+                "Select":   False,
+                "Name":     s.get("name") or "",
+                "Category": s.get("category") or "",
+                "Type":     "Direct Manufacturer" if s.get("is_manufacturer") else "Agent / Intermediary",
+                "Contact":  s.get("contact_person") or "",
+                "Email":    s.get("email") or "",
+                "Tel":      s.get("tel") or "",
+                "Address":  s.get("address") or "",
+                "Notes":    s.get("notes") or "",
+            }
+            for s in _sup_list
+        ]
+
+    @st.fragment
+    def _sup_editor_fragment():
+        _prev_ver = st.session_state.get(_SVER, -1)
+        _prev_key = f"sup_ed_v{_prev_ver}"
+        _diffs    = st.session_state.get(_prev_key, {})
+
+        if _diffs:
+            _s = {i: dict(r) for i, r in enumerate(st.session_state[_SEST])}
+            for _ri, _chg in (_diffs.get("edited_rows") or {}).items():
+                _ri = int(_ri)
+                if _ri in _s:
+                    _s[_ri].update(_chg)
+            for _ri in sorted(_diffs.get("deleted_rows") or [], reverse=True):
+                _s.pop(int(_ri), None)
+            _merged = [_s[k] for k in sorted(_s)]
+            for _a in (_diffs.get("added_rows") or []):
+                _merged.append({
+                    "_id":      None,
+                    "Select":   False,
+                    "Name":     str(_a.get("Name") or "").strip(),
+                    "Category": str(_a.get("Category") or ""),
+                    "Type":     str(_a.get("Type") or "Agent / Intermediary"),
+                    "Contact":  str(_a.get("Contact") or ""),
+                    "Email":    str(_a.get("Email") or ""),
+                    "Tel":      str(_a.get("Tel") or ""),
+                    "Address":  str(_a.get("Address") or ""),
+                    "Notes":    str(_a.get("Notes") or ""),
+                })
+            st.session_state[_SEST] = _merged
+            st.session_state.pop(_prev_key, None)
+
+        _nv = _prev_ver + 1
+        st.session_state[_SVER] = _nv
+        _ek = f"sup_ed_v{_nv}"
+
+        _df_rows = [{k: v for k, v in r.items() if k != "_id"}
+                    for r in st.session_state[_SEST]]
+        _SCHEMA_SUP = {
+            "Select": pd.Series(dtype=bool), "Name": pd.Series(dtype=str),
+            "Category": pd.Series(dtype=str), "Type": pd.Series(dtype=str),
+            "Contact": pd.Series(dtype=str), "Email": pd.Series(dtype=str),
+            "Tel": pd.Series(dtype=str), "Address": pd.Series(dtype=str),
+            "Notes": pd.Series(dtype=str),
+        }
+        full_df = pd.DataFrame(_df_rows) if _df_rows else pd.DataFrame(_SCHEMA_SUP)
+
+        st.data_editor(
+            full_df,
+            use_container_width=True,
+            num_rows="dynamic",
+            key=_ek,
+            hide_index=True,
+            column_config={
+                "Select":   st.column_config.CheckboxColumn("✔", default=False, width=50),
+                "Name":     st.column_config.TextColumn("Name", width=180),
+                "Category": st.column_config.SelectboxColumn("Category", options=_sup_categories, width=110),
+                "Type":     st.column_config.SelectboxColumn("Type", options=_sup_types, width=190),
+                "Contact":  st.column_config.TextColumn("Contact", width=140),
+                "Email":    st.column_config.TextColumn("Email", width=180),
+                "Tel":      st.column_config.TextColumn("Tel", width=120),
+                "Address":  st.column_config.TextColumn("Address", width=200),
+                "Notes":    st.column_config.TextColumn("Notes", width=180),
+            },
         )
-        st.dataframe(
-            _sup_df[["name", "category", "Type", "contact_person", "email", "tel", "address", "notes"]].rename(columns={
-                "name": "Name", "category": "Category",
-                "contact_person": "Contact", "email": "Email",
-                "tel": "Tel", "address": "Address", "notes": "Notes"
-            }),
-            use_container_width=True, hide_index=True
-        )
-    else:
-        st.info("No suppliers yet. Add one below.")
 
-    st.divider()
+        _selected = [r for r in st.session_state[_SEST] if r.get("Select")]
+        _sb1, _sb2, _ = st.columns([2, 2, 6])
 
-    with st.expander("➕ Add / Edit Supplier", expanded=not _sup_list):
-        _sup_edit_id = None
-        if _sup_list:
-            _sup_names = ["— New supplier —"] + [s["name"] for s in _sup_list]
-            _sup_sel = st.selectbox("Edit existing supplier", _sup_names, key="sup_edit_sel")
-            if _sup_sel != "— New supplier —":
-                _sup_rec = next(s for s in _sup_list if s["name"] == _sup_sel)
-                _sup_edit_id = _sup_rec["id"]
-            else:
-                _sup_rec = {}
-        else:
-            _sup_sel = "__new__"
-            _sup_rec = {}
-
-        # Use the selection as a key suffix so all widgets reset when the
-        # dropdown changes (prevents stale values showing for "— New supplier —")
-        _sk = _sup_sel if _sup_list else "__new__"
-
-        with st.form(f"supplier_form_{_sk}"):
-            _sup_name = st.text_input("Name *", value=_sup_rec.get("name", ""), key=f"sup_name_{_sk}")
-            _sup_cat = st.selectbox(
-                "Category",
-                ["mugs", "socks", "silicon", "other"],
-                index=["mugs", "socks", "silicon", "other"].index(_sup_rec["category"])
-                if _sup_rec.get("category") in ["mugs", "socks", "silicon", "other"] else 0,
-                key=f"sup_cat_{_sk}",
-            )
-            _sup_type = st.radio(
-                "Supplier type",
-                ["Direct Manufacturer", "Agent / Intermediary"],
-                index=0 if _sup_rec.get("is_manufacturer", 1) else 1,
-                horizontal=True,
-                key=f"sup_type_{_sk}",
-            )
-            _sup_col1, _sup_col2 = st.columns(2)
-            with _sup_col1:
-                _sup_contact = st.text_input("Contact person", value=_sup_rec.get("contact_person", "") or "", key=f"sup_contact_{_sk}")
-                _sup_email   = st.text_input("Email", value=_sup_rec.get("email", "") or "", key=f"sup_email_{_sk}")
-            with _sup_col2:
-                _sup_tel     = st.text_input("Tel", value=_sup_rec.get("tel", "") or "", key=f"sup_tel_{_sk}")
-                _sup_address = st.text_input("Address", value=_sup_rec.get("address", "") or "", key=f"sup_address_{_sk}")
-            _sup_notes = st.text_input("Notes", value=_sup_rec.get("notes", "") or "", key=f"sup_notes_{_sk}")
-            if st.form_submit_button("💾 Save Supplier", type="primary"):
-                if _sup_name.strip():
-                    upsert_supplier(
-                        name=_sup_name.strip(),
-                        category=_sup_cat,
-                        is_manufacturer=1 if _sup_type == "Direct Manufacturer" else 0,
-                        notes=_sup_notes.strip() or None,
-                        address=_sup_address.strip() or None,
-                        contact_person=_sup_contact.strip() or None,
-                        email=_sup_email.strip() or None,
-                        tel=_sup_tel.strip() or None,
-                        supplier_id=_sup_edit_id,
-                    )
-                    st.success("✅ Supplier saved.")
+        with _sb1:
+            if st.button("💾 Save All", type="primary", key="sup_save_all"):
+                try:
+                    _orig_ids = {r["_id"] for r in st.session_state[_SEST] if r.get("_id")}
+                    _db_ids   = {s["id"] for s in get_suppliers()}
+                    for _did in (_db_ids - _orig_ids):
+                        delete_supplier(_did)
+                    for _r in st.session_state[_SEST]:
+                        if not str(_r.get("Name") or "").strip():
+                            continue
+                        upsert_supplier(
+                            name=_r["Name"].strip(),
+                            category=_r["Category"] or "other",
+                            is_manufacturer=1 if _r["Type"] == "Direct Manufacturer" else 0,
+                            notes=_r["Notes"].strip() or None,
+                            address=_r["Address"].strip() or None,
+                            contact_person=_r["Contact"].strip() or None,
+                            email=_r["Email"].strip() or None,
+                            tel=_r["Tel"].strip() or None,
+                            supplier_id=_r.get("_id"),
+                        )
+                    st.session_state.pop(_SEST, None)
+                    st.session_state.pop(_SVER, None)
+                    st.success("✅ All suppliers saved.")
                     st.rerun()
-                else:
-                    st.warning("Supplier name is required.")
+                except Exception as _e:
+                    st.error(f"Save failed: {_e}")
 
-    if _sup_list:
-        st.divider()
-        st.markdown("#### 🗑️ Delete Supplier")
-        _del_sup_name = st.selectbox(
-            "Select supplier to delete", [s["name"] for s in _sup_list], key="del_sup_sel"
-        )
-        _del_sup_confirm = st.checkbox("Confirm deletion", key="del_sup_confirm")
-        if st.button("🗑️ Delete Supplier", disabled=not _del_sup_confirm, key="del_sup_btn"):
-            _del_sup_id = next(s["id"] for s in _sup_list if s["name"] == _del_sup_name)
-            delete_supplier(_del_sup_id)
-            st.success(f"✅ Supplier '{_del_sup_name}' deleted.")
-            st.rerun()
+        with _sb2:
+            if st.button("🗑️ Delete selected", disabled=(not _selected), key="sup_delete_sel"):
+                _sel_ids = {r["_id"] for r in _selected if r.get("_id")}
+                for _did in _sel_ids:
+                    delete_supplier(_did)
+                st.session_state[_SEST] = [
+                    r for r in st.session_state[_SEST] if not r.get("Select")
+                ]
+                st.rerun()
+
+    _sup_editor_fragment()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — ITEMS
