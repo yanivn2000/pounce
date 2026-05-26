@@ -967,37 +967,215 @@ with _catalog_tab:
                     st.warning(w)
             st.success(f"✅ {_cat_n} products saved.")
 
-    if _cat_list:
-        # Build display table with all product fields + computed landed cost
-        _cat_rows = []
-        for _cp in _cat_list:
-            _breakdown = calc_product_cost(_cp["id"])
-            _cat_rows.append({
-                "ASIN":          _cp.get("asin") or "",
-                "SKU":           _cp.get("sku")  or "",
-                "UPC":           _cp.get("upc")  or "",
-                "Name":          _cp["name"],
-                "Type":          _cp.get("product_type") or "",
-                "Part ID 1":     _cp.get("part_id_1") or "",
-                "Part ID 2":     _cp.get("part_id_2") or "",
-                "W (cm)":        _cp.get("width_cm")  or "",
-                "L (cm)":        _cp.get("length_cm") or "",
-                "H (cm)":        _cp.get("height_cm") or "",
-                "Carton Units":  _cp.get("carton_units") or "",
-                "Carton L":      _cp.get("carton_length_cm") or "",
-                "Carton W":      _cp.get("carton_width_cm")  or "",
-                "Carton H":      _cp.get("carton_height_cm") or "",
-                "NW (kg)":       _cp.get("carton_nw_kg") or "",
-                "GW (kg)":       _cp.get("carton_gw_kg") or "",
-                "CBM":           _cp.get("carton_cbm")   or "",
-                "New?":          "✓" if _cp.get("is_new_product") else "",
-                "Weight (g)":    f"{_breakdown.get('total_weight_gr', 0):.0f}" if _breakdown else "",
-                "Landed Cost":   f"${_breakdown.get('landed_cost', 0):.2f}" if _breakdown else "—",
-                "Notes":         _cp.get("notes") or "",
-            })
-        st.dataframe(pd.DataFrame(_cat_rows), use_container_width=True, hide_index=True)
+    # ── Editable products table (diff-then-rotate pattern) ────────────────────
+    _CEST = "cat_state"   # session_state key: list of row dicts (includes _id)
+    _CVER = "cat_ver"     # session_state key: version counter
 
-        # Cost breakdown for selected product
+    def _sf(v, d=0.0):
+        try:
+            return float(v) if v is not None and not (isinstance(v, float) and pd.isna(v)) else d
+        except (TypeError, ValueError):
+            return d
+
+    def _si(v, d=0):
+        try:
+            return int(_sf(v, d))
+        except (TypeError, ValueError):
+            return d
+
+    _part_id_opts = ["—"] + [i["part_id"] for i in _items_for_cat if i.get("part_id")]
+
+    if _CEST not in st.session_state:
+        _rows = []
+        for _cp in _cat_list:
+            _bd = calc_product_cost(_cp["id"])
+            _rows.append({
+                "_id":        _cp["id"],
+                "Select":     False,
+                "Name":       _cp.get("name") or "",
+                "ASIN":       _cp.get("asin") or "",
+                "SKU":        _cp.get("sku")  or "",
+                "UPC":        _cp.get("upc")  or "",
+                "Type":       _cp.get("product_type") or "",
+                "Part 1":     _cp.get("part_id_1") or "—",
+                "Part 2":     _cp.get("part_id_2") or "—",
+                "W (cm)":     _sf(_cp.get("width_cm")),
+                "L (cm)":     _sf(_cp.get("length_cm")),
+                "H (cm)":     _sf(_cp.get("height_cm")),
+                "Ctn Units":  _si(_cp.get("carton_units")),
+                "Ctn L":      _sf(_cp.get("carton_length_cm")),
+                "Ctn W":      _sf(_cp.get("carton_width_cm")),
+                "Ctn H":      _sf(_cp.get("carton_height_cm")),
+                "NW (kg)":    _sf(_cp.get("carton_nw_kg")),
+                "GW (kg)":    _sf(_cp.get("carton_gw_kg")),
+                "CBM":        _sf(_cp.get("carton_cbm")),
+                "New?":       bool(_cp.get("is_new_product", 0)),
+                "Notes":      _cp.get("notes") or "",
+                "Wt (g)":     round(_sf(_bd.get("total_weight_gr", 0) if _bd else 0), 1),
+                "Landed ($)": round(_sf(_bd.get("landed_cost", 0) if _bd else 0), 2),
+            })
+        st.session_state[_CEST] = _rows
+
+    @st.fragment
+    def _cat_editor_fragment():
+        # ── diff-then-rotate: apply last render's diffs, then use a fresh key ─
+        _prev_ver = st.session_state.get(_CVER, -1)
+        _prev_key = f"cat_ed_v{_prev_ver}"
+        _diffs    = st.session_state.get(_prev_key, {})
+
+        if _diffs:
+            _s = {i: dict(r) for i, r in enumerate(st.session_state[_CEST])}
+            for _ri, _chg in (_diffs.get("edited_rows") or {}).items():
+                _ri = int(_ri)
+                if _ri in _s:
+                    _s[_ri].update(_chg)
+            for _ri in sorted(_diffs.get("deleted_rows") or [], reverse=True):
+                _s.pop(int(_ri), None)
+            _merged = [_s[k] for k in sorted(_s)]
+            for _a in (_diffs.get("added_rows") or []):
+                _merged.append({
+                    "_id": None, "Select": False,
+                    "Name":      str(_a.get("Name") or "").strip(),
+                    "ASIN":      str(_a.get("ASIN") or "").strip(),
+                    "SKU":       str(_a.get("SKU")  or "").strip(),
+                    "UPC":       str(_a.get("UPC")  or "").strip(),
+                    "Type":      str(_a.get("Type") or ""),
+                    "Part 1":    str(_a.get("Part 1") or "—"),
+                    "Part 2":    str(_a.get("Part 2") or "—"),
+                    "W (cm)":    _sf(_a.get("W (cm)")),
+                    "L (cm)":    _sf(_a.get("L (cm)")),
+                    "H (cm)":    _sf(_a.get("H (cm)")),
+                    "Ctn Units": _si(_a.get("Ctn Units")),
+                    "Ctn L":     _sf(_a.get("Ctn L")),
+                    "Ctn W":     _sf(_a.get("Ctn W")),
+                    "Ctn H":     _sf(_a.get("Ctn H")),
+                    "NW (kg)":   _sf(_a.get("NW (kg)")),
+                    "GW (kg)":   _sf(_a.get("GW (kg)")),
+                    "CBM":       _sf(_a.get("CBM")),
+                    "New?":      bool(_a.get("New?", False)),
+                    "Notes":     str(_a.get("Notes") or ""),
+                    "Wt (g)": 0.0, "Landed ($)": 0.0,
+                })
+            st.session_state[_CEST] = _merged
+            st.session_state.pop(_prev_key, None)
+
+        _nv = _prev_ver + 1
+        st.session_state[_CVER] = _nv
+        _ek = f"cat_ed_v{_nv}"
+
+        _df_rows = [{k: v for k, v in r.items() if k != "_id"}
+                    for r in st.session_state[_CEST]]
+        _SCHEMA_CAT = {
+            "Select": pd.Series(dtype=bool), "Name": pd.Series(dtype=str),
+            "ASIN": pd.Series(dtype=str), "SKU": pd.Series(dtype=str),
+            "UPC": pd.Series(dtype=str), "Type": pd.Series(dtype=str),
+            "Part 1": pd.Series(dtype=str), "Part 2": pd.Series(dtype=str),
+            "W (cm)": pd.Series(dtype=float), "L (cm)": pd.Series(dtype=float),
+            "H (cm)": pd.Series(dtype=float), "Ctn Units": pd.Series(dtype=int),
+            "Ctn L": pd.Series(dtype=float), "Ctn W": pd.Series(dtype=float),
+            "Ctn H": pd.Series(dtype=float),
+            "NW (kg)": pd.Series(dtype=float), "GW (kg)": pd.Series(dtype=float),
+            "CBM": pd.Series(dtype=float), "New?": pd.Series(dtype=bool),
+            "Notes": pd.Series(dtype=str),
+            "Wt (g)": pd.Series(dtype=float), "Landed ($)": pd.Series(dtype=float),
+        }
+        full_df = pd.DataFrame(_df_rows) if _df_rows else pd.DataFrame(_SCHEMA_CAT)
+
+        st.data_editor(
+            full_df,
+            use_container_width=True,
+            num_rows="dynamic",
+            key=_ek,
+            disabled=["Wt (g)", "Landed ($)"],
+            hide_index=True,
+            column_config={
+                "Select":     st.column_config.CheckboxColumn("✔", default=False, width=50),
+                "Name":       st.column_config.TextColumn("Name", width=200),
+                "ASIN":       st.column_config.TextColumn("ASIN", width=110),
+                "SKU":        st.column_config.TextColumn("SKU", width=110),
+                "UPC":        st.column_config.TextColumn("UPC", width=110),
+                "Type":       st.column_config.SelectboxColumn("Type", options=_prod_types, width=140),
+                "Part 1":     st.column_config.SelectboxColumn("Part 1", options=_part_id_opts, width=130),
+                "Part 2":     st.column_config.SelectboxColumn("Part 2", options=_part_id_opts, width=130),
+                "W (cm)":     st.column_config.NumberColumn("W (cm)", format="%.1f", width=75),
+                "L (cm)":     st.column_config.NumberColumn("L (cm)", format="%.1f", width=75),
+                "H (cm)":     st.column_config.NumberColumn("H (cm)", format="%.1f", width=75),
+                "Ctn Units":  st.column_config.NumberColumn("Ctn Units", step=1, width=90),
+                "Ctn L":      st.column_config.NumberColumn("Ctn L", format="%.1f", width=70),
+                "Ctn W":      st.column_config.NumberColumn("Ctn W", format="%.1f", width=70),
+                "Ctn H":      st.column_config.NumberColumn("Ctn H", format="%.1f", width=70),
+                "NW (kg)":    st.column_config.NumberColumn("NW (kg)", format="%.3f", width=80),
+                "GW (kg)":    st.column_config.NumberColumn("GW (kg)", format="%.3f", width=80),
+                "CBM":        st.column_config.NumberColumn("CBM", format="%.4f", width=75),
+                "New?":       st.column_config.CheckboxColumn("New?", width=60),
+                "Notes":      st.column_config.TextColumn("Notes", width=160),
+                "Wt (g)":     st.column_config.NumberColumn("Wt (g)", format="%.0f", width=70),
+                "Landed ($)": st.column_config.NumberColumn("Landed ($)", format="$%.2f", width=95),
+            },
+        )
+
+        _selected = [r for r in st.session_state[_CEST] if r.get("Select")]
+        _bc1, _bc2, _ = st.columns([2, 2, 6])
+
+        with _bc1:
+            if st.button("💾 Save All", type="primary", key="cat_save_all"):
+                try:
+                    _orig_ids = {r["_id"] for r in st.session_state[_CEST] if r.get("_id")}
+                    _db_ids   = {p["id"] for p in get_products_catalog()}
+                    for _did in (_db_ids - _orig_ids):
+                        delete_product_catalog(_did)
+                    for _r in st.session_state[_CEST]:
+                        if not str(_r.get("Name") or "").strip():
+                            continue
+                        _p1, _p2 = _r.get("Part 1"), _r.get("Part 2")
+                        upsert_product_catalog(
+                            data={
+                                "asin":             _r["ASIN"].strip().upper() or None,
+                                "sku":              _r["SKU"].strip() or None,
+                                "upc":              _r["UPC"].strip() or None,
+                                "name":             _r["Name"].strip(),
+                                "product_type":     _r["Type"] or None,
+                                "width_cm":         _r["W (cm)"] or None,
+                                "length_cm":        _r["L (cm)"] or None,
+                                "height_cm":        _r["H (cm)"] or None,
+                                "is_new_product":   1 if _r.get("New?") else 0,
+                                "notes":            _r["Notes"].strip() or None,
+                                "carton_units":     _r["Ctn Units"] or None,
+                                "carton_length_cm": _r["Ctn L"] or None,
+                                "carton_width_cm":  _r["Ctn W"] or None,
+                                "carton_height_cm": _r["Ctn H"] or None,
+                                "carton_nw_kg":     _r["NW (kg)"] or None,
+                                "carton_gw_kg":     _r["GW (kg)"] or None,
+                                "carton_cbm":       _r["CBM"] or None,
+                                "part_id_1": _p1 if _p1 and _p1 != "—" else None,
+                                "part_id_2": _p2 if _p2 and _p2 != "—" else None,
+                            },
+                            product_id=_r.get("_id"),
+                        )
+                    st.session_state.pop(_CEST, None)
+                    st.session_state.pop(_CVER, None)
+                    st.success("✅ All products saved.")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Save failed: {_e}")
+
+        with _bc2:
+            if st.button("📋 Duplicate selected", disabled=(not _selected), key="cat_duplicate"):
+                _new_rows = []
+                for _r in _selected:
+                    _dup = dict(_r)
+                    _dup.update({"_id": None, "ASIN": "", "SKU": "", "Name": "", "Select": False})
+                    _new_rows.append(_dup)
+                for _r in st.session_state[_CEST]:
+                    _r["Select"] = False
+                st.session_state[_CEST].extend(_new_rows)
+                st.rerun()
+
+    _cat_editor_fragment()
+
+    # ── Cost Breakdown ─────────────────────────────────────────────────────────
+    if _cat_list:
+        st.divider()
         st.markdown("#### 📊 Cost Breakdown")
         _breakdown_sel = st.selectbox(
             "Select product to view breakdown",
@@ -1025,186 +1203,24 @@ with _catalog_tab:
                 f"───────────────────────  \n"
                 f"**Landed Cost: ${_bd['landed_cost']:.2f}**"
             )
-    else:
-        st.info("No products in catalog yet. Add one below.")
 
-    st.divider()
-
-    with st.expander("➕ Add / Edit Product", expanded=not _cat_list):
-        _cat_edit_id = None
-        _cat_rec = {}
-        if _cat_list:
-            _cat_names = ["— New product —"] + [p["name"] for p in _cat_list]
-            _cat_sel = st.selectbox("Edit existing product", _cat_names, key="cat_edit_sel")
-            if _cat_sel != "— New product —":
-                _cat_rec = next(p for p in _cat_list if p["name"] == _cat_sel)
-                _cat_edit_id = _cat_rec["id"]
-
-        with st.form("catalog_form"):
-            _cfa, _cfb, _cfc = st.columns(3)
-            with _cfa:
-                _cat_asin = st.text_input("ASIN", value=_cat_rec.get("asin", "") or "")
-                _cat_sku  = st.text_input("SKU",  value=_cat_rec.get("sku",  "") or "")
-                _cat_upc  = st.text_input("UPC",  value=_cat_rec.get("upc",  "") or "")
-            with _cfb:
-                _cat_ptype = st.selectbox(
-                    "Product type",
-                    _prod_types,
-                    index=_prod_types.index(_cat_rec["product_type"])
-                    if _cat_rec.get("product_type") in _prod_types else 0,
-                )
-            with _cfc:
-                _cat_name = st.text_input("Product name *", value=_cat_rec.get("name", ""))
-
-            st.markdown("**Dimensions** *(Weight is computed from assembled items)*")
-            _d1, _d2, _d3 = st.columns(3)
-            with _d1:
-                _cat_w = st.number_input("Width (cm)", min_value=0.0, step=0.1, format="%.1f",
-                                          value=float(_cat_rec.get("width_cm") or 0))
-            with _d2:
-                _cat_l = st.number_input("Length (cm)", min_value=0.0, step=0.1, format="%.1f",
-                                          value=float(_cat_rec.get("length_cm") or 0))
-            with _d3:
-                _cat_h = st.number_input("Height (cm)", min_value=0.0, step=0.1, format="%.1f",
-                                          value=float(_cat_rec.get("height_cm") or 0))
-
-            st.markdown("**Master Carton**")
-            _mc1, _mc2, _mc3, _mc4 = st.columns(4)
-            with _mc1:
-                _cat_carton_units = st.number_input(
-                    "Units / carton", min_value=0, step=1,
-                    value=int(_cat_rec.get("carton_units") or 0),
-                )
-            with _mc2:
-                _cat_carton_l = st.number_input(
-                    "Length (cm)", min_value=0.0, step=0.1, format="%.1f",
-                    value=float(_cat_rec.get("carton_length_cm") or 0),
-                    key="carton_l",
-                )
-            with _mc3:
-                _cat_carton_w = st.number_input(
-                    "Width (cm)", min_value=0.0, step=0.1, format="%.1f",
-                    value=float(_cat_rec.get("carton_width_cm") or 0),
-                    key="carton_w",
-                )
-            with _mc4:
-                _cat_carton_h = st.number_input(
-                    "Height (cm)", min_value=0.0, step=0.1, format="%.1f",
-                    value=float(_cat_rec.get("carton_height_cm") or 0),
-                    key="carton_h",
-                )
-            _mc5, _mc6, _mc7 = st.columns(3)
-            with _mc5:
-                _cat_carton_nw = st.number_input(
-                    "NW (kg)", min_value=0.0, step=0.01, format="%.3f",
-                    value=float(_cat_rec.get("carton_nw_kg") or 0),
-                )
-            with _mc6:
-                _cat_carton_gw = st.number_input(
-                    "GW (kg)", min_value=0.0, step=0.01, format="%.3f",
-                    value=float(_cat_rec.get("carton_gw_kg") or 0),
-                )
-            with _mc7:
-                _cat_carton_cbm = st.number_input(
-                    "CBM (m³)", min_value=0.0, step=0.0001, format="%.4f",
-                    value=float(_cat_rec.get("carton_cbm") or 0),
-                )
-
-            _cat_is_new = st.checkbox("🚼 New product (launch phase)", value=bool(_cat_rec.get("is_new_product", 0)))
-            _cat_notes = st.text_input("Notes", value=_cat_rec.get("notes", "") or "")
-
-            # Component picker — Part ID 1 (required) and Part ID 2 (optional)
-            st.markdown("**Components** *(each contributes qty 1)*")
-            if _items_for_cat:
-                _none_label = "— none —"
-                _part_id_options_with_none = [_none_label] + [i["part_id"] for i in _items_for_cat if i.get("part_id")]
-
-                _existing_p1 = _cat_rec.get("part_id_1") or _none_label
-                _existing_p2 = _cat_rec.get("part_id_2") or _none_label
-
-                # Key includes product id so Streamlit resets the widget when switching products
-                _p1_key = f"cat_part_id_1_{_cat_edit_id}"
-                _p2_key = f"cat_part_id_2_{_cat_edit_id}"
-
-                _cp1, _cp2 = st.columns(2)
-                with _cp1:
-                    _cat_p1 = st.selectbox(
-                        "Part ID 1",
-                        _part_id_options_with_none,
-                        index=_part_id_options_with_none.index(_existing_p1) if _existing_p1 in _part_id_options_with_none else 0,
-                        key=_p1_key,
-                    )
-                with _cp2:
-                    _cat_p2 = st.selectbox(
-                        "Part ID 2 (optional)",
-                        _part_id_options_with_none,
-                        index=_part_id_options_with_none.index(_existing_p2) if _existing_p2 in _part_id_options_with_none else 0,
-                        key=_p2_key,
-                    )
-            else:
-                st.info("Add items in the 🧩 Items tab first.")
-                _cat_p1 = None
-                _cat_p2 = None
-
-            if st.form_submit_button("💾 Save Product", type="primary"):
-                if _cat_name.strip():
-                    upsert_product_catalog(
-                        data={
-                            "asin": _cat_asin.strip().upper() or None,
-                            "sku":  _cat_sku.strip() or None,
-                            "upc":  _cat_upc.strip() or None,
-                            "name": _cat_name.strip(),
-                            "product_type": _cat_ptype,
-                            "width_cm": _cat_w if _cat_w else None,
-                            "length_cm": _cat_l if _cat_l else None,
-                            "height_cm": _cat_h if _cat_h else None,
-                            "is_new_product": _cat_is_new,
-                            "notes": _cat_notes.strip() or None,
-                            "carton_units":     _cat_carton_units if _cat_carton_units else None,
-                            "carton_length_cm": _cat_carton_l if _cat_carton_l else None,
-                            "carton_width_cm":  _cat_carton_w if _cat_carton_w else None,
-                            "carton_height_cm": _cat_carton_h if _cat_carton_h else None,
-                            "carton_nw_kg":     _cat_carton_nw if _cat_carton_nw else None,
-                            "carton_gw_kg":     _cat_carton_gw if _cat_carton_gw else None,
-                            "carton_cbm":       _cat_carton_cbm if _cat_carton_cbm else None,
-                            "part_id_1": _cat_p1 if _cat_p1 and _cat_p1 != "— none —" else None,
-                            "part_id_2": _cat_p2 if _cat_p2 and _cat_p2 != "— none —" else None,
-                        },
-                        product_id=_cat_edit_id,
-                    )
-                    st.success("✅ Product saved.")
-                    st.rerun()
-                else:
-                    st.warning("Product name is required.")
-
-    # Show post-delete confirmation (stored before rerun)
+    # ── Post-action messages ───────────────────────────────────────────────────
     if st.session_state["catalog_delete_msg"]:
         st.success(st.session_state["catalog_delete_msg"])
         st.session_state["catalog_delete_msg"] = None
 
-    if _cat_list:
-        st.divider()
-        st.markdown("#### 🗑️ Delete Product")
-        _del_cat_name = st.selectbox(
-            "Select product to delete", [p["name"] for p in _cat_list], key="del_cat_sel"
-        )
-        _del_cat_confirm = st.checkbox("Confirm deletion", key="del_cat_confirm")
-        if st.button("🗑️ Delete Product", disabled=not _del_cat_confirm, key="del_cat_btn"):
-            _del_cat_id = next(p["id"] for p in _cat_list if p["name"] == _del_cat_name)
-            delete_product_catalog(_del_cat_id)
-            st.session_state["catalog_delete_msg"] = f"✅ Product '{_del_cat_name}' deleted."
+    st.divider()
+    st.markdown("#### 🗑️ Delete All Products")
+    _del_all_confirm = st.checkbox("Confirm — delete ALL products", key="del_all_cat_confirm")
+    if st.button("🗑️ Delete All Products", disabled=not _del_all_confirm, type="primary", key="del_all_cat_btn"):
+        try:
+            delete_all_products_catalog()
+            st.session_state.pop(_CEST, None)
+            st.session_state.pop(_CVER, None)
+            st.session_state["catalog_delete_msg"] = "✅ All products deleted."
             st.rerun()
-
-        st.divider()
-        st.markdown("#### 🗑️ Delete All Products")
-        _del_all_confirm = st.checkbox("Confirm — delete ALL products", key="del_all_cat_confirm")
-        if st.button("🗑️ Delete All Products", disabled=not _del_all_confirm, type="primary", key="del_all_cat_btn"):
-            try:
-                delete_all_products_catalog()
-                st.session_state["catalog_delete_msg"] = "✅ All products deleted."
-                st.rerun()
-            except Exception as _e:
-                st.error(f"Delete failed: {_e}")
+        except Exception as _e:
+            st.error(f"Delete failed: {_e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — FBA FEES
