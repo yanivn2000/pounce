@@ -787,118 +787,158 @@ with _items_tab:
                     st.warning(w)
             st.success(f"✅ {_imp_n} items imported.")
 
-    if _item_list:
-        _item_df = pd.DataFrame(_item_list)
-        st.dataframe(
-            _item_df[[
-                "part_id", "name", "supplier_name", "manufacturer_cost",
-                "service_cost", "total_cost", "net_weight_grams", "hst_code_na", "hst_code_uk",
-                "currency"
-            ]].rename(columns={
-                "part_id": "Part ID", "name": "Name",
-                "supplier_name": "Supplier",
-                "manufacturer_cost": "Mfg Cost ($)", "service_cost": "Service Cost ($)",
-                "total_cost": "Total Cost ($)", "net_weight_grams": "Net Weight (g)",
-                "hst_code_na": "HS Code (NA)", "hst_code_uk": "HS Code (UK)",
-                "currency": "Currency",
-            }),
-            use_container_width=True, hide_index=True
+    # ── Editable Items table (diff-then-rotate pattern) ───────────────────────
+    _IEST = "item_state"   # session_state key: list of row dicts (includes _id)
+    _IVER = "item_ver"     # session_state key: version counter
+
+    def _isf(v, d=0.0):
+        try:
+            return float(v) if v is not None and not (isinstance(v, float) and pd.isna(v)) else d
+        except (TypeError, ValueError):
+            return d
+
+    _item_currencies  = ["USD", "GBP", "EUR", "CAD", "AUD"]
+    _sup_name_opts    = ["—"] + [s["name"] for s in _sup_list_for_items]
+    _sup_ids_by_name  = {s["name"]: s["id"] for s in _sup_list_for_items}
+
+    if _IEST not in st.session_state:
+        st.session_state[_IEST] = [
+            {
+                "_id":         i["id"],
+                "Select":      False,
+                "Part ID":     i.get("part_id") or "",
+                "Name":        i.get("name") or "",
+                "Supplier":    i.get("supplier_name") or "—",
+                "Mfg ($)":     float(i.get("manufacturer_cost") or 0),
+                "Svc ($)":     float(i.get("service_cost") or 0),
+                "Weight (g)":  float(i.get("net_weight_grams") or 0),
+                "HS (NA)":     i.get("hst_code_na") or "",
+                "HS (UK)":     i.get("hst_code_uk") or "",
+                "Currency":    i.get("currency") or "USD",
+                "Notes":       i.get("notes") or "",
+            }
+            for i in _item_list
+        ]
+
+    @st.fragment
+    def _item_editor_fragment():
+        _prev_ver = st.session_state.get(_IVER, -1)
+        _prev_key = f"item_ed_v{_prev_ver}"
+        _diffs    = st.session_state.get(_prev_key, {})
+
+        if _diffs:
+            _s = {i: dict(r) for i, r in enumerate(st.session_state[_IEST])}
+            for _ri, _chg in (_diffs.get("edited_rows") or {}).items():
+                _ri = int(_ri)
+                if _ri in _s:
+                    _s[_ri].update(_chg)
+            for _ri in sorted(_diffs.get("deleted_rows") or [], reverse=True):
+                _s.pop(int(_ri), None)
+            _merged = [_s[k] for k in sorted(_s)]
+            for _a in (_diffs.get("added_rows") or []):
+                _merged.append({
+                    "_id":        None,
+                    "Select":     False,
+                    "Part ID":    str(_a.get("Part ID") or "").strip(),
+                    "Name":       str(_a.get("Name") or "").strip(),
+                    "Supplier":   str(_a.get("Supplier") or "—"),
+                    "Mfg ($)":    _isf(_a.get("Mfg ($)")),
+                    "Svc ($)":    _isf(_a.get("Svc ($)")),
+                    "Weight (g)": _isf(_a.get("Weight (g)")),
+                    "HS (NA)":    str(_a.get("HS (NA)") or ""),
+                    "HS (UK)":    str(_a.get("HS (UK)") or ""),
+                    "Currency":   str(_a.get("Currency") or "USD"),
+                    "Notes":      str(_a.get("Notes") or ""),
+                })
+            st.session_state[_IEST] = _merged
+            st.session_state.pop(_prev_key, None)
+
+        _nv = _prev_ver + 1
+        st.session_state[_IVER] = _nv
+        _ek = f"item_ed_v{_nv}"
+
+        _df_rows = [{k: v for k, v in r.items() if k != "_id"}
+                    for r in st.session_state[_IEST]]
+        _SCHEMA_ITEM = {
+            "Select": pd.Series(dtype=bool),
+            "Part ID": pd.Series(dtype=str), "Name": pd.Series(dtype=str),
+            "Supplier": pd.Series(dtype=str),
+            "Mfg ($)": pd.Series(dtype=float), "Svc ($)": pd.Series(dtype=float),
+            "Weight (g)": pd.Series(dtype=float),
+            "HS (NA)": pd.Series(dtype=str), "HS (UK)": pd.Series(dtype=str),
+            "Currency": pd.Series(dtype=str), "Notes": pd.Series(dtype=str),
+        }
+        full_df = pd.DataFrame(_df_rows) if _df_rows else pd.DataFrame(_SCHEMA_ITEM)
+
+        st.data_editor(
+            full_df,
+            use_container_width=True,
+            num_rows="dynamic",
+            key=_ek,
+            hide_index=True,
+            column_config={
+                "Select":     st.column_config.CheckboxColumn("✔", default=False, width=50),
+                "Part ID":    st.column_config.TextColumn("Part ID", width=110),
+                "Name":       st.column_config.TextColumn("Name", width=220),
+                "Supplier":   st.column_config.SelectboxColumn("Supplier", options=_sup_name_opts, width=160),
+                "Mfg ($)":    st.column_config.NumberColumn("Mfg ($)", format="$%.2f", min_value=0.0, width=90),
+                "Svc ($)":    st.column_config.NumberColumn("Svc ($)", format="$%.2f", min_value=0.0, width=90),
+                "Weight (g)": st.column_config.NumberColumn("Weight (g)", format="%.1f", min_value=0.0, width=95),
+                "HS (NA)":    st.column_config.TextColumn("HS (NA)", width=100),
+                "HS (UK)":    st.column_config.TextColumn("HS (UK)", width=100),
+                "Currency":   st.column_config.SelectboxColumn("Currency", options=_item_currencies, width=95),
+                "Notes":      st.column_config.TextColumn("Notes", width=180),
+            },
         )
-    else:
-        st.info("No items yet. Add one below.")
 
-    st.divider()
+        _selected = [r for r in st.session_state[_IEST] if r.get("Select")]
+        _ib1, _ib2, _ = st.columns([2, 2, 6])
 
-    with st.expander("➕ Add / Edit Item", expanded=not _item_list):
-        _item_edit_id = None
-        _item_rec = {}
-        if _item_list:
-            _item_labels = ["— New item —"] + [
-                f"{i['part_id']} — {i['name']}" if i.get("part_id") else i["name"]
-                for i in _item_list
-            ]
-            _item_sel = st.selectbox("Edit existing item", _item_labels, key="item_edit_sel")
-            if _item_sel != "— New item —":
-                _item_rec = _item_list[_item_labels.index(_item_sel) - 1]
-                _item_edit_id = _item_rec["id"]
-
-        _item_currencies = ["USD", "GBP", "EUR", "CAD", "AUD"]
-        _sup_options = [None] + [s["name"] for s in _sup_list_for_items]
-        _sup_ids_by_name = {s["name"]: s["id"] for s in _sup_list_for_items}
-
-        with st.form("item_form"):
-            _item_part_id = st.text_input("Part ID *", value=_item_rec.get("part_id", "") or "")
-            _item_name = st.text_input("Name *", value=_item_rec.get("name", ""))
-            _item_sup_name = st.selectbox(
-                "Supplier",
-                _sup_options,
-                index=_sup_options.index(_item_rec.get("supplier_name"))
-                if _item_rec.get("supplier_name") in _sup_options else 0,
-            )
-            _c1, _c2 = st.columns(2)
-            with _c1:
-                _item_mfg_cost = st.number_input(
-                    "Manufacturer cost ($)", min_value=0.0, step=0.01, format="%.2f",
-                    value=float(_item_rec.get("manufacturer_cost", 0) or 0),
-                )
-            with _c2:
-                _item_svc_cost = st.number_input(
-                    "Service cost ($)", min_value=0.0, step=0.01, format="%.2f",
-                    value=float(_item_rec.get("service_cost", 0) or 0),
-                )
-            st.caption("Service cost = agent fee. It is NOT included in customs calculations.")
-            _item_net_weight = st.number_input(
-                "Net weight (g)", min_value=0.0, step=1.0, format="%.1f",
-                value=float(_item_rec.get("net_weight_grams", 0) or 0),
-            )
-            _c3, _c4 = st.columns(2)
-            with _c3:
-                _item_hst_na = st.text_input("HS Code (NA — US & CA)", value=_item_rec.get("hst_code_na", "") or "")
-            with _c4:
-                _item_hst_uk = st.text_input("HS Code (UK)", value=_item_rec.get("hst_code_uk", "") or "")
-            _item_currency = st.selectbox(
-                "Currency",
-                _item_currencies,
-                index=_item_currencies.index(_item_rec["currency"])
-                if _item_rec.get("currency") in _item_currencies else 0,
-            )
-            _item_notes = st.text_input("Notes", value=_item_rec.get("notes", "") or "")
-
-            if st.form_submit_button("💾 Save Item", type="primary"):
-                if _item_name.strip():
-                    upsert_item(
-                        data={
-                            "part_id": _item_part_id.strip() or None,
-                            "name": _item_name.strip(),
-                            "item_type": "other",
-                            "supplier_id": _sup_ids_by_name.get(_item_sup_name) if _item_sup_name else None,
-                            "manufacturer_cost": _item_mfg_cost,
-                            "service_cost": _item_svc_cost,
-                            "net_weight_grams": _item_net_weight if _item_net_weight else None,
-                            "hst_code_na": _item_hst_na.strip() or None,
-                            "hst_code_uk": _item_hst_uk.strip() or None,
-                            "currency": _item_currency,
-                            "notes": _item_notes.strip() or None,
-                        },
-                        item_id=_item_edit_id,
-                    )
-                    st.success("✅ Item saved.")
+        with _ib1:
+            if st.button("💾 Save All", type="primary", key="item_save_all"):
+                try:
+                    _orig_ids = {r["_id"] for r in st.session_state[_IEST] if r.get("_id")}
+                    _db_ids   = {i["id"] for i in get_items()}
+                    for _did in (_db_ids - _orig_ids):
+                        delete_item(_did)
+                    for _r in st.session_state[_IEST]:
+                        if not str(_r.get("Name") or "").strip():
+                            continue
+                        _sup = _r.get("Supplier")
+                        upsert_item(
+                            data={
+                                "part_id":          _r["Part ID"].strip() or None,
+                                "name":             _r["Name"].strip(),
+                                "item_type":        "other",
+                                "supplier_id":      _sup_ids_by_name.get(_sup) if _sup and _sup != "—" else None,
+                                "manufacturer_cost": _r["Mfg ($)"],
+                                "service_cost":      _r["Svc ($)"],
+                                "net_weight_grams":  _r["Weight (g)"] or None,
+                                "hst_code_na":       _r["HS (NA)"].strip() or None,
+                                "hst_code_uk":       _r["HS (UK)"].strip() or None,
+                                "currency":          _r["Currency"] or "USD",
+                                "notes":             _r["Notes"].strip() or None,
+                            },
+                            item_id=_r.get("_id"),
+                        )
+                    st.session_state.pop(_IEST, None)
+                    st.session_state.pop(_IVER, None)
+                    st.success("✅ All items saved.")
                     st.rerun()
-                else:
-                    st.warning("Item name is required.")
+                except Exception as _e:
+                    st.error(f"Save failed: {_e}")
 
-    if _item_list:
-        st.divider()
-        st.markdown("#### 🗑️ Delete Item")
-        _del_item_name = st.selectbox(
-            "Select item to delete", [i["name"] for i in _item_list], key="del_item_sel"
-        )
-        _del_item_confirm = st.checkbox("Confirm deletion", key="del_item_confirm")
-        if st.button("🗑️ Delete Item", disabled=not _del_item_confirm, key="del_item_btn"):
-            _del_item_id = next(i["id"] for i in _item_list if i["name"] == _del_item_name)
-            delete_item(_del_item_id)
-            st.success(f"✅ Item '{_del_item_name}' deleted.")
-            st.rerun()
+        with _ib2:
+            if st.button("🗑️ Delete selected", disabled=(not _selected), key="item_delete_sel"):
+                _sel_ids = {r["_id"] for r in _selected if r.get("_id")}
+                for _did in _sel_ids:
+                    delete_item(_did)
+                st.session_state[_IEST] = [
+                    r for r in st.session_state[_IEST] if not r.get("Select")
+                ]
+                st.rerun()
+
+    _item_editor_fragment()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — PRODUCTS CATALOG
