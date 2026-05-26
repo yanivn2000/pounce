@@ -1115,7 +1115,7 @@ with _catalog_tab:
         )
 
         _selected = [r for r in st.session_state[_CEST] if r.get("Select")]
-        _bc1, _bc2, _ = st.columns([2, 2, 6])
+        _bc1, _bc2, _bc3, _ = st.columns([2, 2, 2, 4])
 
         with _bc1:
             if st.button("💾 Save All", type="primary", key="cat_save_all"):
@@ -1169,6 +1169,16 @@ with _catalog_tab:
                 for _r in st.session_state[_CEST]:
                     _r["Select"] = False
                 st.session_state[_CEST].extend(_new_rows)
+                st.rerun()
+
+        with _bc3:
+            if st.button("🗑️ Delete selected", disabled=(not _selected), key="cat_delete_sel"):
+                _sel_ids = {r["_id"] for r in _selected if r.get("_id")}
+                for _did in _sel_ids:
+                    delete_product_catalog(_did)
+                st.session_state[_CEST] = [
+                    r for r in st.session_state[_CEST] if not r.get("Select")
+                ]
                 st.rerun()
 
     _cat_editor_fragment()
