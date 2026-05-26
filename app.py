@@ -1414,7 +1414,7 @@ with tab_production:
         # Clear any lingering state so New always starts with an empty table
         st.session_state.pop("prod_saved_id", None)
         st.session_state.pop("prod_lines_state_new", None)
-        st.session_state.pop("prod_lines_ver_new", None)
+        st.session_state.pop("prod_lines_ed_new", None)
 
     # ── Fragment: right-side form reruns only itself on editor interactions ─────
     @st.fragment
@@ -1482,7 +1482,7 @@ with tab_production:
                 }
 
             _state_key = f"prod_lines_state_{ctx}"
-            _ver_key   = f"prod_lines_ver_{ctx}"
+            _ek        = f"prod_lines_ed_{ctx}"   # fixed key — never rotated
 
             def _safe_int(v):
                 """int() that returns 0 for None / NaN / bad values."""
@@ -1502,42 +1502,36 @@ with tab_production:
                 else:
                     st.session_state[_state_key] = []
 
-            # ── diff-then-rotate pattern ───────────────────────────────────────
-            # Each render uses a fresh key (_v{n+1}) so data_editor never
-            # re-applies stale added_rows / edited_rows on top of our state rows.
-            # The diffs from the PREVIOUS render (_v{n}) are already in session
-            # state by the time this rerun starts, so we read and apply them
-            # first, THEN rotate to the new key for the current render.
-            _prev_ver = st.session_state.get(_ver_key, -1)
-            _prev_key = f"prod_lines_{ctx}_v{_prev_ver}"
-            _prev_diffs = st.session_state.get(_prev_key, {})
+            # ── Fixed-key pattern: absorb diffs into state each rerun ─────────
+            # We read whatever the editor sent since last render, apply it to
+            # _state_key, then RESET the editor state to {}.  That way:
+            #   • full_df is always recomputed with up-to-date computed columns
+            #   • the editor key stays constant → widget updates in-place
+            #     (no remount, scroll position preserved)
+            _diffs      = st.session_state.get(_ek, {})
+            _edit_map   = {int(k): v for k, v in (_diffs.get("edited_rows") or {}).items()}
+            _del_base   = set(_diffs.get("deleted_rows") or [])
+            _added      = _diffs.get("added_rows") or []
 
-            if _prev_diffs:
-                # Apply edits, deletes, adds from the last render into our state
-                _s = {i: dict(r) for i, r in enumerate(st.session_state[_state_key])}
-                for _ri, _chg in (_prev_diffs.get("edited_rows") or {}).items():
-                    _ri = int(_ri)
+            if _edit_map or _del_base or _added:
+                _s = {i: dict(r) for i, r in enumerate(st.session_state[_state_key])
+                      if i not in _del_base}
+                for _ri, _chg in _edit_map.items():
                     if _ri in _s:
-                        _s[_ri].update(_chg)
-                for _ri in sorted(_prev_diffs.get("deleted_rows") or [], reverse=True):
-                    _s.pop(int(_ri), None)
+                        # Only absorb the two editable columns; ignore computed ones
+                        _s[_ri].update({k: v for k, v in _chg.items()
+                                        if k in ("SKU", "# Cartons")})
                 _merged = [_s[k] for k in sorted(_s)]
-                for _a in (_prev_diffs.get("added_rows") or []):
+                for _a in _added:
                     _merged.append({
-                        "SKU":        str(_a.get("SKU") or "").strip(),
-                        "# Cartons":  _safe_int(_a.get("# Cartons")),
+                        "SKU":       str(_a.get("SKU") or "").strip(),
+                        "# Cartons": _safe_int(_a.get("# Cartons")),
                     })
                 st.session_state[_state_key] = _merged
-                # Clean up the old key to avoid session-state growth
-                st.session_state.pop(_prev_key, None)
+                # Reset editor diffs — changes are now in _state_key / full_df
+                st.session_state[_ek] = {}
 
-            # Advance to the next version for this render
-            _next_ver = _prev_ver + 1
-            st.session_state[_ver_key] = _next_ver
-            _editor_key = f"prod_lines_{ctx}_v{_next_ver}"
-
-            # Build full_df from our state — every row gets correct computed columns
-            # (including newly added rows whose SKU was just picked).
+            # Build full_df from current state (computed columns always fresh)
             _cur_list = st.session_state[_state_key]
             _SCHEMA = {
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
@@ -1556,12 +1550,13 @@ with tab_production:
                          "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
             st.caption("Click + (bottom-left) to add a row · select a row and press Delete/Backspace to remove it")
-            edited_df = st.data_editor(  # noqa: F841  (used for display; state read next rerun via _prev_diffs)
+            st.data_editor(
                 full_df,
                 use_container_width=True,
                 num_rows="dynamic",
-                key=_editor_key,
+                key=_ek,
                 disabled=_COMPUTED,
+                height=740,
                 column_config={
                     "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=180),
                     "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=110),
@@ -1629,7 +1624,7 @@ with tab_production:
                             )
                             # Clear state so next load re-reads fresh from DB
                             st.session_state.pop(_state_key, None)
-                            st.session_state.pop(_ver_key, None)
+                            st.session_state.pop(_ek, None)
                             st.session_state["prod_saved_id"] = prod_id
                             st.success(f"✅ '{prod_name.strip()}' saved.")
                             st.rerun()
@@ -1649,7 +1644,7 @@ with tab_production:
                         st.session_state.pop(f"prod_del_confirm_{ctx}", None)
                         st.session_state.pop("prod_saved_id", None)
                         st.session_state.pop(_state_key, None)
-                        st.session_state.pop(_ver_key, None)
+                        st.session_state.pop(_ek, None)
                         st.rerun()
                 with _dc2:
                     if st.button("Cancel", key=f"prod_del_no_{ctx}"):
