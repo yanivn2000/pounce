@@ -1381,12 +1381,39 @@ with tab_production:
                 else:
                     st.session_state[_state_key] = []
 
-            # Rotate the editor key on every fragment rerun so data_editor always
-            # starts with a clean base (no stale added_rows / edited_rows that would
-            # double-apply rows we've already materialised into full_df).
-            _ver = st.session_state.get(_ver_key, -1) + 1
-            st.session_state[_ver_key] = _ver
-            _editor_key = f"prod_lines_{ctx}_v{_ver}"
+            # ── diff-then-rotate pattern ───────────────────────────────────────
+            # Each render uses a fresh key (_v{n+1}) so data_editor never
+            # re-applies stale added_rows / edited_rows on top of our state rows.
+            # The diffs from the PREVIOUS render (_v{n}) are already in session
+            # state by the time this rerun starts, so we read and apply them
+            # first, THEN rotate to the new key for the current render.
+            _prev_ver = st.session_state.get(_ver_key, -1)
+            _prev_key = f"prod_lines_{ctx}_v{_prev_ver}"
+            _prev_diffs = st.session_state.get(_prev_key, {})
+
+            if _prev_diffs:
+                # Apply edits, deletes, adds from the last render into our state
+                _s = {i: dict(r) for i, r in enumerate(st.session_state[_state_key])}
+                for _ri, _chg in (_prev_diffs.get("edited_rows") or {}).items():
+                    _ri = int(_ri)
+                    if _ri in _s:
+                        _s[_ri].update(_chg)
+                for _ri in sorted(_prev_diffs.get("deleted_rows") or [], reverse=True):
+                    _s.pop(int(_ri), None)
+                _merged = [_s[k] for k in sorted(_s)]
+                for _a in (_prev_diffs.get("added_rows") or []):
+                    _merged.append({
+                        "SKU":        str(_a.get("SKU") or "").strip(),
+                        "# Cartons":  _safe_int(_a.get("# Cartons")),
+                    })
+                st.session_state[_state_key] = _merged
+                # Clean up the old key to avoid session-state growth
+                st.session_state.pop(_prev_key, None)
+
+            # Advance to the next version for this render
+            _next_ver = _prev_ver + 1
+            st.session_state[_ver_key] = _next_ver
+            _editor_key = f"prod_lines_{ctx}_v{_next_ver}"
 
             # Build full_df from our state — every row gets correct computed columns
             # (including newly added rows whose SKU was just picked).
@@ -1408,7 +1435,7 @@ with tab_production:
                          "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
             st.caption("Click + (bottom-left) to add a row · select a row and press Delete/Backspace to remove it")
-            edited_df = st.data_editor(
+            edited_df = st.data_editor(  # noqa: F841  (used for display; state read next rerun via _prev_diffs)
                 full_df,
                 use_container_width=True,
                 num_rows="dynamic",
@@ -1426,14 +1453,6 @@ with tab_production:
                     "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
                 },
             )
-
-            # Sync state from edited_df (all rows, including partially-filled
-            # ones, so a just-added empty row isn't lost before SKU is picked).
-            st.session_state[_state_key] = [
-                {"SKU": str(row.get("SKU") or "").strip(),
-                 "# Cartons": _safe_int(row.get("# Cartons"))}
-                for _, row in edited_df.iterrows()
-            ]
 
             # Totals — compute from sku_info using live state (always accurate
             # regardless of which columns are disabled in the table).
