@@ -860,13 +860,19 @@ with _items_tab:
 
     @st.fragment
     def _item_editor_fragment():
-        _df_rows = [{k: v for k, v in r.items() if k != "_id"}
-                    for r in st.session_state[_IEST]]
+        _df_rows = []
+        for _r in st.session_state[_IEST]:
+            _row = {k: v for k, v in _r.items() if k != "_id"}
+            _row["Total ($)"] = round(
+                float(_row.get("Mfg ($)") or 0) + float(_row.get("Svc ($)") or 0), 2
+            )
+            _df_rows.append(_row)
         _SCHEMA_ITEM = {
             "Select": pd.Series(dtype=bool),
             "Part ID": pd.Series(dtype=str), "Name": pd.Series(dtype=str),
             "Supplier": pd.Series(dtype=str),
             "Mfg ($)": pd.Series(dtype=float), "Svc ($)": pd.Series(dtype=float),
+            "Total ($)": pd.Series(dtype=float),
             "Weight (g)": pd.Series(dtype=float),
             "HS (NA)": pd.Series(dtype=str), "HS (UK)": pd.Series(dtype=str),
             "Currency": pd.Series(dtype=str), "Notes": pd.Series(dtype=str),
@@ -880,6 +886,7 @@ with _items_tab:
             key=_IEK,
             hide_index=True,
             height=740,
+            disabled=["Total ($)"],
             column_config={
                 "Select":     st.column_config.CheckboxColumn("✔", default=False, width=50),
                 "Part ID":    st.column_config.TextColumn("Part ID", width=110),
@@ -887,6 +894,7 @@ with _items_tab:
                 "Supplier":   st.column_config.SelectboxColumn("Supplier", options=_sup_name_opts, width=160),
                 "Mfg ($)":    st.column_config.NumberColumn("Mfg ($)", format="$%.2f", min_value=0.0, width=90),
                 "Svc ($)":    st.column_config.NumberColumn("Svc ($)", format="$%.2f", min_value=0.0, width=90),
+                "Total ($)":  st.column_config.NumberColumn("Total ($)", format="$%.2f", width=95),
                 "Weight (g)": st.column_config.NumberColumn("Weight (g)", format="%.1f", min_value=0.0, width=95),
                 "HS (NA)":    st.column_config.TextColumn("HS (NA)", width=100),
                 "HS (UK)":    st.column_config.TextColumn("HS (UK)", width=100),
@@ -1086,6 +1094,12 @@ with _catalog_tab:
                 "CBM":        _sf(_cp.get("carton_cbm")),
                 "New?":       bool(_cp.get("is_new_product", 0)),
                 "Notes":      _cp.get("notes") or "",
+                "Mfg ($)":    round(_sf(_bd.get("total_manufacturer", 0) if _bd else 0), 2),
+                "Svc ($)":    round(_sf(_bd.get("total_service", 0) if _bd else 0), 2),
+                "Total ($)":  round(
+                    _sf(_bd.get("total_manufacturer", 0) if _bd else 0) +
+                    _sf(_bd.get("total_service", 0) if _bd else 0), 2
+                ),
                 "Wt (g)":     round(_sf(_bd.get("total_weight_gr", 0) if _bd else 0), 1),
                 "Landed ($)": round(_sf(_bd.get("landed_cost", 0) if _bd else 0), 2),
             })
@@ -1107,6 +1121,8 @@ with _catalog_tab:
             "NW (kg)": pd.Series(dtype=float), "GW (kg)": pd.Series(dtype=float),
             "CBM": pd.Series(dtype=float), "New?": pd.Series(dtype=bool),
             "Notes": pd.Series(dtype=str),
+            "Mfg ($)": pd.Series(dtype=float), "Svc ($)": pd.Series(dtype=float),
+            "Total ($)": pd.Series(dtype=float),
             "Wt (g)": pd.Series(dtype=float), "Landed ($)": pd.Series(dtype=float),
         }
         full_df = pd.DataFrame(_df_rows) if _df_rows else pd.DataFrame(_SCHEMA_CAT)
@@ -1116,7 +1132,7 @@ with _catalog_tab:
             use_container_width=True,
             num_rows="dynamic",
             key=_CEK,
-            disabled=["Wt (g)", "Landed ($)"],
+            disabled=["Mfg ($)", "Svc ($)", "Total ($)", "Wt (g)", "Landed ($)"],
             hide_index=True,
             height=740,
             column_config={
@@ -1140,6 +1156,9 @@ with _catalog_tab:
                 "CBM":        st.column_config.NumberColumn("CBM", format="%.4f", width=75),
                 "New?":       st.column_config.CheckboxColumn("New?", width=60),
                 "Notes":      st.column_config.TextColumn("Notes", width=160),
+                "Mfg ($)":    st.column_config.NumberColumn("Mfg ($)", format="$%.2f", width=90),
+                "Svc ($)":    st.column_config.NumberColumn("Svc ($)", format="$%.2f", width=90),
+                "Total ($)":  st.column_config.NumberColumn("Total ($)", format="$%.2f", width=95),
                 "Wt (g)":     st.column_config.NumberColumn("Wt (g)", format="%.0f", width=70),
                 "Landed ($)": st.column_config.NumberColumn("Landed ($)", format="$%.2f", width=95),
             },
@@ -1182,6 +1201,7 @@ with _catalog_tab:
                     "CBM":       _sf(_a.get("CBM")),
                     "New?":      bool(_a.get("New?", False)),
                     "Notes":     str(_a.get("Notes") or ""),
+                    "Mfg ($)": 0.0, "Svc ($)": 0.0, "Total ($)": 0.0,
                     "Wt (g)": 0.0, "Landed ($)": 0.0,
                 })
             return _out
