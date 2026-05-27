@@ -2208,6 +2208,7 @@ with tab_ads:
             with st.expander(_expander_label, expanded=bool(_pf)):
                 if _pf:
                     st.info(f"Pre-filled from rec #{int(_pf.get('id', 0))} — adjust as needed before saving.")
+                    st.caption(f"🔍 DEBUG — asin: `{_pf.get('asin')}` · campaign: `{_pf.get('campaign_name')}`")
                     if st.button("✖ Clear pre-fill", key="clear_prefill"):
                         st.session_state.pop("rec_prefill", None)
                         st.rerun()
