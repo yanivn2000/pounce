@@ -51,6 +51,7 @@ from db.productions import (
     get_productions, get_production, save_production, delete_production,
     get_production_lines, save_production_lines,
     get_production_summary, get_catalog_skus, get_sku_catalog_info,
+    get_sku_supplier_map,
 )
 
 init_db()
@@ -1463,7 +1464,8 @@ with tab_production:
             st.info("No SKUs in the Products catalog yet — add products with SKUs in the 📦 Products tab first.")
         else:
             # Pre-load catalog info once (avoids N+1 queries)
-            sku_info = get_sku_catalog_info()
+            sku_info         = get_sku_catalog_info()
+            sku_supplier_map = get_sku_supplier_map()
 
             def _make_full_row(sku, num_cartons):
                 info = sku_info.get(sku or "", {})
@@ -1544,6 +1546,15 @@ with tab_production:
             # For cell edits this is identical to the previous render →
             # Streamlit sends no Arrow update → component doesn't re-render.
             _cur_list = st.session_state[_state_key]
+
+            # Build sorted list of unique suppliers for SKUs in this production
+            _prod_sups: list[str] = []
+            for _r in _cur_list:
+                for _sup in sku_supplier_map.get(_r.get("SKU") or "", []):
+                    if _sup and _sup not in _prod_sups:
+                        _prod_sups.append(_sup)
+            _prod_sups.sort()
+
             _SCHEMA = {
                 "Select": pd.Series(dtype=bool),
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
@@ -1561,32 +1572,77 @@ with tab_production:
             _COMPUTED = ["Product", "# Units", "Product Cost ($)", "Service Cost ($)",
                          "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
-            st.caption("Click + (bottom-left) to add a row · select a row and press Delete/Backspace to remove it")
-            st.data_editor(
-                full_df,
-                use_container_width=True,
-                num_rows="dynamic",
-                key=_ek,
-                disabled=_COMPUTED,
-                height=740,
-                column_config={
-                    "Select":            st.column_config.CheckboxColumn("✔", default=False, width=50),
-                    "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=180),
-                    "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=110),
-                    "Product":           st.column_config.TextColumn("Product", width=200),
-                    "# Units":           st.column_config.NumberColumn("# Units", width=85),
-                    "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
-                    "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
-                    "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
-                    "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
-                    "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
-                },
-            )
+            # ── Supplier filter ────────────────────────────────────────────────
+            if _prod_sups:
+                _sup_filter = st.selectbox(
+                    "View by supplier",
+                    options=["All suppliers"] + _prod_sups,
+                    key=f"prod_sup_filter_{ctx}",
+                )
+            else:
+                _sup_filter = "All suppliers"
 
-            # Rows the user has ticked — read from editor diffs (stable-data pattern:
-            # Select lives in edited_rows, not in _state_key or full_df)
-            _selected_idxs = {i for i, chg in _edit_map.items()
-                               if chg.get("Select", False)}
+            if _sup_filter == "All suppliers":
+                # Full editable table
+                st.caption("Click + (bottom-left) to add a row · select a row and press Delete/Backspace to remove it")
+                st.data_editor(
+                    full_df,
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    key=_ek,
+                    disabled=_COMPUTED,
+                    height=740,
+                    column_config={
+                        "Select":            st.column_config.CheckboxColumn("✔", default=False, width=50),
+                        "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=180),
+                        "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=110),
+                        "Product":           st.column_config.TextColumn("Product", width=200),
+                        "# Units":           st.column_config.NumberColumn("# Units", width=85),
+                        "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
+                        "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
+                        "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
+                        "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
+                        "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
+                    },
+                )
+                # Rows the user has ticked — read from editor diffs (stable-data pattern:
+                # Select lives in edited_rows, not in _state_key or full_df)
+                _selected_idxs = {i for i, chg in _edit_map.items()
+                                   if chg.get("Select", False)}
+            else:
+                # Read-only filtered view for selected supplier
+                _flt_schema = {
+                    "SKU": pd.Series(dtype=str),
+                    "Product": pd.Series(dtype=str),
+                    "# Cartons": pd.Series(dtype=int),
+                    "# Units": pd.Series(dtype=int),
+                    "Product Cost ($)": pd.Series(dtype=float),
+                    "Service Cost ($)": pd.Series(dtype=float),
+                    "Net Weight (kg)": pd.Series(dtype=float),
+                    "Gross Weight (kg)": pd.Series(dtype=float),
+                    "CBM": pd.Series(dtype=float),
+                }
+                _flt_rows = [
+                    {k: v for k, v in row.items() if k != "Select"}
+                    for row in _full_rows
+                    if _sup_filter in sku_supplier_map.get(row.get("SKU") or "", [])
+                ]
+                _flt_df = pd.DataFrame(_flt_rows) if _flt_rows else pd.DataFrame(_flt_schema)
+                st.caption(f"Showing SKUs supplied by **{_sup_filter}** (read-only · switch to 'All suppliers' to edit)")
+                st.dataframe(
+                    _flt_df,
+                    use_container_width=True,
+                    height=740,
+                    hide_index=True,
+                    column_config={
+                        "Product Cost ($)":  st.column_config.NumberColumn(format="$%.2f"),
+                        "Service Cost ($)":  st.column_config.NumberColumn(format="$%.2f"),
+                        "Net Weight (kg)":   st.column_config.NumberColumn(format="%.2f kg"),
+                        "Gross Weight (kg)": st.column_config.NumberColumn(format="%.2f kg"),
+                        "CBM":               st.column_config.NumberColumn(format="%.3f"),
+                    },
+                )
+                _selected_idxs = set()   # no selection in filtered view
 
             # Effective rows = base state merged with any unsaved cell edits.
             # Used for totals display and Save — always reflects what the user sees.
@@ -1600,12 +1656,17 @@ with tab_production:
                     _out.append(_m)
                 return _out
 
-            # Totals — computed from live effective rows, always accurate
+            # Totals — computed from live effective rows, always accurate.
+            # When a supplier filter is active, show subtotal for that supplier only.
             _tot_cartons = _tot_units = 0
             _tot_prod = _tot_svc = _tot_nw = _tot_gw = _tot_cbm = 0.0
             for _r in _eff_rows():
                 _sku = _r["SKU"]
                 if not _sku:
+                    continue
+                # Skip rows not belonging to the selected supplier
+                if _sup_filter != "All suppliers" and \
+                        _sup_filter not in sku_supplier_map.get(_sku, []):
                     continue
                 _nc   = _safe_int(_r.get("# Cartons"))
                 _info = sku_info.get(_sku, {})
@@ -1620,8 +1681,13 @@ with tab_production:
                 _tot_cbm     += _info.get("cbm",   0.0) * _nc
 
             if _tot_cartons:
+                _tot_label = (
+                    f"**📊 {_sup_filter.upper()} SUBTOTAL**"
+                    if _sup_filter != "All suppliers"
+                    else "**📊 TOTAL**"
+                )
                 st.markdown(
-                    f"**📊 TOTAL** · "
+                    f"{_tot_label} · "
                     f"{_tot_cartons} cartons · "
                     f"{_tot_units} units · "
                     f"\\${_tot_prod:.2f} prod cost · "

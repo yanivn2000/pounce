@@ -188,6 +188,36 @@ def get_production_summary(prod_id: int) -> list[dict]:
     return result
 
 
+def get_sku_supplier_map() -> dict:
+    """
+    Return {sku: [supplier_name, ...]} for all SKU-bearing products.
+    Each entry is a deduplicated, ordered list of supplier names derived from
+    the product's part_id_1 / part_id_2 → items → suppliers chain.
+    """
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT pc.sku,
+               s1.name AS sup1,
+               s2.name AS sup2
+        FROM   products_catalog pc
+        LEFT JOIN items    i1 ON i1.part_id = pc.part_id_1
+        LEFT JOIN suppliers s1 ON s1.id = i1.supplier_id
+        LEFT JOIN items    i2 ON i2.part_id = pc.part_id_2
+        LEFT JOIN suppliers s2 ON s2.id = i2.supplier_id
+        WHERE  pc.sku IS NOT NULL AND pc.sku != ''
+    """).fetchall()
+    conn.close()
+
+    result: dict = {}
+    for row in rows:
+        sups: list[str] = []
+        for s in (row["sup1"], row["sup2"]):
+            if s and s not in sups:
+                sups.append(s)
+        result[row["sku"]] = sups
+    return result
+
+
 def get_catalog_skus() -> list[str]:
     """Return all non-empty SKUs from products_catalog, sorted."""
     conn = get_conn()
