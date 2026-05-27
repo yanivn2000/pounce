@@ -2266,7 +2266,7 @@ with tab_ads:
                     "⏸ Hide paused",
                     value=True,
                     key="rh_hide_paused",
-                    help="Hide recommendations from campaigns whose End Date is 7+ days old (likely paused)"
+                    help="Hide recommendations from campaigns whose End Date is 21+ days old (likely paused)"
                 )
             with rhf5:
                 show_critical_recs = st.checkbox(
@@ -2298,9 +2298,9 @@ with tab_ads:
                         (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
                     ]
 
-                # Hide paused: end_date present and 7+ days before today
+                # Hide paused: end_date present and 21+ days before today
                 if hide_paused and "end_date" in recs_df.columns:
-                    _cutoff = str(date.today() - timedelta(days=7))
+                    _cutoff = str(date.today() - timedelta(days=21))
                     _has_end = recs_df["end_date"].notna() & (recs_df["end_date"] != "")
                     _is_paused_row = _has_end & (recs_df["end_date"] < _cutoff)
                     recs_df = recs_df[~_is_paused_row]
