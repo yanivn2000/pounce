@@ -2376,9 +2376,11 @@ with tab_ads:
                     key="recs_table_sel",
                 )
 
-                # Action bar — appears when a row is selected
+                # Action bar — appears when a row is selected.
+                # Guard against stale selection indices that are out-of-bounds
+                # after a filter change shrinks recs_df (e.g. "Manual only").
                 _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
-                if _sel_rows:
+                if _sel_rows and _sel_rows[0] < len(recs_df):
                     _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
                     _camp_preview  = str(_sel_data.get("campaign_name") or "")[:55]
                     _place_preview = str(_sel_data.get("placement_type") or "")
