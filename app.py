@@ -2207,18 +2207,29 @@ with tab_ads:
             _expander_label = "📋 Edit & Log (pre-filled from selection)" if _pf else "➕ Log a Recommendation"
             with st.expander(_expander_label, expanded=bool(_pf)):
                 if _pf:
-                    st.info(f"Pre-filled from rec #{int(_pf.get('id', 0))} — adjust as needed before saving.")
-                    st.caption(f"🔍 DEBUG — asin: `{_pf.get('asin')}` · campaign: `{_pf.get('campaign_name')}`")
+                    st.info(f"Pre-filled from: **{_pf_str('campaign_name') or '—'}**")
                     if st.button("✖ Clear pre-fill", key="clear_prefill"):
                         st.session_state.pop("rec_prefill", None)
                         st.rerun()
 
                 # _fk is a stable identifier for this prefill instance.
-                # Every widget gets an explicit key that includes _fk so that
-                # switching to a new record always creates brand-new widgets
-                # (Streamlit ignores value= if the widget key already exists in
-                # session state from a previous render with different data).
                 _fk = int(_pf["id"]) if _pf.get("id") else 0
+
+                # Guaranteed pre-fill: pop any stale widget state then assign
+                # values directly to session_state BEFORE the widgets render.
+                # Streamlit honours session_state values set before a widget is
+                # first drawn; it ignores value= if the key already exists.
+                # The _pf_injected flag prevents overwriting user edits on
+                # subsequent reruns of the same form.
+                _pf_injected = f"_pf_injected_{_fk}"
+                if _pf and _fk and _pf_injected not in st.session_state:
+                    for _wk in [f"rf_asin_{_fk}", f"rf_camp_{_fk}", f"rf_rsn_{_fk}"]:
+                        st.session_state.pop(_wk, None)
+                    st.session_state[f"rf_asin_{_fk}"] = _pf_str("asin")
+                    st.session_state[f"rf_camp_{_fk}"] = _pf_str("campaign_name")
+                    st.session_state[f"rf_rsn_{_fk}"]  = _pf_str("reasoning")
+                    st.session_state[_pf_injected]      = True
+
                 _form_key = f"rec_form_{_fk}"
                 with st.form(_form_key, clear_on_submit=True):
                     rc1, rc2 = st.columns(2)
@@ -2226,11 +2237,9 @@ with tab_ads:
                         r_date  = st.date_input("Date Given", value=date.today(),
                                                 key=f"rf_date_{_fk}")
                         r_asin  = st.text_input("ASIN (optional)",
-                                                value=_pf_str("asin"),
                                                 placeholder="B0XXXXXXXX",
                                                 key=f"rf_asin_{_fk}")
                         r_camp  = st.text_input("Campaign Name",
-                                                value=_pf_str("campaign_name"),
                                                 key=f"rf_camp_{_fk}")
                         _place_idx = _place_opts.index(_pf["placement_type"]) \
                             if _pf.get("placement_type") in _place_opts else 0
@@ -2259,7 +2268,6 @@ with tab_ads:
                     r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx,
                                                key=f"rf_mkt_{_fk}")
                     r_reasoning = st.text_area("Reasoning / Notes",
-                                               value=_pf_str("reasoning"),
                                                key=f"rf_rsn_{_fk}")
                     r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14),
                                                 key=f"rf_review_{_fk}")
