@@ -2399,13 +2399,25 @@ with tab_ads:
                 )
 
                 # Action bar — appears when a row is selected.
-                # Guard against stale selection indices that are out-of-bounds
-                # after a filter change shrinks recs_df (e.g. "Manual only").
+                # Selecting a row automatically pre-fills the Log form above.
+                # Guard against stale indices after a filter change.
                 _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
                 if _sel_rows and _sel_rows[0] < len(recs_df):
                     _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
-                    _camp_preview  = str(_sel_data.get("campaign_name") or "")[:55]
-                    _place_preview = str(_sel_data.get("placement_type") or "")
+                    _sel_id   = _sel_data.get("id")
+
+                    # Auto-prefill the form on row click (no button needed).
+                    # Only trigger a rerun when the selection changes.
+                    _cur_pf_id = st.session_state.get("rec_prefill", {}).get("id")
+                    if _sel_id != _cur_pf_id:
+                        st.session_state["rec_prefill"] = _sel_data
+                        # Clear injection flag so values are re-injected for new record
+                        _new_fk = int(_sel_id) if _sel_id else 0
+                        st.session_state.pop(f"_pf_injected_{_new_fk}", None)
+                        st.rerun()
+
+                    _camp_preview     = str(_sel_data.get("campaign_name") or "")[:55]
+                    _place_preview    = str(_sel_data.get("placement_type") or "")
                     _existing_outcome = str(_sel_data.get("outcome") or "")
 
                     st.markdown(
@@ -2418,30 +2430,21 @@ with tab_ads:
                         unsafe_allow_html=True,
                     )
 
-                    _act1, _act2 = st.columns(2)
-
-                    with _act1:
-                        st.markdown("**📋 Clone & Edit**")
-                        if st.button("Clone & Edit → open form above", key="clone_btn"):
-                            st.session_state["rec_prefill"] = _sel_data
-                            st.rerun()
-
-                    with _act2:
-                        st.markdown("**✅ Record Outcome**")
-                        with st.form("outcome_form"):
-                            _oc_text = st.text_input(
-                                "What happened?",
-                                value=_existing_outcome,
-                                placeholder="e.g. ROAS improved from 2.1 to 3.4",
-                                label_visibility="collapsed",
-                            )
-                            if st.form_submit_button("💾 Save Outcome", type="primary"):
-                                if _oc_text.strip():
-                                    update_recommendation_outcome(int(_sel_data["id"]), _oc_text.strip())
-                                    st.success("✅ Outcome saved.")
-                                    st.rerun()
-                                else:
-                                    st.warning("Enter an outcome first.")
+                    st.markdown("**✅ Record Outcome**")
+                    with st.form("outcome_form"):
+                        _oc_text = st.text_input(
+                            "What happened?",
+                            value=_existing_outcome,
+                            placeholder="e.g. ROAS improved from 2.1 to 3.4",
+                            label_visibility="collapsed",
+                        )
+                        if st.form_submit_button("💾 Save Outcome", type="primary"):
+                            if _oc_text.strip():
+                                update_recommendation_outcome(int(_sel_data["id"]), _oc_text.strip())
+                                st.success("✅ Outcome saved.")
+                                st.rerun()
+                            else:
+                                st.warning("Enter an outcome first.")
 
                     # ── Debug cost breakdown panel ─────────────────────────────────
                     _dbg_raw = _sel_data.get("debug_json") or ""
