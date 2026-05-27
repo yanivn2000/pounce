@@ -1545,6 +1545,7 @@ with tab_production:
             # Streamlit sends no Arrow update → component doesn't re-render.
             _cur_list = st.session_state[_state_key]
             _SCHEMA = {
+                "Select": pd.Series(dtype=bool),
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
                 "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
                 "Product Cost ($)": pd.Series(dtype=float),
@@ -1553,7 +1554,7 @@ with tab_production:
                 "Gross Weight (kg)": pd.Series(dtype=float),
                 "CBM": pd.Series(dtype=float),
             }
-            _full_rows = [_make_full_row(r["SKU"], _safe_int(r.get("# Cartons")))
+            _full_rows = [{"Select": False, **_make_full_row(r["SKU"], _safe_int(r.get("# Cartons")))}
                           for r in _cur_list]
             full_df = pd.DataFrame(_full_rows) if _full_rows else pd.DataFrame(_SCHEMA)
 
@@ -1569,6 +1570,7 @@ with tab_production:
                 disabled=_COMPUTED,
                 height=740,
                 column_config={
+                    "Select":            st.column_config.CheckboxColumn("✔", default=False, width=50),
                     "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=180),
                     "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=110),
                     "Product":           st.column_config.TextColumn("Product", width=200),
@@ -1580,6 +1582,11 @@ with tab_production:
                     "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
                 },
             )
+
+            # Rows the user has ticked — read from editor diffs (stable-data pattern:
+            # Select lives in edited_rows, not in _state_key or full_df)
+            _selected_idxs = {i for i, chg in _edit_map.items()
+                               if chg.get("Select", False)}
 
             # Effective rows = base state merged with any unsaved cell edits.
             # Used for totals display and Save — always reflects what the user sees.
@@ -1625,7 +1632,7 @@ with tab_production:
                 )
 
             # ── Buttons ────────────────────────────────────────────────────────
-            _sb1, _sb2, _sb3 = st.columns([2, 1, 7])
+            _sb1, _sb2, _sb3, _ = st.columns([2, 2, 2, 4])
             with _sb1:
                 if st.button("💾 Save", type="primary", key=f"prod_save_{ctx}"):
                     if not prod_name.strip():
@@ -1653,6 +1660,17 @@ with tab_production:
                             st.error(f"Save failed: {_pe}")
 
             with _sb2:
+                if st.button("🗑️ Delete Selected",
+                             disabled=not _selected_idxs,
+                             key=f"prod_del_sel_{ctx}"):
+                    st.session_state[_state_key] = [
+                        r for i, r in enumerate(st.session_state[_state_key])
+                        if i not in _selected_idxs
+                    ]
+                    st.session_state.pop(_ek, None)   # structural change → reset editor
+                    st.rerun()
+
+            with _sb3:
                 if sel_prod and st.button("🗑️ Delete", key=f"prod_del_{ctx}"):
                     st.session_state[f"prod_del_confirm_{ctx}"] = True
 
