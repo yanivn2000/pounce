@@ -2228,13 +2228,14 @@ with tab_ads:
                         _type_idx = _type_opts.index(_pf["campaign_type"]) \
                             if _pf.get("campaign_type") in _type_opts else 0
                         r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx)
-                        r_cur_mul = st.number_input("Current Multiplier %", min_value=0, max_value=900,
-                                                    value=_safe_int(_pf.get("current_multiplier")))
+                        r_cur_mul = st.number_input("Current Bid Adjustment", min_value=0, max_value=900,
+                                                    value=_safe_int(_pf.get("current_multiplier")),
+                                                    disabled=True)
                         _action_idx = next(
                             (i for i, a in enumerate(_action_opts)
                              if a.lower() == _pf_str("recommended_action").lower()), 0)
                         r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx)
-                        r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900,
+                        r_rec_mul = st.number_input("New Bid Adjustment", min_value=0, max_value=900,
                                                     value=_safe_int(_pf.get("recommended_multiplier")))
 
                     _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
