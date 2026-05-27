@@ -2245,7 +2245,7 @@ with tab_ads:
                                                value=_pf_str("reasoning"))
                     r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14))
 
-                    if st.form_submit_button("💾 Save Recommendation", type="primary"):
+                    if st.form_submit_button("📝 Log Change", type="primary"):
                         save_recommendation({
                             "date_given":             str(r_date),
                             "asin":                   r_asin.strip().upper() or None,
