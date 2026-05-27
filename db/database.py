@@ -303,24 +303,27 @@ def _migrate_recommendations_end_date(conn: sqlite3.Connection):
 
 def _migrate_recommendations_dedup_index(conn: sqlite3.Connection):
     """
-    Add a unique index on (date_given, campaign_name, placement_type, marketplace)
-    so re-uploading the same placement report overwrites rather than duplicates.
-    Uses CREATE UNIQUE INDEX IF NOT EXISTS — safe to call repeatedly.
-    Existing duplicate rows are removed first (keep lowest id per group).
+    Unique index on (campaign_name, placement_type, marketplace) so each
+    campaign/placement/marketplace combo keeps only the latest recommendation.
+    Re-uploading any window overwrites the previous row for that campaign.
+    Drops the old date_given-keyed index if present, then deduplicates keeping
+    the most recent row (MAX id) per group.
     """
     try:
-        # Remove duplicates before creating the index (keep earliest row per group)
+        # Drop old index (included date_given, causing duplicates across uploads)
+        conn.execute("DROP INDEX IF EXISTS idx_recs_dedup")
+        # Keep only the latest row per campaign/placement/marketplace
         conn.execute("""
             DELETE FROM recommendations
             WHERE id NOT IN (
-                SELECT MIN(id)
+                SELECT MAX(id)
                 FROM recommendations
-                GROUP BY date_given, campaign_name, placement_type, marketplace
+                GROUP BY campaign_name, placement_type, marketplace
             )
         """)
         conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_recs_dedup
-            ON recommendations(date_given, campaign_name, placement_type, marketplace)
+            ON recommendations(campaign_name, placement_type, marketplace)
         """)
         conn.commit()
     except Exception:
