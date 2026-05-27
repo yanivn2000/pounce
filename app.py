@@ -51,7 +51,7 @@ from db.productions import (
     get_productions, get_production, save_production, delete_production,
     get_production_lines, save_production_lines,
     get_production_summary, get_catalog_skus, get_sku_catalog_info,
-    get_sku_supplier_map,
+    get_sku_supplier_map, get_sku_supplier_cost_map,
 )
 
 init_db()
@@ -1464,8 +1464,9 @@ with tab_production:
             st.info("No SKUs in the Products catalog yet — add products with SKUs in the 📦 Products tab first.")
         else:
             # Pre-load catalog info once (avoids N+1 queries)
-            sku_info         = get_sku_catalog_info()
-            sku_supplier_map = get_sku_supplier_map()
+            sku_info              = get_sku_catalog_info()
+            sku_supplier_map      = get_sku_supplier_map()
+            sku_supplier_cost_map = get_sku_supplier_cost_map()
 
             def _make_full_row(sku, num_cartons):
                 info = sku_info.get(sku or "", {})
@@ -1622,11 +1623,29 @@ with tab_production:
                     "Gross Weight (kg)": pd.Series(dtype=float),
                     "CBM": pd.Series(dtype=float),
                 }
-                _flt_rows = [
-                    {k: v for k, v in row.items() if k != "Select"}
-                    for row in _full_rows
-                    if _sup_filter in sku_supplier_map.get(row.get("SKU") or "", [])
-                ]
+                _flt_rows = []
+                for _row in _full_rows:
+                    _sku = _row.get("SKU") or ""
+                    if _sup_filter not in sku_supplier_map.get(_sku, []):
+                        continue
+                    _sc     = sku_supplier_cost_map.get(_sku, {}).get(_sup_filter, {})
+                    _nc     = _row["# Cartons"]
+                    _cu     = (sku_info.get(_sku, {}).get("carton_units") or 0)
+                    _nu     = _cu * _nc
+                    _u_mfg  = _sc.get("unit_mfg",   0.0)
+                    _u_svc  = _sc.get("unit_svc",   0.0)
+                    _u_nw   = _sc.get("unit_nw_kg", 0.0)
+                    _flt_rows.append({
+                        "SKU":                _sku,
+                        "Product":            _row["Product"],
+                        "# Cartons":          _nc,
+                        "# Units":            _nu,
+                        "Product Cost ($)":   round(_u_mfg * _nu, 2),
+                        "Service Cost ($)":   round(_u_svc * _nu, 2),
+                        "Net Weight (kg)":    round(_u_nw  * _nu, 2),
+                        "Gross Weight (kg)":  0.0,
+                        "CBM":                0.0,
+                    })
                 _flt_df = pd.DataFrame(_flt_rows) if _flt_rows else pd.DataFrame(_flt_schema)
                 st.caption(f"Showing SKUs supplied by **{_sup_filter}** (read-only · switch to 'All suppliers' to edit)")
                 st.dataframe(
@@ -1657,16 +1676,17 @@ with tab_production:
                 return _out
 
             # Totals — computed from live effective rows, always accurate.
-            # When a supplier filter is active, show subtotal for that supplier only.
+            # When a supplier filter is active, show item-level subtotal for that
+            # supplier only (costs/NW from their items; GW and CBM are zeroed).
             _tot_cartons = _tot_units = 0
             _tot_prod = _tot_svc = _tot_nw = _tot_gw = _tot_cbm = 0.0
+            _is_filtered = (_sup_filter != "All suppliers")
             for _r in _eff_rows():
                 _sku = _r["SKU"]
                 if not _sku:
                     continue
                 # Skip rows not belonging to the selected supplier
-                if _sup_filter != "All suppliers" and \
-                        _sup_filter not in sku_supplier_map.get(_sku, []):
+                if _is_filtered and _sup_filter not in sku_supplier_map.get(_sku, []):
                     continue
                 _nc   = _safe_int(_r.get("# Cartons"))
                 _info = sku_info.get(_sku, {})
@@ -1674,28 +1694,43 @@ with tab_production:
                 _u    = _cu * _nc
                 _tot_cartons += _nc
                 _tot_units   += _u
-                _tot_prod    += _info.get("unit_mfg", 0.0) * _u
-                _tot_svc     += _info.get("unit_svc", 0.0) * _u
-                _tot_nw      += _info.get("nw_kg", 0.0) * _nc
-                _tot_gw      += _info.get("gw_kg", 0.0) * _nc
-                _tot_cbm     += _info.get("cbm",   0.0) * _nc
+                if _is_filtered:
+                    # Use item-level costs/NW for this supplier
+                    _sc = sku_supplier_cost_map.get(_sku, {}).get(_sup_filter, {})
+                    _tot_prod += _sc.get("unit_mfg",   0.0) * _u
+                    _tot_svc  += _sc.get("unit_svc",   0.0) * _u
+                    _tot_nw   += _sc.get("unit_nw_kg", 0.0) * _u
+                    # GW and CBM are whole-carton attributes — not split by supplier
+                else:
+                    _tot_prod += _info.get("unit_mfg", 0.0) * _u
+                    _tot_svc  += _info.get("unit_svc", 0.0) * _u
+                    _tot_nw   += _info.get("nw_kg", 0.0) * _nc
+                    _tot_gw   += _info.get("gw_kg", 0.0) * _nc
+                    _tot_cbm  += _info.get("cbm",   0.0) * _nc
 
             if _tot_cartons:
-                _tot_label = (
-                    f"**📊 {_sup_filter.upper()} SUBTOTAL**"
-                    if _sup_filter != "All suppliers"
-                    else "**📊 TOTAL**"
-                )
-                st.markdown(
-                    f"{_tot_label} · "
-                    f"{_tot_cartons} cartons · "
-                    f"{_tot_units} units · "
-                    f"\\${_tot_prod:.2f} prod cost · "
-                    f"\\${_tot_svc:.2f} svc cost · "
-                    f"{_tot_nw:.2f} kg NW · "
-                    f"{_tot_gw:.2f} kg GW · "
-                    f"{_tot_cbm:.3f} CBM"
-                )
+                if _is_filtered:
+                    _tot_label = f"**📊 {_sup_filter.upper()} SUBTOTAL**"
+                    _tot_line  = (
+                        f"{_tot_label} · "
+                        f"{_tot_cartons} cartons · "
+                        f"{_tot_units} units · "
+                        f"\\${_tot_prod:.2f} prod cost · "
+                        f"\\${_tot_svc:.2f} svc cost · "
+                        f"{_tot_nw:.2f} kg NW"
+                    )
+                else:
+                    _tot_line = (
+                        f"**📊 TOTAL** · "
+                        f"{_tot_cartons} cartons · "
+                        f"{_tot_units} units · "
+                        f"\\${_tot_prod:.2f} prod cost · "
+                        f"\\${_tot_svc:.2f} svc cost · "
+                        f"{_tot_nw:.2f} kg NW · "
+                        f"{_tot_gw:.2f} kg GW · "
+                        f"{_tot_cbm:.3f} CBM"
+                    )
+                st.markdown(_tot_line)
 
             # ── Buttons ────────────────────────────────────────────────────────
             _sb1, _sb2, _sb3, _ = st.columns([2, 2, 2, 4])

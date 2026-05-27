@@ -188,6 +188,58 @@ def get_production_summary(prod_id: int) -> list[dict]:
     return result
 
 
+def get_sku_supplier_cost_map() -> dict:
+    """
+    Return {sku: {supplier_name: {unit_mfg, unit_svc, unit_nw_kg}}}
+
+    Costs are per-unit contributions from items belonging to that supplier
+    (via part_id_1 / part_id_2 → items → suppliers).
+    unit_nw_kg = item.net_weight_grams / 1000  (kg per finished unit).
+
+    Used by the Production table's supplier-filtered view so each supplier
+    row shows only their share of Product Cost, Service Cost, and Net Weight,
+    while CBM and Gross Weight are set to zero (whole-carton attributes that
+    cannot be split per supplier).
+    """
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT pc.sku,
+               sup1.name  AS sup1_name,
+               i1.manufacturer_cost  AS i1_mfg,
+               i1.service_cost       AS i1_svc,
+               i1.net_weight_grams   AS i1_nw,
+               sup2.name  AS sup2_name,
+               i2.manufacturer_cost  AS i2_mfg,
+               i2.service_cost       AS i2_svc,
+               i2.net_weight_grams   AS i2_nw
+        FROM   products_catalog pc
+        LEFT JOIN items     i1   ON i1.part_id  = pc.part_id_1
+        LEFT JOIN suppliers sup1 ON sup1.id      = i1.supplier_id
+        LEFT JOIN items     i2   ON i2.part_id  = pc.part_id_2
+        LEFT JOIN suppliers sup2 ON sup2.id      = i2.supplier_id
+        WHERE  pc.sku IS NOT NULL AND pc.sku != ''
+    """).fetchall()
+    conn.close()
+
+    result: dict = {}
+    for row in rows:
+        sku = row["sku"]
+        if sku not in result:
+            result[sku] = {}
+        for sup_name, mfg, svc, nw in (
+            (row["sup1_name"], row["i1_mfg"], row["i1_svc"], row["i1_nw"]),
+            (row["sup2_name"], row["i2_mfg"], row["i2_svc"], row["i2_nw"]),
+        ):
+            if not sup_name:
+                continue
+            if sup_name not in result[sku]:
+                result[sku][sup_name] = {"unit_mfg": 0.0, "unit_svc": 0.0, "unit_nw_kg": 0.0}
+            result[sku][sup_name]["unit_mfg"]   += float(mfg or 0)
+            result[sku][sup_name]["unit_svc"]   += float(svc or 0)
+            result[sku][sup_name]["unit_nw_kg"] += float(nw  or 0) / 1000.0
+    return result
+
+
 def get_sku_supplier_map() -> dict:
     """
     Return {sku: [supplier_name, ...]} for all SKU-bearing products.
