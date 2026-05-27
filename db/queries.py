@@ -194,7 +194,7 @@ def get_weekly_summary(marketplace: str = None, weeks: int = 8) -> pd.DataFrame:
     return df
 
 
-def get_recommendations_history(marketplace: str = None, limit: int = 200) -> pd.DataFrame:
+def get_recommendations_history(marketplace: str = None) -> pd.DataFrame:
     """All saved placement recommendations, newest first."""
     conn = get_conn()
     if marketplace and marketplace != "all":
@@ -202,12 +202,11 @@ def get_recommendations_history(marketplace: str = None, limit: int = 200) -> pd
             SELECT * FROM recommendations
             WHERE marketplace = ?
             ORDER BY date_given DESC
-            LIMIT ?
         """
-        params = [marketplace, limit]
+        params = [marketplace]
     else:
-        sql = "SELECT * FROM recommendations ORDER BY date_given DESC LIMIT ?"
-        params = [limit]
+        sql = "SELECT * FROM recommendations ORDER BY date_given DESC"
+        params = []
 
     df = pd.read_sql_query(sql, conn, params=params)
     conn.close()
