@@ -2162,7 +2162,7 @@ with tab_ads:
     _placement_tab, = st.tabs(["📍 Placement"])
 
     with _placement_tab:
-        _recs_view, _alerts_view, _analysis_view = st.tabs(["📋 Recommendations", "🔔 Alerts", "📊 Analysis"])
+        _recs_view, _alerts_view, _analysis_view = st.tabs(["📋 Recommendations", "🔔 Alerts", "📤 Upload Reports"])
 
         with _recs_view:
             # ── RECOMMENDATIONS content ───────────────────────────────────────
