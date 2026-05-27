@@ -2190,6 +2190,20 @@ with tab_ads:
                 except (TypeError, ValueError):
                     return default
 
+            def _pf_str(key):
+                """Return _pf[key] as a clean string — empty string for None/NaN/'nan'."""
+                import math
+                val = _pf.get(key)
+                if val is None:
+                    return ""
+                try:
+                    if isinstance(val, float) and math.isnan(val):
+                        return ""
+                except Exception:
+                    pass
+                s = str(val).strip()
+                return "" if s.lower() in ("nan", "none", "") else s
+
             _expander_label = "📋 Edit & Log (pre-filled from selection)" if _pf else "➕ Log a Recommendation"
             with st.expander(_expander_label, expanded=bool(_pf)):
                 if _pf:
@@ -2203,10 +2217,10 @@ with tab_ads:
                     with rc1:
                         r_date  = st.date_input("Date Given", value=date.today())
                         r_asin  = st.text_input("ASIN (optional)",
-                                                value=str(_pf.get("asin") or ""),
+                                                value=_pf_str("asin"),
                                                 placeholder="B0XXXXXXXX")
                         r_camp  = st.text_input("Campaign Name",
-                                                value=str(_pf.get("campaign_name") or ""))
+                                                value=_pf_str("campaign_name"))
                         _place_idx = _place_opts.index(_pf["placement_type"]) \
                             if _pf.get("placement_type") in _place_opts else 0
                         r_place = st.selectbox("Placement", _place_opts, index=_place_idx)
@@ -2218,16 +2232,16 @@ with tab_ads:
                                                     value=_safe_int(_pf.get("current_multiplier")))
                         _action_idx = next(
                             (i for i, a in enumerate(_action_opts)
-                             if a.lower() == str(_pf.get("recommended_action") or "").lower()), 0)
+                             if a.lower() == _pf_str("recommended_action").lower()), 0)
                         r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx)
                         r_rec_mul = st.number_input("Recommended Multiplier %", min_value=0, max_value=900,
                                                     value=_safe_int(_pf.get("recommended_multiplier")))
 
                     _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
-                        if _pf.get("marketplace") in _mkt_opts else 0
+                        if _pf_str("marketplace") in _mkt_opts else 0
                     r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx, key="rec_mkt")
                     r_reasoning = st.text_area("Reasoning / Notes",
-                                               value=str(_pf.get("reasoning") or ""))
+                                               value=_pf_str("reasoning"))
                     r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14))
 
                     if st.form_submit_button("💾 Save Recommendation", type="primary"):
