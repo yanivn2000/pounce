@@ -2212,7 +2212,12 @@ with tab_ads:
                         st.session_state.pop("rec_prefill", None)
                         st.rerun()
 
-                with st.form("rec_form", clear_on_submit=True):
+                # Use the prefill rec id (or "new") as part of the form key so
+                # that selecting a different recommendation forces a completely
+                # fresh form — otherwise Streamlit's widget state cache keeps
+                # the first-render empty values and ignores updated value= args.
+                _form_key = f"rec_form_{int(_pf['id'])}" if _pf.get("id") else "rec_form_new"
+                with st.form(_form_key, clear_on_submit=True):
                     rc1, rc2 = st.columns(2)
                     with rc1:
                         r_date  = st.date_input("Date Given", value=date.today())
