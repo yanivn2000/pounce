@@ -148,6 +148,76 @@ def get_backfire_alerts(marketplace: str, **kwargs) -> list:
     return [a for a in get_performance_alerts(marketplace, **kwargs) if a["type"] == "regression"]
 
 
+def get_bad_roas_campaigns(marketplace: str, min_spend: float = 5.0) -> list[dict]:
+    """
+    Return placements that were below their breakeven ROAS in BOTH of the two
+    most recent snapshots — chronic underperformers with no dramatic change.
+
+    min_spend: ignore placements with negligible spend (avoids noise from
+    paused or zero-traffic placements).
+
+    Each dict:  campaign, placement, before_roas, after_roas, breakeven_roas,
+                before_date, after_date, spend, purchases, total_profit
+    Sorted by worst (lowest) after_roas first.
+    """
+    conn = get_conn()
+    combos = conn.execute("""
+        SELECT campaign_name, placement_type
+        FROM   campaign_performance
+        WHERE  marketplace = ?
+        GROUP  BY campaign_name, placement_type
+        HAVING COUNT(DISTINCT snapshot_date) >= 2
+    """, (marketplace,)).fetchall()
+
+    result = []
+    for row in combos:
+        camp      = row["campaign_name"]
+        placement = row["placement_type"]
+
+        snaps = conn.execute("""
+            SELECT snapshot_date, roas, spend, purchases, breakeven_roas, total_profit
+            FROM   campaign_performance
+            WHERE  campaign_name = ? AND marketplace = ? AND placement_type = ?
+            ORDER  BY snapshot_date DESC
+            LIMIT  2
+        """, (camp, marketplace, placement)).fetchall()
+
+        if len(snaps) < 2:
+            continue
+
+        after  = snaps[0]   # most recent
+        before = snaps[1]   # previous
+
+        after_roas  = after["roas"]  or 0.0
+        before_roas = before["roas"] or 0.0
+        spend       = after["spend"] or 0.0
+
+        # Skip low-activity placements or placements with no ROAS
+        if spend < min_spend or after_roas <= 0 or before_roas <= 0:
+            continue
+
+        # Use stored breakeven_roas; fall back to 1.0 (at least break even on spend)
+        after_be  = (after["breakeven_roas"]  or 0.0) or 1.0
+        before_be = (before["breakeven_roas"] or 0.0) or 1.0
+
+        if after_roas < after_be and before_roas < before_be:
+            result.append({
+                "campaign":      camp,
+                "placement":     placement,
+                "before_roas":   round(before_roas, 2),
+                "after_roas":    round(after_roas,  2),
+                "breakeven_roas": round(after_be,   2),
+                "before_date":   before["snapshot_date"],
+                "after_date":    after["snapshot_date"],
+                "spend":         round(spend, 2),
+                "purchases":     after["purchases"]    or 0,
+                "total_profit":  round(after["total_profit"] or 0, 2),
+            })
+
+    conn.close()
+    return sorted(result, key=lambda x: x["after_roas"])
+
+
 def reset_snapshots(marketplace: str = None):
     """
     Delete snapshot rows. If marketplace is given, deletes only that marketplace.

@@ -22,7 +22,7 @@ from products import (
     delete_product_db, migrate_csv_to_db, DB_COLUMNS,
 )
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
-from db.performance import save_performance_snapshot, get_performance_alerts, reset_snapshots, get_snapshot_count, get_snapshot_summary
+from db.performance import save_performance_snapshot, get_performance_alerts, get_bad_roas_campaigns, reset_snapshots, get_snapshot_count, get_snapshot_summary
 from db.settings import get_alert_thresholds, save_setting
 from db.inventory import (
     import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
@@ -2546,15 +2546,18 @@ with tab_ads:
                     reverse=True,
                 )
 
-                _ac1, _ac2, _ac3 = st.columns(3)
+                _bad_roas_alerts = get_bad_roas_campaigns(_alerts_market)
+
+                _ac1, _ac2, _ac3, _ac4 = st.columns(4)
                 _ac1.metric("📸 Snapshots stored",
                     _alerts_get_conn().execute(
                         "SELECT COUNT(DISTINCT snapshot_date) FROM campaign_performance WHERE marketplace = ?",
                         (_alerts_market,)
                     ).fetchone()[0]
                 )
-                _ac2.metric("🔴 Regressions", len(_neg_alerts))
-                _ac3.metric("🟢 Improvements", len(_pos_alerts))
+                _ac2.metric("🔴 Regressions",    len(_neg_alerts))
+                _ac3.metric("🟢 Improvements",   len(_pos_alerts))
+                _ac4.metric("🟠 Chronic Bad ROAS", len(_bad_roas_alerts))
 
                 st.divider()
 
@@ -2637,6 +2640,7 @@ with tab_ads:
                             f"🔴 {_bf['campaign']} — {_bf['placement']} "
                             f"({_bf['before_date']} → {_bf['after_date']})", expanded=True
                         ):
+                            st.code(_bf["campaign"], language=None)
                             _nc1, _nc2, _nc3, _nc4, _nc5 = st.columns(5)
                             _nc1.metric("ROAS Before", f"{_bf['before_roas']}x")
                             _nc2.metric("ROAS After",  f"{_bf['after_roas']}x",
@@ -2668,6 +2672,7 @@ with tab_ads:
                             f"🟢 {_imp['campaign']} — {_imp['placement']} "
                             f"({_imp['before_date']} → {_imp['after_date']})", expanded=False
                         ):
+                            st.code(_imp["campaign"], language=None)
                             _pc1, _pc2, _pc3, _pc4, _pc5 = st.columns(5)
                             _pc1.metric("ROAS Before", f"{_imp['before_roas']}x")
                             _pc2.metric("ROAS After",  f"{_imp['after_roas']}x",
@@ -2685,6 +2690,34 @@ with tab_ads:
                                 f"Snapshots: {_imp['before_date']} → {_imp['after_date']}"
                             )
                             st.caption("✅ Consider locking in or scaling this placement.")
+
+                # ── Chronic Bad ROAS block ─────────────────────────────────────
+                if _bad_roas_alerts:
+                    st.divider()
+                    st.warning(
+                        f"🟠 **{len(_bad_roas_alerts)} placement(s) with chronic bad ROAS** — "
+                        f"below breakeven in both the current and previous snapshot (no dramatic change, just consistently losing)."
+                    )
+                    for _br in _bad_roas_alerts:
+                        with st.expander(
+                            f"🟠 {_br['campaign']} — {_br['placement']} "
+                            f"(ROAS {_br['before_roas']}x → {_br['after_roas']}x, breakeven {_br['breakeven_roas']}x)",
+                            expanded=False
+                        ):
+                            st.code(_br["campaign"], language=None)
+                            _br1, _br2, _br3, _br4 = st.columns(4)
+                            _br1.metric("ROAS (prev)",    f"{_br['before_roas']}x")
+                            _br2.metric("ROAS (latest)",  f"{_br['after_roas']}x",
+                                        delta=f"{_br['after_roas'] - _br['before_roas']:+.2f}x",
+                                        delta_color="off")
+                            _br3.metric("Breakeven ROAS", f"{_br['breakeven_roas']}x")
+                            _br4.metric("Spend",          f"${_br['spend']:.2f}")
+                            st.caption(
+                                f"Purchases: {_br['purchases']} · "
+                                f"Profit: ${_br['total_profit']:.0f} · "
+                                f"Snapshots: {_br['before_date']} → {_br['after_date']}"
+                            )
+                            st.caption("💡 Review placement bid or consider pausing this placement.")
 
         with _analysis_view:
             # ── ANALYSIS content ──────────────────────────────────────────────
