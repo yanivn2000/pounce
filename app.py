@@ -2212,43 +2212,56 @@ with tab_ads:
                         st.session_state.pop("rec_prefill", None)
                         st.rerun()
 
-                # Use the prefill rec id (or "new") as part of the form key so
-                # that selecting a different recommendation forces a completely
-                # fresh form — otherwise Streamlit's widget state cache keeps
-                # the first-render empty values and ignores updated value= args.
-                _form_key = f"rec_form_{int(_pf['id'])}" if _pf.get("id") else "rec_form_new"
+                # _fk is a stable identifier for this prefill instance.
+                # Every widget gets an explicit key that includes _fk so that
+                # switching to a new record always creates brand-new widgets
+                # (Streamlit ignores value= if the widget key already exists in
+                # session state from a previous render with different data).
+                _fk = int(_pf["id"]) if _pf.get("id") else 0
+                _form_key = f"rec_form_{_fk}"
                 with st.form(_form_key, clear_on_submit=True):
                     rc1, rc2 = st.columns(2)
                     with rc1:
-                        r_date  = st.date_input("Date Given", value=date.today())
+                        r_date  = st.date_input("Date Given", value=date.today(),
+                                                key=f"rf_date_{_fk}")
                         r_asin  = st.text_input("ASIN (optional)",
                                                 value=_pf_str("asin"),
-                                                placeholder="B0XXXXXXXX")
+                                                placeholder="B0XXXXXXXX",
+                                                key=f"rf_asin_{_fk}")
                         r_camp  = st.text_input("Campaign Name",
-                                                value=_pf_str("campaign_name"))
+                                                value=_pf_str("campaign_name"),
+                                                key=f"rf_camp_{_fk}")
                         _place_idx = _place_opts.index(_pf["placement_type"]) \
                             if _pf.get("placement_type") in _place_opts else 0
-                        r_place = st.selectbox("Placement", _place_opts, index=_place_idx)
+                        r_place = st.selectbox("Placement", _place_opts, index=_place_idx,
+                                               key=f"rf_place_{_fk}")
                     with rc2:
                         _type_idx = _type_opts.index(_pf["campaign_type"]) \
                             if _pf.get("campaign_type") in _type_opts else 0
-                        r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx)
+                        r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx,
+                                                 key=f"rf_type_{_fk}")
                         r_cur_mul = st.number_input("Current Bid Adjustment", min_value=0, max_value=900,
                                                     value=_safe_int(_pf.get("current_multiplier")),
-                                                    disabled=True)
+                                                    disabled=True,
+                                                    key=f"rf_cur_{_fk}")
                         _action_idx = next(
                             (i for i, a in enumerate(_action_opts)
                              if a.lower() == _pf_str("recommended_action").lower()), 0)
-                        r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx)
+                        r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx,
+                                                 key=f"rf_action_{_fk}")
                         r_rec_mul = st.number_input("New Bid Adjustment", min_value=0, max_value=900,
-                                                    value=_safe_int(_pf.get("recommended_multiplier")))
+                                                    value=_safe_int(_pf.get("recommended_multiplier")),
+                                                    key=f"rf_rec_{_fk}")
 
                     _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
                         if _pf_str("marketplace") in _mkt_opts else 0
-                    r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx, key="rec_mkt")
+                    r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx,
+                                               key=f"rf_mkt_{_fk}")
                     r_reasoning = st.text_area("Reasoning / Notes",
-                                               value=_pf_str("reasoning"))
-                    r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14))
+                                               value=_pf_str("reasoning"),
+                                               key=f"rf_rsn_{_fk}")
+                    r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14),
+                                                key=f"rf_review_{_fk}")
 
                     if st.form_submit_button("📝 Log Change", type="primary"):
                         save_recommendation({
