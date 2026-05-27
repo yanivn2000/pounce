@@ -2511,6 +2511,7 @@ with tab_ads:
                                     pd.DataFrame(_rows),
                                     use_container_width=True,
                                     hide_index=True,
+                                    height=480,
                                     column_config={
                                         "Item":  st.column_config.TextColumn(width=200),
                                         "Value": st.column_config.TextColumn(width=150),
