@@ -2018,7 +2018,7 @@ with tab_sales:
             _grand_total = sum(_col_sums.values())
             _totals_row  = pd.DataFrame(
                 [{
-                    "Last Change": "📊 TOTAL",
+                    "Last Change": "",
                     "Total":       f"{_grand_total:,}",
                     **{col: f"{_col_sums[col]:,}" for col in date_cols},
                 }],
