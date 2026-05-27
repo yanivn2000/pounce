@@ -2174,8 +2174,8 @@ with tab_ads:
             )
             st.divider()
 
-            # ── Log a Recommendation (manual or pre-filled from table) ────────────────
-            _pf = st.session_state.get("rec_prefill", {})
+            # helpers used by the Edit & Log form (defined here so they are
+            # available both inside and outside the action bar)
             _place_opts  = ["Top of Search", "Rest of Search", "Product Pages"]
             _action_opts = ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"]
             _type_opts   = ["SP", "SB"]
@@ -2189,110 +2189,6 @@ with tab_ads:
                     return default if math.isnan(v) else int(v)
                 except (TypeError, ValueError):
                     return default
-
-            def _pf_str(key):
-                """Return _pf[key] as a clean string — empty string for None/NaN/'nan'."""
-                import math
-                val = _pf.get(key)
-                if val is None:
-                    return ""
-                try:
-                    if isinstance(val, float) and math.isnan(val):
-                        return ""
-                except Exception:
-                    pass
-                s = str(val).strip()
-                return "" if s.lower() in ("nan", "none", "") else s
-
-            _expander_label = "📋 Edit & Log (pre-filled from selection)" if _pf else "➕ Log a Recommendation"
-            with st.expander(_expander_label, expanded=bool(_pf)):
-                if _pf:
-                    st.info(f"Pre-filled from: **{_pf_str('campaign_name') or '—'}**")
-                    if st.button("✖ Clear pre-fill", key="clear_prefill"):
-                        st.session_state.pop("rec_prefill", None)
-                        st.rerun()
-
-                # _fk is a stable identifier for this prefill instance.
-                _fk = int(_pf["id"]) if _pf.get("id") else 0
-
-                # Guaranteed pre-fill: pop any stale widget state then assign
-                # values directly to session_state BEFORE the widgets render.
-                # Streamlit honours session_state values set before a widget is
-                # first drawn; it ignores value= if the key already exists.
-                # The _pf_injected flag prevents overwriting user edits on
-                # subsequent reruns of the same form.
-                _pf_injected = f"_pf_injected_{_fk}"
-                if _pf and _fk and _pf_injected not in st.session_state:
-                    for _wk in [f"rf_asin_{_fk}", f"rf_camp_{_fk}", f"rf_rsn_{_fk}"]:
-                        st.session_state.pop(_wk, None)
-                    st.session_state[f"rf_asin_{_fk}"] = _pf_str("asin")
-                    st.session_state[f"rf_camp_{_fk}"] = _pf_str("campaign_name")
-                    st.session_state[f"rf_rsn_{_fk}"]  = _pf_str("reasoning")
-                    st.session_state[_pf_injected]      = True
-
-                _form_key = f"rec_form_{_fk}"
-                with st.form(_form_key, clear_on_submit=True):
-                    rc1, rc2 = st.columns(2)
-                    with rc1:
-                        r_date  = st.date_input("Date Given", value=date.today(),
-                                                key=f"rf_date_{_fk}")
-                        r_asin  = st.text_input("ASIN (optional)",
-                                                placeholder="B0XXXXXXXX",
-                                                key=f"rf_asin_{_fk}")
-                        r_camp  = st.text_input("Campaign Name",
-                                                key=f"rf_camp_{_fk}")
-                        _place_idx = _place_opts.index(_pf["placement_type"]) \
-                            if _pf.get("placement_type") in _place_opts else 0
-                        r_place = st.selectbox("Placement", _place_opts, index=_place_idx,
-                                               key=f"rf_place_{_fk}")
-                    with rc2:
-                        _type_idx = _type_opts.index(_pf["campaign_type"]) \
-                            if _pf.get("campaign_type") in _type_opts else 0
-                        r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx,
-                                                 key=f"rf_type_{_fk}")
-                        r_cur_mul = st.number_input("Current Bid Adjustment", min_value=0, max_value=900,
-                                                    value=_safe_int(_pf.get("current_multiplier")),
-                                                    disabled=True,
-                                                    key=f"rf_cur_{_fk}")
-                        _action_idx = next(
-                            (i for i, a in enumerate(_action_opts)
-                             if a.lower() == _pf_str("recommended_action").lower()), 0)
-                        r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx,
-                                                 key=f"rf_action_{_fk}")
-                        r_rec_mul = st.number_input("New Bid Adjustment", min_value=0, max_value=900,
-                                                    value=_safe_int(_pf.get("recommended_multiplier")),
-                                                    key=f"rf_rec_{_fk}")
-
-                    _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
-                        if _pf_str("marketplace") in _mkt_opts else 0
-                    r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx,
-                                               key=f"rf_mkt_{_fk}")
-                    r_reasoning = st.text_area("Reasoning / Notes",
-                                               key=f"rf_rsn_{_fk}")
-                    r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14),
-                                                key=f"rf_review_{_fk}")
-
-                    if st.form_submit_button("📝 Log Change", type="primary"):
-                        save_recommendation({
-                            "date_given":             str(r_date),
-                            "asin":                   r_asin.strip().upper() or None,
-                            "marketplace":            r_mkt,
-                            "campaign_name":          r_camp,
-                            "placement_type":         r_place,
-                            "campaign_type":          r_type,
-                            "current_multiplier":     r_cur_mul,
-                            "recommended_action":     r_action,
-                            "recommended_multiplier": r_rec_mul,
-                            "reasoning":              r_reasoning,
-                            "window_days":            14,
-                            "review_date":            str(r_review),
-                            "source":                 "manual",
-                        })
-                        st.session_state.pop("rec_prefill", None)
-                        st.success("✅ Recommendation saved.")
-                        st.rerun()
-
-            st.divider()
 
             # ── Filter + list ─────────────────────────────────────────────────────────
             rhf1, rhf2, rhf3, rhf4, rhf5 = st.columns(5)
@@ -2381,7 +2277,7 @@ with tab_ads:
 
                 st.markdown(
                     f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
-                    "💡 Select a row to <strong>Clone &amp; Edit</strong> or <strong>Record Outcome</strong>.</p>",
+                    "💡 Select a row to <strong>Edit &amp; Log</strong> or <strong>Record Outcome</strong>.</p>",
                     unsafe_allow_html=True,
                 )
                 _sel = st.dataframe(
@@ -2430,6 +2326,105 @@ with tab_ads:
                         unsafe_allow_html=True,
                     )
 
+                    # ── Edit & Log form (pre-filled from selection) ───────────────
+                    _pf = _sel_data   # same as rec_prefill at this point
+
+                    def _pf_str(key):
+                        """Return _pf[key] as a clean string — empty for None/NaN/'nan'."""
+                        import math
+                        val = _pf.get(key)
+                        if val is None:
+                            return ""
+                        try:
+                            if isinstance(val, float) and math.isnan(val):
+                                return ""
+                        except Exception:
+                            pass
+                        s = str(val).strip()
+                        return "" if s.lower() in ("nan", "none", "") else s
+
+                    # _fk is a stable identifier for this prefill instance.
+                    _fk = int(_pf["id"]) if _pf.get("id") else 0
+
+                    # Guaranteed pre-fill: pop stale widget state then assign
+                    # directly to session_state BEFORE widgets render.
+                    _pf_injected = f"_pf_injected_{_fk}"
+                    if _pf and _fk and _pf_injected not in st.session_state:
+                        for _wk in [f"rf_asin_{_fk}", f"rf_camp_{_fk}", f"rf_rsn_{_fk}"]:
+                            st.session_state.pop(_wk, None)
+                        st.session_state[f"rf_asin_{_fk}"] = _pf_str("asin")
+                        st.session_state[f"rf_camp_{_fk}"] = _pf_str("campaign_name")
+                        st.session_state[f"rf_rsn_{_fk}"]  = _pf_str("reasoning")
+                        st.session_state[_pf_injected]      = True
+
+                    with st.expander("📋 Edit & Log (pre-filled from selection)", expanded=True):
+                        if st.button("✖ Clear pre-fill", key="clear_prefill"):
+                            st.session_state.pop("rec_prefill", None)
+                            st.rerun()
+
+                        _form_key = f"rec_form_{_fk}"
+                        with st.form(_form_key, clear_on_submit=True):
+                            rc1, rc2 = st.columns(2)
+                            with rc1:
+                                r_date  = st.date_input("Date Given", value=date.today(),
+                                                        key=f"rf_date_{_fk}")
+                                r_asin  = st.text_input("ASIN (optional)",
+                                                        placeholder="B0XXXXXXXX",
+                                                        key=f"rf_asin_{_fk}")
+                                r_camp  = st.text_input("Campaign Name",
+                                                        key=f"rf_camp_{_fk}")
+                                _place_idx = _place_opts.index(_pf["placement_type"]) \
+                                    if _pf.get("placement_type") in _place_opts else 0
+                                r_place = st.selectbox("Placement", _place_opts, index=_place_idx,
+                                                       key=f"rf_place_{_fk}")
+                            with rc2:
+                                _type_idx = _type_opts.index(_pf["campaign_type"]) \
+                                    if _pf.get("campaign_type") in _type_opts else 0
+                                r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx,
+                                                         key=f"rf_type_{_fk}")
+                                r_cur_mul = st.number_input("Current Bid Adjustment", min_value=0, max_value=900,
+                                                            value=_safe_int(_pf.get("current_multiplier")),
+                                                            disabled=True,
+                                                            key=f"rf_cur_{_fk}")
+                                _action_idx = next(
+                                    (i for i, a in enumerate(_action_opts)
+                                     if a.lower() == _pf_str("recommended_action").lower()), 0)
+                                r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx,
+                                                         key=f"rf_action_{_fk}")
+                                r_rec_mul = st.number_input("New Bid Adjustment", min_value=0, max_value=900,
+                                                            value=_safe_int(_pf.get("recommended_multiplier")),
+                                                            key=f"rf_rec_{_fk}")
+
+                            _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
+                                if _pf_str("marketplace") in _mkt_opts else 0
+                            r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx,
+                                                       key=f"rf_mkt_{_fk}")
+                            r_reasoning = st.text_area("Reasoning / Notes",
+                                                       key=f"rf_rsn_{_fk}")
+                            r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14),
+                                                        key=f"rf_review_{_fk}")
+
+                            if st.form_submit_button("📝 Log Change", type="primary"):
+                                save_recommendation({
+                                    "date_given":             str(r_date),
+                                    "asin":                   r_asin.strip().upper() or None,
+                                    "marketplace":            r_mkt,
+                                    "campaign_name":          r_camp,
+                                    "placement_type":         r_place,
+                                    "campaign_type":          r_type,
+                                    "current_multiplier":     r_cur_mul,
+                                    "recommended_action":     r_action,
+                                    "recommended_multiplier": r_rec_mul,
+                                    "reasoning":              r_reasoning,
+                                    "window_days":            14,
+                                    "review_date":            str(r_review),
+                                    "source":                 "manual",
+                                })
+                                st.session_state.pop("rec_prefill", None)
+                                st.success("✅ Recommendation saved.")
+                                st.rerun()
+
+                    # ── Record Outcome ────────────────────────────────────────────
                     st.markdown("**✅ Record Outcome**")
                     with st.form("outcome_form"):
                         _oc_text = st.text_input(
