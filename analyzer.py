@@ -424,14 +424,12 @@ def alert_message(sub: pd.DataFrame, sc: int,
 # NEW PLACEMENT BID ALGORITHM
 # ══════════════════════════════════════════════════════════════════════════════
 
-_MIN_IMPRESSIONS_THRESHOLD = 500
+_MIN_PURCHASES_DATA        = 4   # fewer than this → no_data (keep current)
 _MIN_PURCHASES_CONFIDENCE  = 30
 
 
 def _placement_confidence(purchases: int, impressions: int) -> float:
-    """0.0–1.0 confidence. Returns 0.0 if impressions below threshold."""
-    if impressions < _MIN_IMPRESSIONS_THRESHOLD:
-        return 0.0
+    """0.0–1.0 confidence based purely on purchase count."""
     return min(1.0, purchases / _MIN_PURCHASES_CONFIDENCE)
 
 
@@ -487,7 +485,7 @@ def _isolation_mode(placements: list, profitable: list, losing: list,
         else:  # no_data
             new_pct = int(round(p['current_adj'] * 100))
             action  = "Keep"
-            reason  = f"⚠️ Insufficient impressions (<{_MIN_IMPRESSIONS_THRESHOLD}) — keep current."
+            reason  = "Insufficient purchases (<4) - keep current."
 
         result_placements.append({**p,
             "recommended_action":     action,
@@ -517,11 +515,11 @@ def _optimization_mode(placements: list, profitable: list,
         processed = [{**p,
             "recommended_action":     "Keep",
             "recommended_multiplier": int(round(p.get("current_adj", 0) * 100)),
-            "reasoning":              "⚠️ Insufficient data — keep current multiplier.",
+            "reasoning":              "Insufficient purchases (<4) - keep current.",
         } for p in placements]
         return {"mode": "no_data", "base_bid_change_pct": 0,
                 "placements": processed, "score": 0,
-                "reasoning": "⚫ No placements have enough data yet (need 500+ impressions)."}
+                "reasoning": "⚫ No placements have enough data yet (need 4+ purchases)."}
 
     total_gap = sum(p['roas_gap'] for p in profitable)
     result_placements = []
@@ -545,7 +543,7 @@ def _optimization_mode(placements: list, profitable: list,
         else:
             new_pct = int(round(p['current_adj'] * 100))
             action  = "Keep"
-            reason  = "⚠️ Insufficient data — keep current multiplier."
+            reason  = "Insufficient purchases (<4) - keep current."
 
         result_placements.append({**p,
             "recommended_action":     action,
@@ -609,7 +607,7 @@ def placement_bid_algorithm(sub: pd.DataFrame, breakeven_roas: float,
         confidence = _placement_confidence(purchases, impressions)
         roas_gap   = round(roas - breakeven_roas, 4)
 
-        if impressions < _MIN_IMPRESSIONS_THRESHOLD:
+        if purchases < _MIN_PURCHASES_DATA:
             status = 'no_data'
         elif roas_gap > 0:
             status = 'profitable'
