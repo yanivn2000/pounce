@@ -263,6 +263,7 @@ def init_db():
     _migrate_items_part_id(conn)
     _migrate_products_part_ids(conn)
     _migrate_productions(conn)
+    _migrate_shipments(conn)
     conn.close()
 
 
@@ -826,6 +827,30 @@ def _migrate_products_upc(conn: sqlite3.Connection):
         if "upc" not in cols:
             conn.execute("ALTER TABLE products_catalog ADD COLUMN upc TEXT")
             conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_shipments(conn: sqlite3.Connection):
+    """Ensure shipments and shipment_lines tables exist."""
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS shipments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL UNIQUE,
+                destination TEXT,
+                status      TEXT NOT NULL DEFAULT 'draft',
+                notes       TEXT,
+                created_at  TEXT DEFAULT (datetime('now')),
+                updated_at  TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS shipment_lines (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                shipment_id INTEGER NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,
+                sku         TEXT NOT NULL,
+                num_cartons INTEGER NOT NULL DEFAULT 0
+            );
+        """)
     except Exception:
         pass
 
