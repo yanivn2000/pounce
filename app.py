@@ -1481,13 +1481,16 @@ with _inv_prod_tab:
                 info = sku_info.get(sku or "", {})
                 cu    = info.get("carton_units", 0) or 0
                 units = cu * num_cartons
+                prod_cost = round(info.get("unit_mfg", 0.0) * units, 2)
+                svc_cost  = round(info.get("unit_svc", 0.0) * units, 2)
                 return {
                     "SKU":               sku or "",
                     "# Cartons":         num_cartons,
                     "Product":           info.get("name", "") if sku else "",
                     "# Units":           units,
-                    "Product Cost ($)":  round(info.get("unit_mfg", 0.0) * units, 2),
-                    "Service Cost ($)":  round(info.get("unit_svc", 0.0) * units, 2),
+                    "Product Cost ($)":  prod_cost,
+                    "Service Cost ($)":  svc_cost,
+                    "Total Cost ($)":    round(prod_cost + svc_cost, 2),
                     "Net Weight (kg)":   round(info.get("nw_kg", 0.0) * num_cartons, 2),
                     "Gross Weight (kg)": round(info.get("gw_kg", 0.0) * num_cartons, 2),
                     "CBM":               round(info.get("cbm",  0.0) * num_cartons, 3),
@@ -1571,6 +1574,7 @@ with _inv_prod_tab:
                 "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
                 "Product Cost ($)": pd.Series(dtype=float),
                 "Service Cost ($)": pd.Series(dtype=float),
+                "Total Cost ($)": pd.Series(dtype=float),
                 "Net Weight (kg)": pd.Series(dtype=float),
                 "Gross Weight (kg)": pd.Series(dtype=float),
                 "CBM": pd.Series(dtype=float),
@@ -1580,7 +1584,7 @@ with _inv_prod_tab:
             full_df = pd.DataFrame(_full_rows) if _full_rows else pd.DataFrame(_SCHEMA)
 
             _COMPUTED = ["Product", "# Units", "Product Cost ($)", "Service Cost ($)",
-                         "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
+                         "Total Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
             # ── Supplier filter ────────────────────────────────────────────────
             if _prod_sups:
@@ -1610,6 +1614,7 @@ with _inv_prod_tab:
                         "# Units":           st.column_config.NumberColumn("# Units", width=85),
                         "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
                         "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
+                        "Total Cost ($)":    st.column_config.NumberColumn("Total Cost ($)", format="$%.2f", width=120),
                         "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
                         "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
                         "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
@@ -1628,6 +1633,7 @@ with _inv_prod_tab:
                     "# Units": pd.Series(dtype=int),
                     "Product Cost ($)": pd.Series(dtype=float),
                     "Service Cost ($)": pd.Series(dtype=float),
+                    "Total Cost ($)": pd.Series(dtype=float),
                     "Net Weight (kg)": pd.Series(dtype=float),
                     "Gross Weight (kg)": pd.Series(dtype=float),
                     "CBM": pd.Series(dtype=float),
@@ -1644,13 +1650,16 @@ with _inv_prod_tab:
                     _u_mfg  = _sc.get("unit_mfg",   0.0)
                     _u_svc  = _sc.get("unit_svc",   0.0)
                     _u_nw   = _sc.get("unit_nw_kg", 0.0)
+                    _flt_pc = round(_u_mfg * _nu, 2)
+                    _flt_sc = round(_u_svc * _nu, 2)
                     _flt_rows.append({
                         "SKU":                _sku,
                         "Product":            _row["Product"],
                         "# Cartons":          _nc,
                         "# Units":            _nu,
-                        "Product Cost ($)":   round(_u_mfg * _nu, 2),
-                        "Service Cost ($)":   round(_u_svc * _nu, 2),
+                        "Product Cost ($)":   _flt_pc,
+                        "Service Cost ($)":   _flt_sc,
+                        "Total Cost ($)":     round(_flt_pc + _flt_sc, 2),
                         "Net Weight (kg)":    round(_u_nw  * _nu, 2),
                         "Gross Weight (kg)":  0.0,
                         "CBM":                0.0,
@@ -1665,6 +1674,7 @@ with _inv_prod_tab:
                     column_config={
                         "Product Cost ($)":  st.column_config.NumberColumn(format="$%.2f"),
                         "Service Cost ($)":  st.column_config.NumberColumn(format="$%.2f"),
+                        "Total Cost ($)":    st.column_config.NumberColumn(format="$%.2f"),
                         "Net Weight (kg)":   st.column_config.NumberColumn(format="%.2f kg"),
                         "Gross Weight (kg)": st.column_config.NumberColumn(format="%.2f kg"),
                         "CBM":               st.column_config.NumberColumn(format="%.3f"),
@@ -1726,6 +1736,7 @@ with _inv_prod_tab:
                         f"{_tot_units} units · "
                         f"\\${_tot_prod:.2f} prod cost · "
                         f"\\${_tot_svc:.2f} svc cost · "
+                        f"\\${_tot_prod + _tot_svc:.2f} total cost · "
                         f"{_tot_nw:.2f} kg NW"
                     )
                 else:
@@ -1735,6 +1746,7 @@ with _inv_prod_tab:
                         f"{_tot_units} units · "
                         f"\\${_tot_prod:.2f} prod cost · "
                         f"\\${_tot_svc:.2f} svc cost · "
+                        f"\\${_tot_prod + _tot_svc:.2f} total cost · "
                         f"{_tot_nw:.2f} kg NW · "
                         f"{_tot_gw:.2f} kg GW · "
                         f"{_tot_cbm:.3f} CBM"
