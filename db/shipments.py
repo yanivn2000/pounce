@@ -242,6 +242,111 @@ def get_available_per_sku() -> dict[str, int]:
     }
 
 
+def get_packing_list(shipment_id: int) -> list[dict]:
+    """
+    Return packing-list data for a shipment.
+    Each dict = one shipment line (SKU) with a nested 'items' list.
+
+    Top-level keys:
+        sku, product, num_cartons, carton_units, total_units,
+        nw_kg, gw_kg, cbm,          ← per carton
+        total_nw_kg, total_gw_kg, total_cbm,
+        unit_mfg, unit_svc,          ← per unit (sum of items)
+        total_mfg, total_svc,
+        items: list[dict]
+
+    Item keys:
+        Item, Part ID, Type, Qty/Unit, Qty Total,
+        HS Code (NA), HS Code (UK),
+        Mfg $/unit, Svc $/unit, Mfg $ Total, Svc $ Total,
+        Net Weight (g), Currency
+    """
+    conn = get_conn()
+
+    lines = conn.execute("""
+        SELECT sl.sku, sl.num_cartons,
+               pc.id         AS product_id,
+               pc.name       AS product_name,
+               pc.carton_units,
+               pc.carton_nw_kg,
+               pc.carton_gw_kg,
+               pc.carton_cbm
+        FROM shipment_lines sl
+        LEFT JOIN products_catalog pc ON pc.sku = sl.sku
+        WHERE sl.shipment_id = ?
+        ORDER BY sl.id
+    """, (shipment_id,)).fetchall()
+
+    result = []
+    for ln in lines:
+        num_cartons  = int(ln["num_cartons"]  or 0)
+        carton_units = int(ln["carton_units"] or 0)
+        total_units  = carton_units * num_cartons
+        nw_kg  = float(ln["carton_nw_kg"] or 0)
+        gw_kg  = float(ln["carton_gw_kg"] or 0)
+        cbm    = float(ln["carton_cbm"]   or 0)
+
+        # ── Items linked via product_components ────────────────────────────────
+        items = []
+        if ln["product_id"]:
+            item_rows = conn.execute("""
+                SELECT i.name, i.part_id, i.item_type, i.currency,
+                       i.manufacturer_cost, i.service_cost,
+                       i.net_weight_grams,
+                       i.hst_code_na, i.hst_code_uk,
+                       pcomp.quantity
+                FROM product_components pcomp
+                JOIN items i ON i.id = pcomp.item_id
+                WHERE pcomp.product_id = ?
+                ORDER BY i.name
+            """, (ln["product_id"],)).fetchall()
+
+            for it in item_rows:
+                qty_pu   = int(it["quantity"] or 1)
+                mfg_pu   = round(float(it["manufacturer_cost"] or 0) * qty_pu, 4)
+                svc_pu   = round(float(it["service_cost"]      or 0) * qty_pu, 4)
+                items.append({
+                    "Item":           it["name"]         or "",
+                    "Part ID":        it["part_id"]      or "",
+                    "Type":           it["item_type"]    or "",
+                    "Qty/Unit":       qty_pu,
+                    "Qty Total":      qty_pu * total_units,
+                    "HS Code (NA)":   it["hst_code_na"]  or "",
+                    "HS Code (UK)":   it["hst_code_uk"]  or "",
+                    "Mfg $/unit":     mfg_pu,
+                    "Svc $/unit":     svc_pu,
+                    "Mfg $ Total":    round(mfg_pu * total_units, 2),
+                    "Svc $ Total":    round(svc_pu * total_units, 2),
+                    "Net Wt (g)":     float(it["net_weight_grams"] or 0),
+                    "Currency":       it["currency"] or "USD",
+                })
+
+        unit_mfg = round(sum(it["Mfg $/unit"] for it in items), 4)
+        unit_svc = round(sum(it["Svc $/unit"] for it in items), 4)
+
+        result.append({
+            "sku":          ln["sku"],
+            "product":      ln["product_name"] or ln["sku"] or "",
+            "num_cartons":  num_cartons,
+            "carton_units": carton_units,
+            "total_units":  total_units,
+            "nw_kg":        nw_kg,
+            "gw_kg":        gw_kg,
+            "cbm":          cbm,
+            "total_nw_kg":  round(nw_kg * num_cartons, 2),
+            "total_gw_kg":  round(gw_kg * num_cartons, 2),
+            "total_cbm":    round(cbm   * num_cartons, 3),
+            "unit_mfg":     unit_mfg,
+            "unit_svc":     unit_svc,
+            "total_mfg":    round(unit_mfg * total_units, 2),
+            "total_svc":    round(unit_svc * total_units, 2),
+            "items":        items,
+        })
+
+    conn.close()
+    return result
+
+
 def get_available_per_sku_excluding(shipment_id: int) -> dict[str, int]:
     """
     Like get_available_per_sku() but excludes the given shipment's own lines

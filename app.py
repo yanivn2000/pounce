@@ -62,7 +62,7 @@ from db.shipments import (
     get_shipments, get_shipment, save_shipment, delete_shipment, mark_shipped,
     get_shipment_lines, save_shipment_lines,
     get_stock_to_be_shipped, get_next_shipment_name,
-    get_available_per_sku_excluding,
+    get_available_per_sku_excluding, get_packing_list,
 )
 
 init_db()
@@ -1946,7 +1946,10 @@ with _inv_ship_tab:
         if _locked:
             st.success("✅ This shipment has been marked as **Shipped** and is locked.")
 
-        # ── Lines table ───────────────────────────────────────────────────────
+        # ── Sub-tabs: Edit vs Packing List ────────────────────────────────────
+        _ship_edit_tab, _ship_pl_tab = st.tabs(["✏️ Edit Lines", "📋 Packing List"])
+
+        # ── Shared data for both tabs ─────────────────────────────────────────
         if not all_skus:
             st.info("No SKUs in the catalog yet.")
             return
@@ -1955,260 +1958,402 @@ with _inv_ship_tab:
         # Available per SKU excluding this shipment's own lines
         _avail_map = get_available_per_sku_excluding(_sid)
 
-        def _make_ship_row(sku, num_cartons):
-            info  = sku_info.get(sku or "", {})
-            cu    = info.get("carton_units", 0) or 0
-            units = cu * num_cartons
-            # _avail_map already excludes this shipment's own lines →
-            # it represents the maximum total cartons this shipment may use for the SKU
-            avail = _avail_map.get(sku, 0) if sku else 0
-            return {
-                "SKU":               sku or "",
-                "# Cartons":         num_cartons,
-                "Available":         avail,
-                "Product":           info.get("name", "") if sku else "",
-                "# Units":           units,
-                "Product Cost ($)":  round(info.get("unit_mfg", 0.0) * units, 2),
-                "Service Cost ($)":  round(info.get("unit_svc", 0.0) * units, 2),
-                "Net Weight (kg)":   round(info.get("nw_kg", 0.0) * num_cartons, 2),
-                "Gross Weight (kg)": round(info.get("gw_kg", 0.0) * num_cartons, 2),
-                "CBM":               round(info.get("cbm",  0.0) * num_cartons, 3),
-            }
-
-        _sstate_key = f"ship_lines_state_{_ctx}"
-        _sek        = f"ship_lines_ed_{_ctx}"
-
-        def _safe_int_s(v):
-            try:
-                return 0 if v is None or (isinstance(v, float) and pd.isna(v)) else int(v)
-            except (TypeError, ValueError):
-                return 0
-
-        if _sstate_key not in st.session_state:
-            _db_lines = get_shipment_lines(_sid)
-            st.session_state[_sstate_key] = [
-                {"SKU": ln["sku"] or "", "# Cartons": int(ln["num_cartons"] or 0)}
-                for ln in _db_lines
-            ]
-
-        _sdiffs    = st.session_state.get(_sek, {})
-        _sedit_map = {int(k): v for k, v in (_sdiffs.get("edited_rows") or {}).items()}
-        _sdel_base = set(_sdiffs.get("deleted_rows") or [])
-        _sadded    = _sdiffs.get("added_rows") or []
-
-        if _sdel_base or _sadded:
-            _ss = {i: dict(r) for i, r in enumerate(st.session_state[_sstate_key])
-                   if i not in _sdel_base}
-            for _ri, _chg in _sedit_map.items():
-                if _ri in _ss:
-                    _ss[_ri].update({k: v for k, v in _chg.items()
-                                     if k in ("SKU", "# Cartons")})
-            _smerged = [_ss[k] for k in sorted(_ss)]
-            for _a in _sadded:
-                _smerged.append({
-                    "SKU":       str(_a.get("SKU") or "").strip(),
-                    "# Cartons": _safe_int_s(_a.get("# Cartons")),
-                })
-            st.session_state[_sstate_key] = _smerged
-            st.session_state.pop(_sek, None)
-            _sedit_map = {}
-
-        _scur_list = st.session_state[_sstate_key]
-        _SSCHEMA = {
-            "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
-            "Available": pd.Series(dtype=int),
-            "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
-            "Product Cost ($)": pd.Series(dtype=float),
-            "Service Cost ($)": pd.Series(dtype=float),
-            "Net Weight (kg)": pd.Series(dtype=float),
-            "Gross Weight (kg)": pd.Series(dtype=float),
-            "CBM": pd.Series(dtype=float),
-        }
-        _sfull_rows = [_make_ship_row(r["SKU"], _safe_int_s(r.get("# Cartons")))
-                       for r in _scur_list]
-        _sfull_df = pd.DataFrame(_sfull_rows) if _sfull_rows else pd.DataFrame(_SSCHEMA)
-
-        _SCOMPUTED = ["Available", "Product", "# Units", "Product Cost ($)",
-                      "Service Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
-
-        # ── Validation — includes pending edits not yet committed to session state ─
-        # Build effective rows: base state overridden by in-progress editor changes
-        _eff_for_val = []
-        for _vi, _vr in enumerate(_scur_list):
-            _vm = dict(_vr)
-            if _vi in _sedit_map:
-                _vm.update({k: v for k, v in _sedit_map[_vi].items()
-                             if k in ("SKU", "# Cartons")})
-            _eff_for_val.append(_vm)
-        for _va in _sadded:
-            _eff_for_val.append({
-                "SKU":       str(_va.get("SKU") or "").strip(),
-                "# Cartons": _safe_int_s(_va.get("# Cartons")),
-            })
-
-        _val_errors = []
-        for _vrow in _eff_for_val:
-            _vsku = str(_vrow.get("SKU") or "").strip()
-            _vnc  = _safe_int_s(_vrow.get("# Cartons"))
-            if not _vsku or _vnc <= 0:
-                continue
-            _vmax = _avail_map.get(_vsku, 0)
-            if _vnc > _vmax:
-                _val_errors.append(
-                    f"🚫 **{_vsku}**: {_vnc} cartons requested — only **{_vmax}** available"
+        # ── PACKING LIST tab ──────────────────────────────────────────────────
+        with _ship_pl_tab:
+            _pl_data = get_packing_list(_sid)
+            if not _pl_data:
+                st.info("Add lines to the shipment first.")
+            else:
+                _ship_title = sel_ship.get("name", "")
+                _ship_dest_pl = sel_ship.get("destination") or ""
+                st.markdown(
+                    f"### 📋 Packing List — {_ship_title}"
+                    + (f" · {_ship_dest_pl}" if _ship_dest_pl else "")
                 )
 
-        _has_errors = bool(_val_errors)
-        for _ve in _val_errors:
-            st.error(_ve)
+                # ── Grand totals bar ──────────────────────────────────────────
+                _pl_cartons = sum(p["num_cartons"] for p in _pl_data)
+                _pl_units   = sum(p["total_units"] for p in _pl_data)
+                _pl_nw      = sum(p["total_nw_kg"] for p in _pl_data)
+                _pl_gw      = sum(p["total_gw_kg"] for p in _pl_data)
+                _pl_cbm     = sum(p["total_cbm"]   for p in _pl_data)
+                _pl_mfg     = sum(p["total_mfg"]   for p in _pl_data)
+                _pl_svc     = sum(p["total_svc"]   for p in _pl_data)
 
-        if _locked:
-            st.dataframe(
-                _sfull_df,
-                use_container_width=True,
-                hide_index=True,
-                height=400,
-                column_config={
-                    "SKU":               st.column_config.TextColumn("SKU", width=120),
-                    "# Cartons":         st.column_config.NumberColumn("# Cartons", width=110),
-                    "Available":         st.column_config.NumberColumn("Available Stock", width=120),
-                    "Product":           st.column_config.TextColumn("Product", width=200),
-                    "# Units":           st.column_config.NumberColumn("# Units", width=85),
-                    "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
-                    "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
-                    "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
-                    "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
-                    "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
-                },
-            )
-        else:
-            st.caption("Click + (bottom-left) to add a row · select row and press Delete to remove")
-            st.data_editor(
-                _sfull_df,
-                use_container_width=True,
-                num_rows="dynamic",
-                key=_sek,
-                disabled=_SCOMPUTED,
-                height=400,
-                column_config={
-                    "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=120),
-                    "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=110),
-                    "Available":         st.column_config.NumberColumn("Available Stock", width=120),
-                    "Product":           st.column_config.TextColumn("Product", width=200),
-                    "# Units":           st.column_config.NumberColumn("# Units", width=85),
-                    "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
-                    "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
-                    "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
-                    "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
-                    "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
-                },
-            )
+                st.markdown(
+                    f"**{_pl_cartons} cartons · {_pl_units} units · "
+                    f"{_pl_nw:.2f} kg NW · {_pl_gw:.2f} kg GW · {_pl_cbm:.3f} CBM · "
+                    f"${_pl_mfg:.2f} mfg · ${_pl_svc:.2f} svc**"
+                )
+                st.divider()
 
-        def _seff_rows():
-            _out = []
-            for _i, _r in enumerate(st.session_state[_sstate_key]):
-                _m = dict(_r)
-                if _i in _sedit_map:
-                    _m.update({k: v for k, v in _sedit_map[_i].items()
-                               if k in ("SKU", "# Cartons")})
-                _out.append(_m)
-            return _out
+                # ── One expander per SKU ──────────────────────────────────────
+                for _pl_row in _pl_data:
+                    _pl_sku  = _pl_row["sku"]
+                    _pl_prod = _pl_row["product"]
+                    _pl_label = (
+                        f"**{_pl_sku}** — {_pl_prod[:60]}  ·  "
+                        f"{_pl_row['num_cartons']} cartons / {_pl_row['total_units']} units  ·  "
+                        f"{_pl_row['total_nw_kg']:.2f} kg NW · {_pl_row['total_gw_kg']:.2f} kg GW · "
+                        f"{_pl_row['total_cbm']:.3f} CBM  ·  "
+                        f"${_pl_row['total_mfg']:.2f} mfg · ${_pl_row['total_svc']:.2f} svc"
+                    )
+                    with st.expander(_pl_label, expanded=True):
+                        # Product summary row
+                        _psum = pd.DataFrame([{
+                            "Carton Units":    _pl_row["carton_units"],
+                            "NW/Carton (kg)":  _pl_row["nw_kg"],
+                            "GW/Carton (kg)":  _pl_row["gw_kg"],
+                            "CBM/Carton":      _pl_row["cbm"],
+                            "Mfg $/unit":      _pl_row["unit_mfg"],
+                            "Svc $/unit":      _pl_row["unit_svc"],
+                            "Total Mfg $":     _pl_row["total_mfg"],
+                            "Total Svc $":     _pl_row["total_svc"],
+                        }])
+                        st.dataframe(
+                            _psum,
+                            hide_index=True,
+                            use_container_width=True,
+                            column_config={
+                                "Carton Units":   st.column_config.NumberColumn(format="%d",    width=110),
+                                "NW/Carton (kg)": st.column_config.NumberColumn(format="%.2f kg", width=120),
+                                "GW/Carton (kg)": st.column_config.NumberColumn(format="%.2f kg", width=120),
+                                "CBM/Carton":     st.column_config.NumberColumn(format="%.4f",  width=105),
+                                "Mfg $/unit":     st.column_config.NumberColumn(format="$%.4f", width=100),
+                                "Svc $/unit":     st.column_config.NumberColumn(format="$%.4f", width=100),
+                                "Total Mfg $":    st.column_config.NumberColumn(format="$%.2f", width=105),
+                                "Total Svc $":    st.column_config.NumberColumn(format="$%.2f", width=105),
+                            },
+                        )
 
-        # Totals
-        _stot_cartons = _stot_units = 0
-        _stot_prod = _stot_svc = _stot_nw = _stot_gw = _stot_cbm = 0.0
-        for _r in _seff_rows():
-            _sku_t = _r["SKU"]
-            if not _sku_t:
-                continue
-            _nc_t  = _safe_int_s(_r.get("# Cartons"))
-            _inf_t = sku_info.get(_sku_t, {})
-            _cu_t  = _inf_t.get("carton_units", 0) or 0
-            _u_t   = _cu_t * _nc_t
-            _stot_cartons += _nc_t
-            _stot_units   += _u_t
-            _stot_prod    += _inf_t.get("unit_mfg", 0.0) * _u_t
-            _stot_svc     += _inf_t.get("unit_svc", 0.0) * _u_t
-            _stot_nw      += _inf_t.get("nw_kg", 0.0) * _nc_t
-            _stot_gw      += _inf_t.get("gw_kg", 0.0) * _nc_t
-            _stot_cbm     += _inf_t.get("cbm",   0.0) * _nc_t
-        if _stot_cartons:
-            st.markdown(
-                f"**📊 TOTAL** · {_stot_cartons} cartons · {_stot_units} units · "
-                f"\\${_stot_prod:.2f} prod cost · \\${_stot_svc:.2f} svc cost · "
-                f"{_stot_nw:.2f} kg NW · {_stot_gw:.2f} kg GW · {_stot_cbm:.3f} CBM"
-            )
+                        # Items sub-table
+                        if _pl_row["items"]:
+                            st.markdown("**🔩 Components:**")
+                            st.dataframe(
+                                pd.DataFrame(_pl_row["items"]),
+                                hide_index=True,
+                                use_container_width=True,
+                                column_config={
+                                    "Item":          st.column_config.TextColumn(width=200),
+                                    "Part ID":       st.column_config.TextColumn(width=100),
+                                    "Type":          st.column_config.TextColumn(width=80),
+                                    "Qty/Unit":      st.column_config.NumberColumn(format="%d",    width=80),
+                                    "Qty Total":     st.column_config.NumberColumn(format="%d",    width=90),
+                                    "HS Code (NA)":  st.column_config.TextColumn(width=110),
+                                    "HS Code (UK)":  st.column_config.TextColumn(width=110),
+                                    "Mfg $/unit":    st.column_config.NumberColumn(format="$%.4f", width=100),
+                                    "Svc $/unit":    st.column_config.NumberColumn(format="$%.4f", width=100),
+                                    "Mfg $ Total":   st.column_config.NumberColumn(format="$%.2f", width=100),
+                                    "Svc $ Total":   st.column_config.NumberColumn(format="$%.2f", width=100),
+                                    "Net Wt (g)":    st.column_config.NumberColumn(format="%.1f g", width=100),
+                                    "Currency":      st.column_config.TextColumn(width=75),
+                                },
+                            )
+                        else:
+                            st.caption("No components linked to this product yet.")
 
-        # ── Buttons ───────────────────────────────────────────────────────────
-        if not _locked:
-            _sb1, _sb2, _sb3, _ = st.columns([2, 2, 2, 4])
-            with _sb1:
-                if st.button("💾 Save", type="primary", key=f"ship_save_{_ctx}",
-                             disabled=_has_errors,
-                             help="Fix carton errors before saving" if _has_errors else None):
-                    try:
-                        save_shipment({
-                            "id":          _sid,
-                            "name":        _ship_name.strip(),
-                            "destination": _ship_dest.strip() or None,
-                            "notes":       _ship_notes.strip() or None,
+                # ── Download as CSV ───────────────────────────────────────────
+                st.divider()
+                _csv_rows = []
+                for _pr in _pl_data:
+                    _base = {
+                        "SKU":           _pr["sku"],
+                        "Product":       _pr["product"],
+                        "# Cartons":     _pr["num_cartons"],
+                        "# Units":       _pr["total_units"],
+                        "NW Total (kg)": _pr["total_nw_kg"],
+                        "GW Total (kg)": _pr["total_gw_kg"],
+                        "CBM Total":     _pr["total_cbm"],
+                        "Mfg $ Total":   _pr["total_mfg"],
+                        "Svc $ Total":   _pr["total_svc"],
+                    }
+                    if _pr["items"]:
+                        for _it in _pr["items"]:
+                            _csv_rows.append({**_base,
+                                "Item":         _it["Item"],
+                                "Part ID":      _it["Part ID"],
+                                "Type":         _it["Type"],
+                                "Qty/Unit":     _it["Qty/Unit"],
+                                "Qty Total":    _it["Qty Total"],
+                                "HS Code (NA)": _it["HS Code (NA)"],
+                                "HS Code (UK)": _it["HS Code (UK)"],
+                                "Mfg $/unit":   _it["Mfg $/unit"],
+                                "Svc $/unit":   _it["Svc $/unit"],
+                                "Net Wt (g)":   _it["Net Wt (g)"],
+                                "Currency":     _it["Currency"],
+                            })
+                    else:
+                        _csv_rows.append({**_base,
+                            "Item": "", "Part ID": "", "Type": "",
+                            "Qty/Unit": "", "Qty Total": "",
+                            "HS Code (NA)": "", "HS Code (UK)": "",
+                            "Mfg $/unit": "", "Svc $/unit": "",
+                            "Net Wt (g)": "", "Currency": "",
                         })
-                        # Clamp any over-allocated rows before saving (safety net)
-                        _lines_to_save = [
-                            {**r, "# Cartons": min(
-                                _safe_int_s(r.get("# Cartons")),
-                                _avail_map.get(str(r.get("SKU") or "").strip(), 0)
-                            )}
-                            for r in _seff_rows() if r["SKU"]
-                        ]
-                        save_shipment_lines(_sid, _lines_to_save)
-                        st.session_state.pop(_sstate_key, None)
-                        st.session_state.pop(_sek, None)
-                        st.success("✅ Shipment saved.")
-                        st.rerun()
-                    except Exception as _se:
-                        st.error(f"Save failed: {_se}")
+                _csv_df = pd.DataFrame(_csv_rows)
+                st.download_button(
+                    "⬇️ Download Packing List CSV",
+                    data=_csv_df.to_csv(index=False),
+                    file_name=f"packing_list_{_ship_title}.csv",
+                    mime="text/csv",
+                    key=f"dl_pl_{_sid}",
+                )
 
-            with _sb2:
-                if st.button("✅ Mark as Shipped", key=f"ship_mark_{_ctx}"):
-                    st.session_state[f"ship_confirm_{_ctx}"] = True
+        # ── EDIT LINES tab ────────────────────────────────────────────────────
+        with _ship_edit_tab:
 
-            with _sb3:
-                if st.button("🗑️ Delete", key=f"ship_del_{_ctx}"):
-                    st.session_state[f"ship_del_confirm_{_ctx}"] = True
+            def _make_ship_row(sku, num_cartons):
+                info  = sku_info.get(sku or "", {})
+                cu    = info.get("carton_units", 0) or 0
+                units = cu * num_cartons
+                # _avail_map already excludes this shipment's own lines →
+                # it represents the maximum total cartons this shipment may use for the SKU
+                avail = _avail_map.get(sku, 0) if sku else 0
+                return {
+                    "SKU":               sku or "",
+                    "# Cartons":         num_cartons,
+                    "Available":         avail,
+                    "Product":           info.get("name", "") if sku else "",
+                    "# Units":           units,
+                    "Product Cost ($)":  round(info.get("unit_mfg", 0.0) * units, 2),
+                    "Service Cost ($)":  round(info.get("unit_svc", 0.0) * units, 2),
+                    "Net Weight (kg)":   round(info.get("nw_kg", 0.0) * num_cartons, 2),
+                    "Gross Weight (kg)": round(info.get("gw_kg", 0.0) * num_cartons, 2),
+                    "CBM":               round(info.get("cbm",  0.0) * num_cartons, 3),
+                }
 
-            if st.session_state.get(f"ship_confirm_{_ctx}"):
-                st.warning("Mark as **Shipped**? This cannot be undone.")
-                _mc1, _mc2, _ = st.columns([2, 2, 6])
-                with _mc1:
-                    if st.button("Yes, ship it", type="primary", key=f"ship_yes_{_ctx}"):
-                        # Save current lines first, then lock
-                        save_shipment_lines(_sid, [r for r in _seff_rows() if r["SKU"]])
-                        mark_shipped(_sid)
-                        st.session_state.pop(f"ship_confirm_{_ctx}", None)
-                        st.session_state.pop(_sstate_key, None)
-                        st.session_state.pop(_sek, None)
-                        st.success("🚢 Shipment marked as shipped.")
-                        st.rerun()
-                with _mc2:
-                    if st.button("Cancel", key=f"ship_cancel_{_ctx}"):
-                        st.session_state.pop(f"ship_confirm_{_ctx}", None)
-                        st.rerun()
+            _sstate_key = f"ship_lines_state_{_ctx}"
+            _sek        = f"ship_lines_ed_{_ctx}"
 
-            if st.session_state.get(f"ship_del_confirm_{_ctx}"):
-                st.warning(f"Delete **{sel_ship['name']}**?")
-                _dc1, _dc2, _ = st.columns([2, 2, 6])
-                with _dc1:
-                    if st.button("Yes, delete", type="primary", key=f"ship_del_yes_{_ctx}"):
-                        delete_shipment(_sid)
-                        st.session_state.pop("ship_sel_id", None)
-                        st.session_state.pop(_sstate_key, None)
-                        st.session_state.pop(_sek, None)
-                        st.rerun()
-                with _dc2:
-                    if st.button("Cancel", key=f"ship_del_no_{_ctx}"):
-                        st.session_state.pop(f"ship_del_confirm_{_ctx}", None)
-                        st.rerun()
+            def _safe_int_s(v):
+                try:
+                    return 0 if v is None or (isinstance(v, float) and pd.isna(v)) else int(v)
+                except (TypeError, ValueError):
+                    return 0
+
+            if _sstate_key not in st.session_state:
+                _db_lines = get_shipment_lines(_sid)
+                st.session_state[_sstate_key] = [
+                    {"SKU": ln["sku"] or "", "# Cartons": int(ln["num_cartons"] or 0)}
+                    for ln in _db_lines
+                ]
+
+            _sdiffs    = st.session_state.get(_sek, {})
+            _sedit_map = {int(k): v for k, v in (_sdiffs.get("edited_rows") or {}).items()}
+            _sdel_base = set(_sdiffs.get("deleted_rows") or [])
+            _sadded    = _sdiffs.get("added_rows") or []
+
+            if _sdel_base or _sadded:
+                _ss = {i: dict(r) for i, r in enumerate(st.session_state[_sstate_key])
+                       if i not in _sdel_base}
+                for _ri, _chg in _sedit_map.items():
+                    if _ri in _ss:
+                        _ss[_ri].update({k: v for k, v in _chg.items()
+                                         if k in ("SKU", "# Cartons")})
+                _smerged = [_ss[k] for k in sorted(_ss)]
+                for _a in _sadded:
+                    _smerged.append({
+                        "SKU":       str(_a.get("SKU") or "").strip(),
+                        "# Cartons": _safe_int_s(_a.get("# Cartons")),
+                    })
+                st.session_state[_sstate_key] = _smerged
+                st.session_state.pop(_sek, None)
+                _sedit_map = {}
+
+            _scur_list = st.session_state[_sstate_key]
+            _SSCHEMA = {
+                "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
+                "Available": pd.Series(dtype=int),
+                "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
+                "Product Cost ($)": pd.Series(dtype=float),
+                "Service Cost ($)": pd.Series(dtype=float),
+                "Net Weight (kg)": pd.Series(dtype=float),
+                "Gross Weight (kg)": pd.Series(dtype=float),
+                "CBM": pd.Series(dtype=float),
+            }
+            _sfull_rows = [_make_ship_row(r["SKU"], _safe_int_s(r.get("# Cartons")))
+                           for r in _scur_list]
+            _sfull_df = pd.DataFrame(_sfull_rows) if _sfull_rows else pd.DataFrame(_SSCHEMA)
+
+            _SCOMPUTED = ["Available", "Product", "# Units", "Product Cost ($)",
+                          "Service Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
+
+            # ── Validation — includes pending edits not yet committed ─────────
+            _eff_for_val = []
+            for _vi, _vr in enumerate(_scur_list):
+                _vm = dict(_vr)
+                if _vi in _sedit_map:
+                    _vm.update({k: v for k, v in _sedit_map[_vi].items()
+                                 if k in ("SKU", "# Cartons")})
+                _eff_for_val.append(_vm)
+            for _va in _sadded:
+                _eff_for_val.append({
+                    "SKU":       str(_va.get("SKU") or "").strip(),
+                    "# Cartons": _safe_int_s(_va.get("# Cartons")),
+                })
+
+            _val_errors = []
+            for _vrow in _eff_for_val:
+                _vsku = str(_vrow.get("SKU") or "").strip()
+                _vnc  = _safe_int_s(_vrow.get("# Cartons"))
+                if not _vsku or _vnc <= 0:
+                    continue
+                _vmax = _avail_map.get(_vsku, 0)
+                if _vnc > _vmax:
+                    _val_errors.append(
+                        f"🚫 **{_vsku}**: {_vnc} cartons requested — only **{_vmax}** available"
+                    )
+
+            _has_errors = bool(_val_errors)
+            for _ve in _val_errors:
+                st.error(_ve)
+
+            if _locked:
+                st.dataframe(
+                    _sfull_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=400,
+                    column_config={
+                        "SKU":               st.column_config.TextColumn("SKU", width=120),
+                        "# Cartons":         st.column_config.NumberColumn("# Cartons", width=110),
+                        "Available":         st.column_config.NumberColumn("Available Stock", width=120),
+                        "Product":           st.column_config.TextColumn("Product", width=200),
+                        "# Units":           st.column_config.NumberColumn("# Units", width=85),
+                        "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
+                        "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
+                        "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
+                        "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
+                        "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
+                    },
+                )
+            else:
+                st.caption("Click + (bottom-left) to add a row · select row and press Delete to remove")
+                st.data_editor(
+                    _sfull_df,
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    key=_sek,
+                    disabled=_SCOMPUTED,
+                    height=400,
+                    column_config={
+                        "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=120),
+                        "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=110),
+                        "Available":         st.column_config.NumberColumn("Available Stock", width=120),
+                        "Product":           st.column_config.TextColumn("Product", width=200),
+                        "# Units":           st.column_config.NumberColumn("# Units", width=85),
+                        "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
+                        "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
+                        "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
+                        "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
+                        "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
+                    },
+                )
+
+            def _seff_rows():
+                _out = []
+                for _i, _r in enumerate(st.session_state[_sstate_key]):
+                    _m = dict(_r)
+                    if _i in _sedit_map:
+                        _m.update({k: v for k, v in _sedit_map[_i].items()
+                                   if k in ("SKU", "# Cartons")})
+                    _out.append(_m)
+                return _out
+
+            # Totals
+            _stot_cartons = _stot_units = 0
+            _stot_prod = _stot_svc = _stot_nw = _stot_gw = _stot_cbm = 0.0
+            for _r in _seff_rows():
+                _sku_t = _r["SKU"]
+                if not _sku_t:
+                    continue
+                _nc_t  = _safe_int_s(_r.get("# Cartons"))
+                _inf_t = sku_info.get(_sku_t, {})
+                _cu_t  = _inf_t.get("carton_units", 0) or 0
+                _u_t   = _cu_t * _nc_t
+                _stot_cartons += _nc_t
+                _stot_units   += _u_t
+                _stot_prod    += _inf_t.get("unit_mfg", 0.0) * _u_t
+                _stot_svc     += _inf_t.get("unit_svc", 0.0) * _u_t
+                _stot_nw      += _inf_t.get("nw_kg", 0.0) * _nc_t
+                _stot_gw      += _inf_t.get("gw_kg", 0.0) * _nc_t
+                _stot_cbm     += _inf_t.get("cbm",   0.0) * _nc_t
+            if _stot_cartons:
+                st.markdown(
+                    f"**📊 TOTAL** · {_stot_cartons} cartons · {_stot_units} units · "
+                    f"\\${_stot_prod:.2f} prod cost · \\${_stot_svc:.2f} svc cost · "
+                    f"{_stot_nw:.2f} kg NW · {_stot_gw:.2f} kg GW · {_stot_cbm:.3f} CBM"
+                )
+
+            # ── Buttons ───────────────────────────────────────────────────────
+            if not _locked:
+                _sb1, _sb2, _sb3, _ = st.columns([2, 2, 2, 4])
+                with _sb1:
+                    if st.button("💾 Save", type="primary", key=f"ship_save_{_ctx}",
+                                 disabled=_has_errors,
+                                 help="Fix carton errors before saving" if _has_errors else None):
+                        try:
+                            save_shipment({
+                                "id":          _sid,
+                                "name":        _ship_name.strip(),
+                                "destination": _ship_dest.strip() or None,
+                                "notes":       _ship_notes.strip() or None,
+                            })
+                            # Clamp any over-allocated rows before saving (safety net)
+                            _lines_to_save = [
+                                {**r, "# Cartons": min(
+                                    _safe_int_s(r.get("# Cartons")),
+                                    _avail_map.get(str(r.get("SKU") or "").strip(), 0)
+                                )}
+                                for r in _seff_rows() if r["SKU"]
+                            ]
+                            save_shipment_lines(_sid, _lines_to_save)
+                            st.session_state.pop(_sstate_key, None)
+                            st.session_state.pop(_sek, None)
+                            st.success("✅ Shipment saved.")
+                            st.rerun()
+                        except Exception as _se:
+                            st.error(f"Save failed: {_se}")
+
+                with _sb2:
+                    if st.button("✅ Mark as Shipped", key=f"ship_mark_{_ctx}"):
+                        st.session_state[f"ship_confirm_{_ctx}"] = True
+
+                with _sb3:
+                    if st.button("🗑️ Delete", key=f"ship_del_{_ctx}"):
+                        st.session_state[f"ship_del_confirm_{_ctx}"] = True
+
+                if st.session_state.get(f"ship_confirm_{_ctx}"):
+                    st.warning("Mark as **Shipped**? This cannot be undone.")
+                    _mc1, _mc2, _ = st.columns([2, 2, 6])
+                    with _mc1:
+                        if st.button("Yes, ship it", type="primary", key=f"ship_yes_{_ctx}"):
+                            save_shipment_lines(_sid, [r for r in _seff_rows() if r["SKU"]])
+                            mark_shipped(_sid)
+                            st.session_state.pop(f"ship_confirm_{_ctx}", None)
+                            st.session_state.pop(_sstate_key, None)
+                            st.session_state.pop(_sek, None)
+                            st.success("🚢 Shipment marked as shipped.")
+                            st.rerun()
+                    with _mc2:
+                        if st.button("Cancel", key=f"ship_cancel_{_ctx}"):
+                            st.session_state.pop(f"ship_confirm_{_ctx}", None)
+                            st.rerun()
+
+                if st.session_state.get(f"ship_del_confirm_{_ctx}"):
+                    st.warning(f"Delete **{sel_ship['name']}**?")
+                    _dc1, _dc2, _ = st.columns([2, 2, 6])
+                    with _dc1:
+                        if st.button("Yes, delete", type="primary", key=f"ship_del_yes_{_ctx}"):
+                            delete_shipment(_sid)
+                            st.session_state.pop("ship_sel_id", None)
+                            st.session_state.pop(_sstate_key, None)
+                            st.session_state.pop(_sek, None)
+                            st.rerun()
+                    with _dc2:
+                        if st.button("Cancel", key=f"ship_del_no_{_ctx}"):
+                            st.session_state.pop(f"ship_del_confirm_{_ctx}", None)
+                            st.rerun()
 
     with _ship_col_form:
         _ship_form(_sel_ship, _all_skus)
