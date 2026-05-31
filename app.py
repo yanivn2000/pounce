@@ -1959,7 +1959,9 @@ with _inv_ship_tab:
             info  = sku_info.get(sku or "", {})
             cu    = info.get("carton_units", 0) or 0
             units = cu * num_cartons
-            avail = _avail_map.get(sku, 0) + num_cartons  # add back own cartons
+            # _avail_map already excludes this shipment's own lines →
+            # it represents the maximum total cartons this shipment may use for the SKU
+            avail = _avail_map.get(sku, 0) if sku else 0
             return {
                 "SKU":               sku or "",
                 "# Cartons":         num_cartons,
@@ -2029,18 +2031,36 @@ with _inv_ship_tab:
         _SCOMPUTED = ["Available", "Product", "# Units", "Product Cost ($)",
                       "Service Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
-        # ── Validation warnings ───────────────────────────────────────────────
-        _warnings = []
-        for _srow in _sfull_rows:
-            _sku_s  = _srow["SKU"]
-            _req    = _srow["# Cartons"]
-            _avail  = _srow["Available"]
-            if _sku_s and _req > _avail:
-                _warnings.append(
-                    f"⚠️ **{_sku_s}**: requested {_req} cartons but only {_avail} available."
+        # ── Validation — includes pending edits not yet committed to session state ─
+        # Build effective rows: base state overridden by in-progress editor changes
+        _eff_for_val = []
+        for _vi, _vr in enumerate(_scur_list):
+            _vm = dict(_vr)
+            if _vi in _sedit_map:
+                _vm.update({k: v for k, v in _sedit_map[_vi].items()
+                             if k in ("SKU", "# Cartons")})
+            _eff_for_val.append(_vm)
+        for _va in _sadded:
+            _eff_for_val.append({
+                "SKU":       str(_va.get("SKU") or "").strip(),
+                "# Cartons": _safe_int_s(_va.get("# Cartons")),
+            })
+
+        _val_errors = []
+        for _vrow in _eff_for_val:
+            _vsku = str(_vrow.get("SKU") or "").strip()
+            _vnc  = _safe_int_s(_vrow.get("# Cartons"))
+            if not _vsku or _vnc <= 0:
+                continue
+            _vmax = _avail_map.get(_vsku, 0)
+            if _vnc > _vmax:
+                _val_errors.append(
+                    f"🚫 **{_vsku}**: {_vnc} cartons requested — only **{_vmax}** available"
                 )
-        for _w in _warnings:
-            st.warning(_w)
+
+        _has_errors = bool(_val_errors)
+        for _ve in _val_errors:
+            st.error(_ve)
 
         if _locked:
             st.dataframe(
@@ -2123,7 +2143,9 @@ with _inv_ship_tab:
         if not _locked:
             _sb1, _sb2, _sb3, _ = st.columns([2, 2, 2, 4])
             with _sb1:
-                if st.button("💾 Save", type="primary", key=f"ship_save_{_ctx}"):
+                if st.button("💾 Save", type="primary", key=f"ship_save_{_ctx}",
+                             disabled=_has_errors,
+                             help="Fix carton errors before saving" if _has_errors else None):
                     try:
                         save_shipment({
                             "id":          _sid,
@@ -2131,7 +2153,15 @@ with _inv_ship_tab:
                             "destination": _ship_dest.strip() or None,
                             "notes":       _ship_notes.strip() or None,
                         })
-                        save_shipment_lines(_sid, [r for r in _seff_rows() if r["SKU"]])
+                        # Clamp any over-allocated rows before saving (safety net)
+                        _lines_to_save = [
+                            {**r, "# Cartons": min(
+                                _safe_int_s(r.get("# Cartons")),
+                                _avail_map.get(str(r.get("SKU") or "").strip(), 0)
+                            )}
+                            for r in _seff_rows() if r["SKU"]
+                        ]
+                        save_shipment_lines(_sid, _lines_to_save)
                         st.session_state.pop(_sstate_key, None)
                         st.session_state.pop(_sek, None)
                         st.success("✅ Shipment saved.")
