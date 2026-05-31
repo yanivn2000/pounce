@@ -2163,58 +2163,59 @@ with _inv_ship_tab:
             for _ve in _val_errors:
                 st.error(_ve)
 
-            # ── Add Line form (always open, one liner above the table) ────────
+            # ── Add Line form — isolated fragment so number_input reruns don't
+            #    touch the expensive data_editor below ─────────────────────────
             if not _locked:
                 _used_skus = {r["SKU"] for r in _scur_list if r.get("SKU")}
                 _add_skus  = [s for s in all_skus if s not in _used_skus]
-                _fa, _fb, _fc, _fd = st.columns([3, 2, 1, 4])
-                with _fa:
-                    _new_sku = st.selectbox(
-                        "SKU",
-                        options=[""] + _add_skus,
-                        index=0,
-                        label_visibility="collapsed",
-                        placeholder="Select SKU to add…",
-                        key=f"ship_add_sku_{_ctx}",
-                    )
-                with _fb:
-                    _new_sku_avail = _avail_map.get(_new_sku, 0) if _new_sku else 0
-                    _new_nc = st.number_input(
-                        "# Cartons",
-                        min_value=0,
-                        max_value=_new_sku_avail if _new_sku else 9999,
-                        step=1,
-                        value=0,
-                        label_visibility="collapsed",
-                        key=f"ship_add_nc_{_ctx}",
-                    )
-                with _fc:
-                    _add_disabled = (
-                        not _new_sku
-                        or _new_nc <= 0
-                        or _new_nc > _new_sku_avail
-                    )
-                    _add_help = (
-                        f"Max {_new_sku_avail} cartons available for {_new_sku}"
-                        if _new_sku and _new_nc > _new_sku_avail
-                        else None
-                    )
-                    if st.button(
-                        "Add",
-                        key=f"ship_add_btn_{_ctx}",
-                        disabled=_add_disabled,
-                        help=_add_help,
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        st.session_state[_sstate_key].append(
-                            {"SKU": _new_sku, "# Cartons": int(_new_nc)}
+
+                @st.fragment
+                def _add_line_form(add_skus, avail_map, sstate_key, sek, ctx):
+                    _fa, _fb, _fc, _fd = st.columns([3, 2, 1, 4])
+                    with _fa:
+                        _new_sku = st.selectbox(
+                            "SKU",
+                            options=[""] + add_skus,
+                            index=0,
+                            label_visibility="collapsed",
+                            placeholder="Select SKU to add…",
+                            key=f"ship_add_sku_{ctx}",
                         )
-                        st.session_state.pop(_sek, None)
-                        st.rerun()
-                with _fd:
-                    if _new_sku:
-                        st.caption(f"Available: **{_new_sku_avail}** cartons")
+                    with _fb:
+                        _avail = avail_map.get(_new_sku, 0) if _new_sku else 0
+                        _new_nc = st.number_input(
+                            "# Cartons",
+                            min_value=0,
+                            max_value=_avail if _new_sku else 9999,
+                            step=1,
+                            value=0,
+                            label_visibility="collapsed",
+                            key=f"ship_add_nc_{ctx}",
+                        )
+                    with _fc:
+                        _disabled = not _new_sku or _new_nc <= 0 or _new_nc > _avail
+                        _help     = (
+                            f"Max {_avail} cartons available for {_new_sku}"
+                            if _new_sku and _new_nc > _avail else None
+                        )
+                        if st.button(
+                            "Add",
+                            key=f"ship_add_btn_{ctx}",
+                            disabled=_disabled,
+                            help=_help,
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            st.session_state[sstate_key].append(
+                                {"SKU": _new_sku, "# Cartons": int(_new_nc)}
+                            )
+                            st.session_state.pop(sek, None)
+                            st.rerun(scope="app")
+                    with _fd:
+                        if _new_sku:
+                            st.caption(f"Available: **{_avail}** cartons")
+
+                _add_line_form(_add_skus, _avail_map, _sstate_key, _sek, _ctx)
 
             # Read selected rows (for Delete Selected)
             _selected_idxs = {i for i, chg in _sedit_map.items()
