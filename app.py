@@ -1897,6 +1897,14 @@ with _inv_ship_tab:
     _ship_col_list, _ship_col_form = st.columns([1, 3], gap="large")
 
     with _ship_col_list:
+        st.markdown("""<div id="ship-list-nav-marker"></div>
+<style>
+div:has(#ship-list-nav-marker) ~ div button {
+    text-align: left !important;
+    justify-content: flex-start !important;
+    padding-left: 0.6rem !important;
+}
+</style>""", unsafe_allow_html=True)
         st.markdown("#### Shipments")
         if st.button("➕ New Shipment", key="new_shipment_btn", use_container_width=True):
             _new_name = get_next_shipment_name()
