@@ -2171,32 +2171,40 @@ with _inv_ship_tab:
 
                 @st.fragment
                 def _add_line_form(add_skus, avail_map, sstate_key, sek, ctx):
+                    _add_skus_set = set(add_skus)
                     _fa, _fb, _fc, _fd = st.columns([3, 2, 1, 4])
                     with _fa:
-                        _new_sku = st.selectbox(
+                        _raw = st.text_input(
                             "SKU",
-                            options=[""] + add_skus,
-                            index=0,
+                            value="",
                             label_visibility="collapsed",
-                            placeholder="Select SKU to add…",
+                            placeholder="Paste or type SKU…",
                             key=f"ship_add_sku_{ctx}",
                         )
+                        _new_sku = _raw.strip() if _raw else ""
+                        _sku_ok  = _new_sku in _add_skus_set
+                        if _new_sku and not _sku_ok:
+                            # check if it's already in the shipment vs truly unknown
+                            if _new_sku not in {s for s in avail_map if s not in _add_skus_set}:
+                                st.caption("⚠️ SKU not found")
+                            else:
+                                st.caption("⚠️ Already in shipment")
                     with _fb:
-                        _avail = avail_map.get(_new_sku, 0) if _new_sku else 0
+                        _avail = avail_map.get(_new_sku, 0) if _sku_ok else 0
                         _new_nc = st.number_input(
                             "# Cartons",
                             min_value=0,
-                            max_value=_avail if _new_sku else 9999,
+                            max_value=_avail if _sku_ok else 9999,
                             step=1,
                             value=0,
                             label_visibility="collapsed",
                             key=f"ship_add_nc_{ctx}",
                         )
                     with _fc:
-                        _disabled = not _new_sku or _new_nc <= 0 or _new_nc > _avail
+                        _disabled = not _sku_ok or _new_nc <= 0 or _new_nc > _avail
                         _help     = (
                             f"Max {_avail} cartons available for {_new_sku}"
-                            if _new_sku and _new_nc > _avail else None
+                            if _sku_ok and _new_nc > _avail else None
                         )
                         if st.button(
                             "Add",
@@ -2212,7 +2220,7 @@ with _inv_ship_tab:
                             st.session_state.pop(sek, None)
                             st.rerun(scope="app")
                     with _fd:
-                        if _new_sku:
+                        if _sku_ok:
                             st.caption(f"Available: **{_avail}** cartons")
 
                 _add_line_form(_add_skus, _avail_map, _sstate_key, _sek, _ctx)
