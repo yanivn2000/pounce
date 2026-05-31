@@ -2093,8 +2093,9 @@ with _inv_ship_tab:
                     for ln in _db_lines
                 ]
 
-            # Stable-data pattern: only absorb structural changes (no dropdown in table
-            # so SKU edits never happen mid-table → no accidental scroll resets)
+            # Stable-data pattern: only absorb structural changes (add/delete rows).
+            # SKU and carton edits live in _sedit_map pending until Save — base DataFrame
+            # never changes mid-edit so the table's scroll position is preserved.
             _sdiffs    = st.session_state.get(_sek, {})
             _sedit_map = {int(k): v for k, v in (_sdiffs.get("edited_rows") or {}).items()}
             _sdel_base = set(_sdiffs.get("deleted_rows") or [])
@@ -2133,18 +2134,23 @@ with _inv_ship_tab:
                            for r in _scur_list]
             _sfull_df = pd.DataFrame(_sfull_rows) if _sfull_rows else pd.DataFrame(_SSCHEMA)
 
-            # SKU is disabled (read-only) in the table — set via Add Line form only
-            _SCOMPUTED = ["SKU", "Available", "Product", "# Units", "Product Cost ($)",
+            # Computed (read-only) columns — SKU is editable via SelectboxColumn in table
+            _SCOMPUTED = ["Available", "Product", "# Units", "Product Cost ($)",
                           "Service Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
-            # ── Validation — includes pending carton edits ─────────────────────
+            # ── Validation — includes all pending edits + newly added rows ────
             _eff_for_val = []
             for _vi, _vr in enumerate(_scur_list):
                 _vm = dict(_vr)
                 if _vi in _sedit_map:
                     _vm.update({k: v for k, v in _sedit_map[_vi].items()
-                                 if k in ("# Cartons",)})
+                                 if k in ("SKU", "# Cartons")})
                 _eff_for_val.append(_vm)
+            for _va in _sadded:
+                _eff_for_val.append({
+                    "SKU":       str(_va.get("SKU") or "").strip(),
+                    "# Cartons": _safe_int_s(_va.get("# Cartons")),
+                })
 
             _val_errors = []
             for _vrow in _eff_for_val:
@@ -2168,7 +2174,7 @@ with _inv_ship_tab:
 
             _ship_col_cfg = {
                 "Select":            st.column_config.CheckboxColumn("✔", default=False, width=40),
-                "SKU":               st.column_config.TextColumn("SKU", width=130),
+                "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=140),
                 "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=100),
                 "Available":         st.column_config.NumberColumn("Available Stock", width=115),
                 "Product":           st.column_config.TextColumn("Product", width=220),
@@ -2189,10 +2195,11 @@ with _inv_ship_tab:
                     column_config={k: v for k, v in _ship_col_cfg.items() if k != "Select"},
                 )
             else:
+                st.caption("Click ✚ (bottom-left) to add a row · check ✔ then Delete Selected to remove")
                 st.data_editor(
                     _sfull_df,
                     use_container_width=True,
-                    num_rows="fixed",
+                    num_rows="dynamic",
                     key=_sek,
                     disabled=_SCOMPUTED,
                     height=800,
@@ -2200,54 +2207,18 @@ with _inv_ship_tab:
                 )
 
                 # ── Delete Selected ────────────────────────────────────────────
-                _del_col, _add_col = st.columns([1, 4])
-                with _del_col:
-                    if st.button(
-                        "🗑️ Delete Selected",
-                        key=f"ship_del_sel_{_ctx}",
-                        disabled=not _selected_idxs,
-                        help="Check the ✔ column to select rows, then click here to remove them",
-                    ):
-                        st.session_state[_sstate_key] = [
-                            r for i, r in enumerate(st.session_state[_sstate_key])
-                            if i not in _selected_idxs
-                        ]
-                        st.session_state.pop(_sek, None)
-                        st.rerun()
-
-                # ── Add Line form ──────────────────────────────────────────────
-                _used_skus = {r["SKU"] for r in _scur_list if r.get("SKU")}
-                _add_skus  = [s for s in all_skus if s not in _used_skus]
-                with st.expander("➕ Add Line", expanded=False):
-                    _af1, _af2, _af3 = st.columns([3, 2, 1])
-                    with _af1:
-                        _new_sku = st.selectbox(
-                            "SKU",
-                            options=[""] + _add_skus,
-                            index=0,
-                            key=f"ship_add_sku_{_ctx}",
-                        )
-                    with _af2:
-                        _new_nc = st.number_input(
-                            "# Cartons",
-                            min_value=0,
-                            step=1,
-                            value=0,
-                            key=f"ship_add_nc_{_ctx}",
-                        )
-                    with _af3:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button(
-                            "Add",
-                            key=f"ship_add_btn_{_ctx}",
-                            disabled=not _new_sku or _new_nc <= 0,
-                            type="primary",
-                        ):
-                            st.session_state[_sstate_key].append(
-                                {"SKU": _new_sku, "# Cartons": int(_new_nc)}
-                            )
-                            st.session_state.pop(_sek, None)
-                            st.rerun()
+                if st.button(
+                    "🗑️ Delete Selected",
+                    key=f"ship_del_sel_{_ctx}",
+                    disabled=not _selected_idxs,
+                    help="Check the ✔ column to select rows, then click here to remove them",
+                ):
+                    st.session_state[_sstate_key] = [
+                        r for i, r in enumerate(st.session_state[_sstate_key])
+                        if i not in _selected_idxs
+                    ]
+                    st.session_state.pop(_sek, None)
+                    st.rerun()
 
             def _seff_rows():
                 _out = []
