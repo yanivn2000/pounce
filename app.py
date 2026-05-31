@@ -1916,52 +1916,6 @@ with _inv_ship_tab:
     _sel_ship_id = st.session_state.get("ship_sel_id")
     _sel_ship    = get_shipment(_sel_ship_id) if _sel_ship_id else None
 
-    # ── Add Line form — uses st.form so Tab between fields causes zero reruns.
-    #    Validation and append happen only on submit (Enter or click Add).
-    def _ship_add_line_form(add_skus, avail_map, sstate_key, sek, ctx):
-        _add_skus_set = set(add_skus)
-        with st.form(key=f"ship_add_form_{ctx}", clear_on_submit=True):
-            _fa, _fb, _fc = st.columns([3, 2, 1])
-            with _fa:
-                _new_sku_raw = st.text_input(
-                    "SKU",
-                    value="",
-                    label_visibility="collapsed",
-                    placeholder="Paste or type SKU…",
-                )
-            with _fb:
-                _new_nc = st.number_input(
-                    "# Cartons",
-                    min_value=0,
-                    step=1,
-                    value=0,
-                    label_visibility="collapsed",
-                )
-            with _fc:
-                _submitted = st.form_submit_button(
-                    "Add", type="primary", use_container_width=True
-                )
-
-        if _submitted:
-            _new_sku = _new_sku_raw.strip()
-            _sku_ok  = _new_sku in _add_skus_set
-            _avail   = avail_map.get(_new_sku, 0) if _sku_ok else 0
-            if not _new_sku:
-                st.warning("Enter a SKU first.")
-            elif not _sku_ok:
-                already = _new_sku not in {s for s in avail_map if s not in _add_skus_set}
-                st.error("⚠️ Already in shipment" if not already else "⚠️ SKU not found")
-            elif _new_nc <= 0:
-                st.warning("Enter at least 1 carton.")
-            elif _new_nc > _avail:
-                st.error(f"🚫 Only **{_avail}** cartons available for {_new_sku}")
-            else:
-                st.session_state[sstate_key].append(
-                    {"SKU": _new_sku, "# Cartons": int(_new_nc)}
-                )
-                st.session_state.pop(sek, None)
-                st.rerun()
-
     @st.fragment
     def _ship_form(sel_ship, all_skus):
         if not sel_ship:
@@ -2107,8 +2061,6 @@ with _inv_ship_tab:
                 info  = sku_info.get(sku or "", {})
                 cu    = info.get("carton_units", 0) or 0
                 units = cu * num_cartons
-                # _avail_map already excludes this shipment's own lines →
-                # it represents the maximum total cartons this shipment may use for the SKU
                 avail = _avail_map.get(sku, 0) if sku else 0
                 return {
                     "SKU":               sku or "",
@@ -2139,34 +2091,9 @@ with _inv_ship_tab:
                     for ln in _db_lines
                 ]
 
-            # Stable-data pattern: only absorb structural changes (add/delete rows).
-            # SKU and carton edits live in _sedit_map pending until Save — base DataFrame
-            # never changes mid-edit so the table's scroll position is preserved.
-            _sdiffs    = st.session_state.get(_sek, {})
-            _sedit_map = {int(k): v for k, v in (_sdiffs.get("edited_rows") or {}).items()}
-            _sdel_base = set(_sdiffs.get("deleted_rows") or [])
-            _sadded    = _sdiffs.get("added_rows") or []
-
-            if _sdel_base or _sadded:
-                _ss = {i: dict(r) for i, r in enumerate(st.session_state[_sstate_key])
-                       if i not in _sdel_base}
-                for _ri, _chg in _sedit_map.items():
-                    if _ri in _ss:
-                        _ss[_ri].update({k: v for k, v in _chg.items()
-                                         if k in ("SKU", "# Cartons")})
-                _smerged = [_ss[k] for k in sorted(_ss)]
-                for _a in _sadded:
-                    _smerged.append({
-                        "SKU":       str(_a.get("SKU") or "").strip(),
-                        "# Cartons": _safe_int_s(_a.get("# Cartons")),
-                    })
-                st.session_state[_sstate_key] = _smerged
-                st.session_state.pop(_sek, None)
-                _sedit_map = {}
-
             _scur_list = st.session_state[_sstate_key]
+
             _SSCHEMA = {
-                "Select": pd.Series(dtype=bool),
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
                 "Available": pd.Series(dtype=int),
                 "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
@@ -2176,52 +2103,15 @@ with _inv_ship_tab:
                 "Gross Weight (kg)": pd.Series(dtype=float),
                 "CBM": pd.Series(dtype=float),
             }
-            _sfull_rows = [{"Select": False, **_make_ship_row(r["SKU"], _safe_int_s(r.get("# Cartons")))}
+            _sfull_rows = [_make_ship_row(r["SKU"], _safe_int_s(r.get("# Cartons")))
                            for r in _scur_list]
-            _sfull_df = pd.DataFrame(_sfull_rows) if _sfull_rows else pd.DataFrame(_SSCHEMA)
+            _sfull_df   = pd.DataFrame(_sfull_rows) if _sfull_rows else pd.DataFrame(_SSCHEMA)
 
-            # SKU is read-only in the table (added via the form above)
-            _SCOMPUTED = ["SKU", "Available", "Product", "# Units", "Product Cost ($)",
+            _SCOMPUTED = ["Available", "Product", "# Units", "Product Cost ($)",
                           "Service Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
-            # ── Validation — pending carton edits only (SKU never changes in table) ──
-            _eff_for_val = []
-            for _vi, _vr in enumerate(_scur_list):
-                _vm = dict(_vr)
-                if _vi in _sedit_map:
-                    _vm.update({k: v for k, v in _sedit_map[_vi].items()
-                                 if k in ("# Cartons",)})
-                _eff_for_val.append(_vm)
-
-            _val_errors = []
-            for _vrow in _eff_for_val:
-                _vsku = str(_vrow.get("SKU") or "").strip()
-                _vnc  = _safe_int_s(_vrow.get("# Cartons"))
-                if not _vsku or _vnc <= 0:
-                    continue
-                _vmax = _avail_map.get(_vsku, 0)
-                if _vnc > _vmax:
-                    _val_errors.append(
-                        f"🚫 **{_vsku}**: {_vnc} cartons requested — only **{_vmax}** available"
-                    )
-
-            _has_errors = bool(_val_errors)
-            for _ve in _val_errors:
-                st.error(_ve)
-
-            # ── Add Line form ─────────────────────────────────────────────────
-            if not _locked:
-                _used_skus = {r["SKU"] for r in _scur_list if r.get("SKU")}
-                _add_skus  = [s for s in all_skus if s not in _used_skus]
-                _ship_add_line_form(_add_skus, _avail_map, _sstate_key, _sek, _ctx)
-
-            # Read selected rows (for Delete Selected)
-            _selected_idxs = {i for i, chg in _sedit_map.items()
-                              if chg.get("Select", False)}
-
             _ship_col_cfg = {
-                "Select":            st.column_config.CheckboxColumn("✔", default=False, width=40),
-                "SKU":               st.column_config.TextColumn("SKU", width=140),
+                "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=150),
                 "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=100),
                 "Available":         st.column_config.NumberColumn("Available Stock", width=115),
                 "Product":           st.column_config.TextColumn("Product", width=220),
@@ -2235,52 +2125,89 @@ with _inv_ship_tab:
 
             if _locked:
                 st.dataframe(
-                    _sfull_df.drop(columns=["Select"], errors="ignore"),
+                    _sfull_df,
                     use_container_width=True,
                     hide_index=True,
                     height=800,
-                    column_config={k: v for k, v in _ship_col_cfg.items() if k != "Select"},
-                )
-            else:
-                st.data_editor(
-                    _sfull_df,
-                    use_container_width=True,
-                    num_rows="fixed",
-                    key=_sek,
-                    disabled=_SCOMPUTED,
-                    height=800,
                     column_config=_ship_col_cfg,
                 )
+            else:
+                # st.form batches ALL widget events — clicking a SKU dropdown,
+                # editing cartons, pressing + — nothing hits the server until
+                # Save is clicked. Zero reruns, zero scroll resets.
+                with st.form(key=f"ship_edit_form_{_ctx}"):
+                    st.data_editor(
+                        _sfull_df,
+                        use_container_width=True,
+                        num_rows="dynamic",
+                        key=_sek,
+                        disabled=_SCOMPUTED,
+                        height=800,
+                        column_config=_ship_col_cfg,
+                    )
+                    _save_submitted = st.form_submit_button("💾 Save", type="primary")
 
-                # ── Delete Selected ────────────────────────────────────────────
-                if st.button(
-                    "🗑️ Delete Selected",
-                    key=f"ship_del_sel_{_ctx}",
-                    disabled=not _selected_idxs,
-                    help="Check the ✔ column to select rows, then click here to remove them",
-                ):
-                    st.session_state[_sstate_key] = [
-                        r for i, r in enumerate(st.session_state[_sstate_key])
-                        if i not in _selected_idxs
-                    ]
-                    st.session_state.pop(_sek, None)
-                    st.rerun()
+                if _save_submitted:
+                    _sdiffs   = st.session_state.get(_sek, {})
+                    _edit_map = {int(k): v for k, v in (_sdiffs.get("edited_rows") or {}).items()}
+                    _del_idxs = set(_sdiffs.get("deleted_rows") or [])
+                    _sadded   = _sdiffs.get("added_rows") or []
 
-            def _seff_rows():
-                _out = []
-                for _i, _r in enumerate(st.session_state[_sstate_key]):
-                    _m = dict(_r)
-                    if _i in _sedit_map:
-                        _m.update({k: v for k, v in _sedit_map[_i].items()
-                                   if k in ("SKU", "# Cartons")})
-                    _out.append(_m)
-                return _out
+                    # Apply all changes
+                    _ss = {i: dict(r) for i, r in enumerate(_scur_list) if i not in _del_idxs}
+                    for _ri, _chg in _edit_map.items():
+                        if _ri in _ss:
+                            _ss[_ri].update({k: v for k, v in _chg.items()
+                                             if k in ("SKU", "# Cartons")})
+                    _merged = [_ss[k] for k in sorted(_ss)]
+                    for _a in _sadded:
+                        _merged.append({
+                            "SKU":       str(_a.get("SKU") or "").strip(),
+                            "# Cartons": _safe_int_s(_a.get("# Cartons")),
+                        })
 
-            # Totals
+                    # Validate
+                    _val_errors = []
+                    for _vrow in _merged:
+                        _vsku = str(_vrow.get("SKU") or "").strip()
+                        _vnc  = _safe_int_s(_vrow.get("# Cartons"))
+                        if not _vsku or _vnc <= 0:
+                            continue
+                        _vmax = _avail_map.get(_vsku, 0)
+                        if _vnc > _vmax:
+                            _val_errors.append(
+                                f"🚫 **{_vsku}**: {_vnc} cartons — only **{_vmax}** available"
+                            )
+
+                    if _val_errors:
+                        for _ve in _val_errors:
+                            st.error(_ve)
+                    else:
+                        try:
+                            save_shipment({
+                                "id":          _sid,
+                                "name":        _ship_name.strip(),
+                                "destination": _ship_dest.strip() or None,
+                                "notes":       _ship_notes.strip() or None,
+                            })
+                            _lines_to_save = [r for r in _merged
+                                              if r.get("SKU") and _safe_int_s(r.get("# Cartons")) > 0]
+                            save_shipment_lines(_sid, _lines_to_save)
+                            st.session_state[_sstate_key] = [
+                                {"SKU": r["SKU"], "# Cartons": _safe_int_s(r["# Cartons"])}
+                                for r in _lines_to_save
+                            ]
+                            st.session_state.pop(_sek, None)
+                            st.success("✅ Saved!")
+                            st.rerun()
+                        except Exception as _se:
+                            st.error(f"Save failed: {_se}")
+
+            # ── Totals (reflect last saved state) ─────────────────────────────
             _stot_cartons = _stot_units = 0
             _stot_prod = _stot_svc = _stot_nw = _stot_gw = _stot_cbm = 0.0
-            for _r in _seff_rows():
-                _sku_t = _r["SKU"]
+            for _r in _scur_list:
+                _sku_t = _r.get("SKU") or ""
                 if not _sku_t:
                     continue
                 _nc_t  = _safe_int_s(_r.get("# Cartons"))
@@ -2301,40 +2228,12 @@ with _inv_ship_tab:
                     f"{_stot_nw:.2f} kg NW · {_stot_gw:.2f} kg GW · {_stot_cbm:.3f} CBM"
                 )
 
-            # ── Buttons ───────────────────────────────────────────────────────
+            # ── Mark as Shipped / Delete (outside the form) ───────────────────
             if not _locked:
-                _sb1, _sb2, _sb3, _ = st.columns([2, 2, 2, 4])
-                with _sb1:
-                    if st.button("💾 Save", type="primary", key=f"ship_save_{_ctx}",
-                                 disabled=_has_errors,
-                                 help="Fix carton errors before saving" if _has_errors else None):
-                        try:
-                            save_shipment({
-                                "id":          _sid,
-                                "name":        _ship_name.strip(),
-                                "destination": _ship_dest.strip() or None,
-                                "notes":       _ship_notes.strip() or None,
-                            })
-                            # Clamp any over-allocated rows before saving (safety net)
-                            _lines_to_save = [
-                                {**r, "# Cartons": min(
-                                    _safe_int_s(r.get("# Cartons")),
-                                    _avail_map.get(str(r.get("SKU") or "").strip(), 0)
-                                )}
-                                for r in _seff_rows() if r["SKU"]
-                            ]
-                            save_shipment_lines(_sid, _lines_to_save)
-                            st.session_state.pop(_sstate_key, None)
-                            st.session_state.pop(_sek, None)
-                            st.success("✅ Shipment saved.")
-                            st.rerun()
-                        except Exception as _se:
-                            st.error(f"Save failed: {_se}")
-
+                _, _sb2, _sb3 = st.columns([6, 2, 2])
                 with _sb2:
                     if st.button("✅ Mark as Shipped", key=f"ship_mark_{_ctx}"):
                         st.session_state[f"ship_confirm_{_ctx}"] = True
-
                 with _sb3:
                     if st.button("🗑️ Delete", key=f"ship_del_{_ctx}"):
                         st.session_state[f"ship_del_confirm_{_ctx}"] = True
@@ -2344,7 +2243,6 @@ with _inv_ship_tab:
                     _mc1, _mc2, _ = st.columns([2, 2, 6])
                     with _mc1:
                         if st.button("Yes, ship it", type="primary", key=f"ship_yes_{_ctx}"):
-                            save_shipment_lines(_sid, [r for r in _seff_rows() if r["SKU"]])
                             mark_shipped(_sid)
                             st.session_state.pop(f"ship_confirm_{_ctx}", None)
                             st.session_state.pop(_sstate_key, None)
