@@ -1971,109 +1971,77 @@ with _inv_ship_tab:
                     + (f" · {_ship_dest_pl}" if _ship_dest_pl else "")
                 )
 
-                # ── Grand totals bar (unique per SKU to avoid double-counting) ─
-                _seen_skus = set()
-                _pl_cartons = _pl_units = 0
-                _pl_nw = _pl_gw = _pl_cbm = 0.0
-                _pl_mfg = _pl_svc = 0.0
-                for _pr in _pl_rows:
-                    if _pr["sku"] not in _seen_skus:
-                        _seen_skus.add(_pr["sku"])
-                        _pl_cartons += _pr["num_cartons"]
-                        _pl_units   += _pr["total_units"]
-                        _pl_nw      += _pr["total_nw_kg"]
-                        _pl_gw      += _pr["total_gw_kg"]
-                        _pl_cbm     += _pr["total_cbm"]
-                    _pl_mfg += _pr["total_mfg"]
-                    _pl_svc += _pr["total_svc"]
+                # ── Build flat table: one row per (SKU × item) ────────────────
+                # GW and CBM repeat for each item of the same SKU (SKU-level values)
+                # NW is per-item: net_wt_g_per_unit × qty / 1000
+                _tbl_rows = []
+                for _r in _pl_rows:
+                    _tbl_rows.append({
+                        "Item":        _r["item_name"] or "—",
+                        "Product":     _r["product"],
+                        "Ctns":        _r["num_cartons"],
+                        "Qty (pcs)":   _r["qty_total"],
+                        "GW (kg)":     _r["total_gw_kg"],
+                        "NW (kg)":     round(_r["net_wt_g_per_unit"] * _r["qty_total"] / 1000, 2),
+                        "CBM":         _r["total_cbm"],
+                        "HS Code (NA)": _r["hst_code_na"],
+                        "HS Code (UK)": _r["hst_code_uk"],
+                    })
+
+                _pl_df = pd.DataFrame(_tbl_rows)
+
+                # ── Grand totals (SKU-level values deduplicated) ───────────────
+                _seen = set()
+                _tot_ctns = _tot_gw = _tot_cbm = 0.0
+                _tot_qty = _tot_nw = 0.0
+                for _r in _pl_rows:
+                    if _r["sku"] not in _seen:
+                        _seen.add(_r["sku"])
+                        _tot_ctns += _r["num_cartons"]
+                        _tot_gw   += _r["total_gw_kg"]
+                        _tot_cbm  += _r["total_cbm"]
+                    _tot_qty += _r["qty_total"]
+                    _tot_nw  += round(_r["net_wt_g_per_unit"] * _r["qty_total"] / 1000, 2)
 
                 st.markdown(
-                    f"**{_pl_cartons} cartons · {_pl_units} units · "
-                    f"{_pl_nw:.2f} kg NW · {_pl_gw:.2f} kg GW · {_pl_cbm:.3f} CBM · "
-                    f"${_pl_mfg:.2f} mfg · ${_pl_svc:.2f} svc**"
+                    f"**{int(_tot_ctns)} Ctns · {int(_tot_qty)} pcs · "
+                    f"GW {_tot_gw:.2f} kg · NW {_tot_nw:.2f} kg · {_tot_cbm:.3f} CBM**"
                 )
-                st.divider()
 
-                # ── Group rows by SKU, show items as primary rows ─────────────
-                from itertools import groupby as _groupby
-                for _sku_key, _sku_group in _groupby(_pl_rows, key=lambda r: r["sku"]):
-                    _sku_rows = list(_sku_group)
-                    _first    = _sku_rows[0]
-
-                    # SKU header
-                    st.markdown(
-                        f"**{_sku_key}** — {_first['product'][:70]}  ·  "
-                        f"{_first['num_cartons']} cartons / {_first['total_units']} units  ·  "
-                        f"{_first['total_nw_kg']:.2f} kg NW · {_first['total_gw_kg']:.2f} kg GW · "
-                        f"{_first['total_cbm']:.3f} CBM"
+                _no_items = [r["Item"] for r in _tbl_rows if r["Item"] == "—"]
+                if _no_items:
+                    st.warning(
+                        f"⚠️ {len(_no_items)} line(s) have no items linked. "
+                        "Add Part ID 1/2 to those products in the Products tab."
                     )
 
-                    # Build items table (item is the primary row)
-                    _item_table = []
-                    for _r in _sku_rows:
-                        _item_table.append({
-                            "Part ID":        _r["part_id"],
-                            "Item":           _r["item_name"],
-                            "HS Code (NA)":   _r["hst_code_na"],
-                            "HS Code (UK)":   _r["hst_code_uk"],
-                            "Mfg $/unit":     _r["mfg_per_unit"],
-                            "Qty Total":      _r["qty_total"],
-                            "Mfg $ Total":    _r["total_mfg"],
-                            "Net Wt/unit(g)": _r["net_wt_g_per_unit"],
-                            "Total Wt (kg)":  _r["total_weight_kg"],
-                            "Currency":       _r["currency"],
-                        })
+                st.dataframe(
+                    _pl_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "Item":          st.column_config.TextColumn("Item",        width=180),
+                        "Product":       st.column_config.TextColumn("Product",     width=260),
+                        "Ctns":          st.column_config.NumberColumn("Ctns",      format="%d",      width=65),
+                        "Qty (pcs)":     st.column_config.NumberColumn("Qty (pcs)", format="%d",      width=90),
+                        "GW (kg)":       st.column_config.NumberColumn("GW (kg)",   format="%.2f",    width=90),
+                        "NW (kg)":       st.column_config.NumberColumn("NW (kg)",   format="%.2f",    width=90),
+                        "CBM":           st.column_config.NumberColumn("CBM",       format="%.3f",    width=75),
+                        "HS Code (NA)":  st.column_config.TextColumn("HS Code (NA)", width=115),
+                        "HS Code (UK)":  st.column_config.TextColumn("HS Code (UK)", width=115),
+                    },
+                )
 
-                    if _item_table and any(r["Item"] for r in _item_table):
-                        st.dataframe(
-                            pd.DataFrame(_item_table),
-                            hide_index=True,
-                            use_container_width=True,
-                            column_config={
-                                "Part ID":        st.column_config.TextColumn(width=100),
-                                "Item":           st.column_config.TextColumn(width=220),
-                                "HS Code (NA)":   st.column_config.TextColumn(width=115),
-                                "HS Code (UK)":   st.column_config.TextColumn(width=115),
-                                "Mfg $/unit":     st.column_config.NumberColumn(format="$%.4f", width=105),
-                                "Qty Total":      st.column_config.NumberColumn(format="%d",    width=90),
-                                "Mfg $ Total":    st.column_config.NumberColumn(format="$%.2f", width=105),
-                                "Net Wt/unit(g)": st.column_config.NumberColumn(format="%.1f g", width=115),
-                                "Total Wt (kg)":  st.column_config.NumberColumn(format="%.2f kg", width=110),
-                                "Currency":       st.column_config.TextColumn(width=75),
-                            },
-                        )
-                    else:
-                        st.caption("⚠️ No items linked — add Part ID 1/2 to this product in the Products tab.")
+                st.caption(
+                    "GW = gross weight per SKU (all cartons) · "
+                    "NW = net item weight for customs declaration · "
+                    "GW/NW repeat per row when a SKU has multiple items"
+                )
 
-                    st.markdown("---")
-
-                # ── Download CSV (item-centric, flat) ─────────────────────────
-                _csv_df = pd.DataFrame([{
-                    "SKU":             r["sku"],
-                    "Product":         r["product"],
-                    "# Cartons":       r["num_cartons"],
-                    "Carton Units":    r["carton_units"],
-                    "# Units Total":   r["total_units"],
-                    "NW/Carton (kg)":  r["nw_kg"],
-                    "GW/Carton (kg)":  r["gw_kg"],
-                    "CBM/Carton":      r["cbm"],
-                    "NW Total (kg)":   r["total_nw_kg"],
-                    "GW Total (kg)":   r["total_gw_kg"],
-                    "CBM Total":       r["total_cbm"],
-                    "Part ID":         r["part_id"],
-                    "Item":            r["item_name"],
-                    "HS Code (NA)":    r["hst_code_na"],
-                    "HS Code (UK)":    r["hst_code_uk"],
-                    "Mfg $/unit":      r["mfg_per_unit"],
-                    "Qty Total":       r["qty_total"],
-                    "Mfg $ Total":     r["total_mfg"],
-                    "Net Wt/unit (g)": r["net_wt_g_per_unit"],
-                    "Total Wt (kg)":   r["total_weight_kg"],
-                    "Currency":        r["currency"],
-                } for r in _pl_rows])
+                # ── Download CSV ───────────────────────────────────────────────
                 st.download_button(
                     "⬇️ Download Packing List CSV",
-                    data=_csv_df.to_csv(index=False),
+                    data=_pl_df.to_csv(index=False),
                     file_name=f"packing_list_{_ship_title}.csv",
                     mime="text/csv",
                     key=f"dl_pl_{_sid}",
