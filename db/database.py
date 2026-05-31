@@ -264,7 +264,46 @@ def init_db():
     _migrate_products_part_ids(conn)
     _migrate_productions(conn)
     _migrate_shipments(conn)
+    _migrate_bid_changes(conn)
+    _migrate_recommendations_notes(conn)
     conn.close()
+
+
+def _migrate_bid_changes(conn: sqlite3.Connection):
+    """Create bid_changes table — auto-populated on report upload when bid shifts."""
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS bid_changes (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_name  TEXT NOT NULL,
+                placement_type TEXT NOT NULL,
+                marketplace    TEXT NOT NULL,
+                report_date    TEXT NOT NULL,
+                bid_before     REAL NOT NULL,
+                bid_after      REAL NOT NULL,
+                roas           REAL,
+                spend          REAL,
+                purchases      INTEGER,
+                profit         REAL,
+                created_at     TEXT DEFAULT (datetime('now')),
+                UNIQUE(campaign_name, placement_type, marketplace, report_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_bid_changes_camp
+                ON bid_changes(campaign_name, marketplace, report_date);
+        """)
+    except Exception:
+        pass
+
+
+def _migrate_recommendations_notes(conn: sqlite3.Connection):
+    """Add notes column to recommendations if missing."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(recommendations)").fetchall()]
+        if "notes" not in cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN notes TEXT")
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _migrate_product_costs_new_product(conn: sqlite3.Connection):

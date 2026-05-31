@@ -23,6 +23,7 @@ from products import (
 )
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
 from db.performance import save_performance_snapshot, get_performance_alerts, get_bad_roas_campaigns, reset_snapshots, get_snapshot_count, get_snapshot_summary
+from db.bid_changes import record_bid_changes, get_bid_history, get_all_bid_changes, save_recommendation_note
 from db.settings import get_alert_thresholds, save_setting
 from db.inventory import (
     import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
@@ -2546,122 +2547,112 @@ with tab_ads:
     _placement_tab, = st.tabs(["📍 Placement"])
 
     with _placement_tab:
-        _recs_view, _alerts_view, _analysis_view = st.tabs(["📋 Recommendations", "🔔 Alerts", "📤 Upload Reports"])
+        _recs_view, _history_view, _alerts_view, _analysis_view = st.tabs(["📋 Recommendations", "📜 History", "🔔 Alerts", "📤 Upload Reports"])
 
         with _recs_view:
-            # ── RECOMMENDATIONS content ───────────────────────────────────────
-            st.markdown("# 📋 Recommendations History")
+            # ── RECOMMENDATIONS ───────────────────────────────────────────────
+            st.markdown("# 📋 Recommendations")
             st.markdown(
-                f"<p style='color:{T['text_secondary']};'>Track placement bid recommendations over time "
-                f"and record outcomes after the review window.</p>",
+                f"<p style='color:{T['text_secondary']};'>Auto-generated placement bid recommendations. "
+                f"Select a row to see bid history and add a note.</p>",
                 unsafe_allow_html=True
             )
-            st.divider()
 
-            # helpers used by the Edit & Log form (defined here so they are
-            # available both inside and outside the action bar)
-            _place_opts  = ["Top of Search", "Rest of Search", "Product Pages"]
-            _action_opts = ["Increase", "Decrease", "Disable", "Keep", "Brand awareness only"]
-            _type_opts   = ["SP", "SB"]
-            _mkt_opts    = ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"]
-
-            def _safe_int(val, default=0):
-                """Convert val to int safely, returning default for None/NaN/invalid."""
-                try:
-                    v = float(val)
-                    import math
-                    return default if math.isnan(v) else int(v)
-                except (TypeError, ValueError):
-                    return default
-
-            # ── Filter + list ─────────────────────────────────────────────────────────
-            rhf1, rhf2, rhf3, rhf4, rhf5 = st.columns(5)
+            # ── Filters ───────────────────────────────────────────────────────
+            rhf1, rhf2, rhf3, rhf4 = st.columns(4)
             with rhf1:
-                rh_market = st.selectbox("Filter by Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
+                rh_market = st.selectbox("Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
                 rh_market = None if rh_market == "all" else rh_market
             with rhf2:
-                rh_source = st.selectbox("Source", ["All", "Manual only", "Auto only"], key="rh_source")
-            with rhf3:
-                show_pending = st.checkbox("Show only pending review", value=False)
-            with rhf4:
                 hide_paused = st.checkbox(
                     "⏸ Hide paused",
                     value=True,
                     key="rh_hide_paused",
-                    help="Hide recommendations from campaigns whose End Date is 21+ days old (likely paused)"
+                    help="Hide campaigns whose End Date is 21+ days old (likely paused)"
                 )
-            with rhf5:
+            with rhf3:
                 show_critical_recs = st.checkbox(
                     "🚨 Critical only",
                     value=False,
                     key="rh_critical",
-                    help="🔴 Losing money (ROAS < breakeven)  ·  🟢 High-opportunity (score ≥ 70)"
+                    help="🔴 Losing money (ROAS < breakeven)  ·  🟢 High-opportunity"
                 )
+            with rhf4:
+                show_pending = st.checkbox("⏰ Pending review only", value=False)
 
             recs_df = get_recommendations_history(marketplace=rh_market)
+            # Auto-generated only
+            if not recs_df.empty and "source" in recs_df.columns:
+                recs_df = recs_df[recs_df["source"].fillna("auto") == "auto"]
 
-            # Apply source filter
-            if not recs_df.empty and rh_source != "All":
-                _src_val = "manual" if rh_source == "Manual only" else "auto"
-                recs_df = recs_df[recs_df["source"].fillna("auto") == _src_val]
-
-            # Sort: highest score first, then newest date
             if not recs_df.empty:
                 recs_df["score"] = pd.to_numeric(recs_df["score"], errors="coerce").fillna(0)
-                recs_df = recs_df.sort_values(["score", "date_given"], ascending=[False, False]).reset_index(drop=True)
 
-            if recs_df.empty:
-                st.info("No recommendations logged yet. Run an analysis to generate them.")
-            else:
-                if show_pending:
-                    today_str_flt = str(date.today())
-                    recs_df = recs_df[
-                        (recs_df["review_date"].fillna("") <= today_str_flt) &
-                        (recs_df["outcome"].isna() | (recs_df["outcome"] == ""))
-                    ]
-
-                # Hide paused: end_date present and 21+ days before today
+                # Hide paused
                 if hide_paused and "end_date" in recs_df.columns:
                     _cutoff = str(date.today() - timedelta(days=21))
                     _has_end = recs_df["end_date"].notna() & (recs_df["end_date"] != "")
-                    _is_paused_row = _has_end & (recs_df["end_date"] < _cutoff)
-                    recs_df = recs_df[~_is_paused_row]
+                    recs_df = recs_df[~(_has_end & (recs_df["end_date"] < _cutoff))]
 
-                # Critical filter: LOSING placement (risk) or score ≥ 70 (opportunity)
+                # Critical only
                 if show_critical_recs:
-                    _rsn_col = recs_df["reasoning"].fillna("").str.upper()
+                    _rsn_col   = recs_df["reasoning"].fillna("").str.upper()
                     _is_losing = _rsn_col.str.startswith("LOSING")
                     _is_oppty  = recs_df["score"] >= 70
                     recs_df = recs_df[_is_losing | _is_oppty]
 
-                def _fmt_change(row):
-                    action = str(row.get("recommended_action") or "").strip()
-                    mult   = row.get("recommended_multiplier")
-                    try:
-                        pct = int(round(float(mult)))
-                    except (TypeError, ValueError):
-                        pct = None
-                    if action.lower() == "increase" and pct is not None:
-                        return f"+{pct}%"
-                    elif action.lower() == "decrease" and pct is not None:
-                        return f"-{pct}%"
-                    elif action.lower() == "no change":
-                        return "0%"
-                    return action or "—"
+                # Pending review only
+                if show_pending:
+                    _today_s = str(date.today())
+                    recs_df = recs_df[recs_df["review_date"].fillna("") <= _today_s]
 
+                # ── Sort: Isolation (losing) first by loss size, then Optimization by opportunity
+                def _sort_key(row):
+                    rsn = str(row.get("reasoning") or "").upper()
+                    spend = float(row.get("spend") or 0)
+                    if rsn.startswith("LOSING"):
+                        # Extract ROAS gap from reasoning if possible — use score as proxy
+                        return (0, -(row.get("score") or 0), -spend)
+                    else:
+                        return (1, -(row.get("score") or 0), -spend)
+
+                recs_df = recs_df.iloc[
+                    pd.DataFrame([_sort_key(r) for r in recs_df.to_dict("records")],
+                                 columns=["_tier", "_score", "_spend"])
+                    .sort_values(["_tier", "_score", "_spend"]).index
+                ].reset_index(drop=True)
+
+            def _fmt_change(row):
+                action = str(row.get("recommended_action") or "").strip()
+                mult   = row.get("recommended_multiplier")
+                try:
+                    pct = int(round(float(mult)))
+                except (TypeError, ValueError):
+                    pct = None
+                if action.lower() == "increase" and pct is not None:
+                    return f"+{pct}%"
+                elif action.lower() in ("decrease", "reduce to 0%") and pct is not None:
+                    return f"{pct}%"
+                return action or "—"
+
+            if recs_df.empty:
+                st.info("No recommendations yet. Run an analysis to generate them.")
+            else:
                 recs_display = recs_df.copy()
                 recs_display["change"] = recs_display.apply(_fmt_change, axis=1)
+                # Notes column (may not exist in old rows)
+                if "notes" not in recs_display.columns:
+                    recs_display["notes"] = ""
 
                 display_cols = [
-                    "id", "date_given", "end_date", "source", "score", "asin", "marketplace", "campaign_name",
-                    "placement_type", "campaign_type", "change",
-                    "reasoning", "review_date", "outcome"
+                    "date_given", "end_date", "asin", "marketplace", "campaign_name",
+                    "placement_type", "campaign_type", "change", "reasoning", "notes"
                 ]
                 existing_cols = [c for c in display_cols if c in recs_display.columns]
 
                 st.markdown(
                     f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
-                    "💡 Select a row to <strong>Edit &amp; Log</strong> or <strong>Record Outcome</strong>.</p>",
+                    "💡 Select a row to view bid history and add a note.</p>",
                     unsafe_allow_html=True,
                 )
                 _sel = st.dataframe(
@@ -2671,161 +2662,84 @@ with tab_ads:
                     on_select="rerun",
                     selection_mode="single-row",
                     column_config={
-                        "end_date":  st.column_config.TextColumn("📅 End Date", width=100),
-                        "change":    st.column_config.TextColumn("Change",      width=90),
-                        "reasoning": st.column_config.TextColumn("Reasoning",   width=400),
+                        "date_given":     st.column_config.TextColumn("Date", width=95),
+                        "end_date":       st.column_config.TextColumn("📅 End Date", width=95),
+                        "asin":           st.column_config.TextColumn("ASIN", width=110),
+                        "campaign_name":  st.column_config.TextColumn("Campaign", width=260),
+                        "placement_type": st.column_config.TextColumn("Placement", width=120),
+                        "campaign_type":  st.column_config.TextColumn("Type", width=55),
+                        "change":         st.column_config.TextColumn("Rec. Change", width=100),
+                        "reasoning":      st.column_config.TextColumn("Reasoning", width=380),
+                        "notes":          st.column_config.TextColumn("📝 Notes", width=200),
                     },
                     key="recs_table_sel",
                 )
 
-                # Action bar — appears when a row is selected.
-                # Selecting a row automatically pre-fills the Log form above.
-                # Guard against stale indices after a filter change.
+                # ── Selection panel ────────────────────────────────────────────
                 _sel_rows = _sel.selection.rows if _sel and hasattr(_sel, "selection") else []
                 if _sel_rows and _sel_rows[0] < len(recs_df):
-                    _sel_data = recs_df.iloc[_sel_rows[0]].to_dict()
-                    _sel_id   = _sel_data.get("id")
+                    _sel_data  = recs_df.iloc[_sel_rows[0]].to_dict()
+                    _sel_id    = int(_sel_data.get("id") or 0)
+                    _sel_camp  = str(_sel_data.get("campaign_name") or "")
+                    _sel_place = str(_sel_data.get("placement_type") or "")
+                    _sel_mkt   = str(_sel_data.get("marketplace") or "")
 
-                    # Auto-prefill the form on row click (no button needed).
-                    # Only trigger a rerun when the selection changes.
-                    _cur_pf_id = st.session_state.get("rec_prefill", {}).get("id")
-                    if _sel_id != _cur_pf_id:
-                        st.session_state["rec_prefill"] = _sel_data
-                        # Clear injection flag so values are re-injected for new record
-                        _new_fk = int(_sel_id) if _sel_id else 0
-                        st.session_state.pop(f"_pf_injected_{_new_fk}", None)
-                        st.rerun()
-
-                    _camp_preview     = str(_sel_data.get("campaign_name") or "")[:55]
-                    _place_preview    = str(_sel_data.get("placement_type") or "")
-                    _existing_outcome = str(_sel_data.get("outcome") or "")
-
+                    # Card
                     st.markdown(
                         f"<div style='background:{T['card_bg']};border:1px solid {T['card_border']};"
-                        f"border-radius:8px;padding:0.6rem 1rem;margin:6px 0;font-size:0.85rem;'>"
-                        f"<strong>#{int(_sel_data.get('id', 0))}</strong> &nbsp;·&nbsp; "
-                        f"{_camp_preview} &nbsp;·&nbsp; {_place_preview}"
-                        + (f"&nbsp;&nbsp;<span style='color:{T['score_hi']};'>✅ Outcome already recorded</span>" if _existing_outcome else "")
-                        + "</div>",
+                        f"border-radius:8px;padding:0.6rem 1rem;margin:8px 0;font-size:0.85rem;'>"
+                        f"<strong>{_sel_camp[:70]}</strong> &nbsp;·&nbsp; {_sel_place} &nbsp;·&nbsp; {_sel_mkt}"
+                        f"</div>",
                         unsafe_allow_html=True,
                     )
 
-                    # ── Edit & Log form (pre-filled from selection) ───────────────
-                    _pf = _sel_data   # same as rec_prefill at this point
+                    _panel_note, _panel_hist = st.columns([1, 2])
 
-                    def _pf_str(key):
-                        """Return _pf[key] as a clean string — empty for None/NaN/'nan'."""
-                        import math
-                        val = _pf.get(key)
-                        if val is None:
-                            return ""
-                        try:
-                            if isinstance(val, float) and math.isnan(val):
-                                return ""
-                        except Exception:
-                            pass
-                        s = str(val).strip()
-                        return "" if s.lower() in ("nan", "none", "") else s
-
-                    # _fk is a stable identifier for this prefill instance.
-                    _fk = int(_pf["id"]) if _pf.get("id") else 0
-
-                    # Guaranteed pre-fill: pop stale widget state then assign
-                    # directly to session_state BEFORE widgets render.
-                    _pf_injected = f"_pf_injected_{_fk}"
-                    if _pf and _fk and _pf_injected not in st.session_state:
-                        for _wk in [f"rf_asin_{_fk}", f"rf_camp_{_fk}", f"rf_rsn_{_fk}"]:
-                            st.session_state.pop(_wk, None)
-                        st.session_state[f"rf_asin_{_fk}"] = _pf_str("asin")
-                        st.session_state[f"rf_camp_{_fk}"] = _pf_str("campaign_name")
-                        st.session_state[f"rf_rsn_{_fk}"]  = _pf_str("reasoning")
-                        st.session_state[_pf_injected]      = True
-
-                    with st.expander("📋 Edit & Log (pre-filled from selection)", expanded=True):
-                        if st.button("✖ Clear pre-fill", key="clear_prefill"):
-                            st.session_state.pop("rec_prefill", None)
+                    # ── Notes field ────────────────────────────────────────────
+                    with _panel_note:
+                        st.markdown("**📝 Note**")
+                        _existing_note = str(_sel_data.get("notes") or "")
+                        _note_val = st.text_area(
+                            "Note",
+                            value=_existing_note,
+                            placeholder="e.g. Seasonal spike, competitor left market…",
+                            label_visibility="collapsed",
+                            key=f"note_{_sel_id}",
+                            height=100,
+                        )
+                        if st.button("💾 Save Note", key=f"save_note_{_sel_id}"):
+                            save_recommendation_note(_sel_id, _note_val)
+                            st.success("✅ Note saved.")
                             st.rerun()
 
-                        _form_key = f"rec_form_{_fk}"
-                        with st.form(_form_key, clear_on_submit=True):
-                            rc1, rc2 = st.columns(2)
-                            with rc1:
-                                r_date  = st.date_input("Date Given", value=date.today(),
-                                                        key=f"rf_date_{_fk}")
-                                r_asin  = st.text_input("ASIN (optional)",
-                                                        placeholder="B0XXXXXXXX",
-                                                        key=f"rf_asin_{_fk}")
-                                r_camp  = st.text_input("Campaign Name",
-                                                        key=f"rf_camp_{_fk}")
-                                _place_idx = _place_opts.index(_pf["placement_type"]) \
-                                    if _pf.get("placement_type") in _place_opts else 0
-                                r_place = st.selectbox("Placement", _place_opts, index=_place_idx,
-                                                       key=f"rf_place_{_fk}")
-                            with rc2:
-                                _type_idx = _type_opts.index(_pf["campaign_type"]) \
-                                    if _pf.get("campaign_type") in _type_opts else 0
-                                r_type    = st.selectbox("Campaign Type", _type_opts, index=_type_idx,
-                                                         key=f"rf_type_{_fk}")
-                                r_cur_mul = st.number_input("Current Bid Adjustment", min_value=0, max_value=900,
-                                                            value=_safe_int(_pf.get("current_multiplier")),
-                                                            disabled=True,
-                                                            key=f"rf_cur_{_fk}")
-                                _action_idx = next(
-                                    (i for i, a in enumerate(_action_opts)
-                                     if a.lower() == _pf_str("recommended_action").lower()), 0)
-                                r_action  = st.selectbox("Recommended Action", _action_opts, index=_action_idx,
-                                                         key=f"rf_action_{_fk}")
-                                r_rec_mul = st.number_input("New Bid Adjustment", min_value=0, max_value=900,
-                                                            value=_safe_int(_pf.get("recommended_multiplier")),
-                                                            key=f"rf_rec_{_fk}")
+                    # ── Bid history timeline ───────────────────────────────────
+                    with _panel_hist:
+                        st.markdown("**📈 Bid History** (auto-detected changes)")
+                        _bid_hist = get_bid_history(_sel_camp, _sel_place, _sel_mkt)
+                        if not _bid_hist:
+                            st.caption("No bid changes detected yet for this campaign/placement.")
+                        else:
+                            _bh_df = pd.DataFrame(_bid_hist)
+                            _bh_df["bid_before"] = _bh_df["bid_before"].apply(lambda x: f"{int(x)}%")
+                            _bh_df["bid_after"]  = _bh_df["bid_after"].apply(lambda x: f"{int(x)}%")
+                            _bh_df["roas"]       = _bh_df["roas"].apply(lambda x: f"{x:.2f}x" if x else "—")
+                            _bh_df["profit"]     = _bh_df["profit"].apply(lambda x: f"${x:.2f}" if x else "—")
+                            st.dataframe(
+                                _bh_df,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "report_date": st.column_config.TextColumn("Date", width=95),
+                                    "bid_before":  st.column_config.TextColumn("Bid Before", width=85),
+                                    "bid_after":   st.column_config.TextColumn("Bid After", width=85),
+                                    "roas":        st.column_config.TextColumn("ROAS", width=70),
+                                    "spend":       st.column_config.NumberColumn("Spend", format="$%.2f", width=80),
+                                    "purchases":   st.column_config.NumberColumn("Purchases", width=85),
+                                    "profit":      st.column_config.TextColumn("Profit", width=80),
+                                },
+                            )
 
-                            _mkt_idx = _mkt_opts.index(_pf["marketplace"]) \
-                                if _pf_str("marketplace") in _mkt_opts else 0
-                            r_mkt       = st.selectbox("Marketplace", _mkt_opts, index=_mkt_idx,
-                                                       key=f"rf_mkt_{_fk}")
-                            r_reasoning = st.text_area("Reasoning / Notes",
-                                                       key=f"rf_rsn_{_fk}")
-                            r_review    = st.date_input("Review Date", value=date.today() + timedelta(days=14),
-                                                        key=f"rf_review_{_fk}")
-
-                            if st.form_submit_button("📝 Log Change", type="primary"):
-                                save_recommendation({
-                                    "date_given":             str(r_date),
-                                    "asin":                   r_asin.strip().upper() or None,
-                                    "marketplace":            r_mkt,
-                                    "campaign_name":          r_camp,
-                                    "placement_type":         r_place,
-                                    "campaign_type":          r_type,
-                                    "current_multiplier":     r_cur_mul,
-                                    "recommended_action":     r_action,
-                                    "recommended_multiplier": r_rec_mul,
-                                    "reasoning":              r_reasoning,
-                                    "window_days":            14,
-                                    "review_date":            str(r_review),
-                                    "source":                 "manual",
-                                })
-                                st.session_state.pop("rec_prefill", None)
-                                st.success("✅ Recommendation saved.")
-                                st.rerun()
-
-                    # ── Record Outcome ────────────────────────────────────────────
-                    st.markdown("**✅ Record Outcome**")
-                    with st.form("outcome_form"):
-                        _oc_text = st.text_input(
-                            "What happened?",
-                            value=_existing_outcome,
-                            placeholder="e.g. ROAS improved from 2.1 to 3.4",
-                            label_visibility="collapsed",
-                        )
-                        if st.form_submit_button("💾 Save Outcome", type="primary"):
-                            if _oc_text.strip():
-                                update_recommendation_outcome(int(_sel_data["id"]), _oc_text.strip())
-                                st.success("✅ Outcome saved.")
-                                st.rerun()
-                            else:
-                                st.warning("Enter an outcome first.")
-
-                    # ── Debug cost breakdown panel ─────────────────────────────────
+                    # ── Debug cost breakdown panel ─────────────────────────────
                     _dbg_raw = _sel_data.get("debug_json") or ""
                     if _dbg_raw and _dbg_raw not in ("{}", "null", ""):
                         try:
@@ -2897,6 +2811,77 @@ with tab_ads:
                                         "Notes": st.column_config.TextColumn(width=300),
                                     },
                                 )
+
+        with _history_view:
+            # ── BID HISTORY content ───────────────────────────────────────────
+            st.markdown("# 📜 Bid Change History")
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.95rem;'>"
+                "Auto-detected bid adjustments — recorded whenever a placement's "
+                "bid changes between report uploads.</p>",
+                unsafe_allow_html=True,
+            )
+            st.divider()
+
+            from db.bid_changes import get_all_bid_changes as _get_all_bc
+
+            # Marketplace filter
+            _bc_markets = ["All"] + sorted({
+                str(r) for r in (
+                    get_all_bid_changes().get("marketplace", pd.Series(dtype=str)).dropna().unique()
+                    if False else []
+                )
+            })
+            # Simpler: load once to get marketplaces
+            _bc_df_all = _get_all_bc()
+            if _bc_df_all.empty:
+                st.info("No bid change history yet. Upload reports to start tracking.")
+            else:
+                _bc_markets = ["All"] + sorted(_bc_df_all["marketplace"].dropna().unique().tolist())
+                _bc_mp = st.selectbox(
+                    "Marketplace",
+                    _bc_markets,
+                    key="history_marketplace_filter",
+                )
+
+                _bc_df = _get_all_bc(None if _bc_mp == "All" else _bc_mp)
+
+                # Rename and format for display
+                _bc_display = _bc_df.copy()
+                _bc_display = _bc_display.rename(columns={
+                    "report_date":    "Date",
+                    "campaign_name":  "Campaign",
+                    "placement_type": "Placement",
+                    "marketplace":    "Marketplace",
+                    "bid_before":     "Before %",
+                    "bid_after":      "After %",
+                    "roas":           "ROAS",
+                    "spend":          "Spend",
+                    "purchases":      "Purchases",
+                    "profit":         "Profit",
+                })
+
+                _cur = "£" if (_bc_mp not in ("All", "amazon.com")) else "$"
+
+                st.dataframe(
+                    _bc_display,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Date":        st.column_config.TextColumn("Date",        width=100),
+                        "Campaign":    st.column_config.TextColumn("Campaign",    width=260),
+                        "Placement":   st.column_config.TextColumn("Placement",   width=130),
+                        "Marketplace": st.column_config.TextColumn("Marketplace", width=110),
+                        "Before %":    st.column_config.NumberColumn("Before %",  format="%d%%", width=80),
+                        "After %":     st.column_config.NumberColumn("After %",   format="%d%%", width=80),
+                        "ROAS":        st.column_config.NumberColumn("ROAS",      format="%.2f", width=70),
+                        "Spend":       st.column_config.NumberColumn("Spend",     format=f"{_cur}%.2f", width=90),
+                        "Purchases":   st.column_config.NumberColumn("Purchases", format="%d",   width=90),
+                        "Profit":      st.column_config.NumberColumn("Profit",    format=f"{_cur}%.2f", width=90),
+                    },
+                )
+
+                st.caption(f"{len(_bc_display):,} bid change records")
 
         with _alerts_view:
             # ── ALERTS content ────────────────────────────────────────────────
@@ -3203,6 +3188,7 @@ with tab_ads:
                         else str(date.today())
                     )
                     save_performance_snapshot(results, _snap_date, detected_marketplace)
+                    record_bid_changes(results, _snap_date, detected_marketplace)
 
                     # ── Auto-save recommendations to DB (batched) ────────────────────
                     today_str  = str(date.today())
