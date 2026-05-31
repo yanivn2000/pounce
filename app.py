@@ -2123,6 +2123,7 @@ with _inv_ship_tab:
             _scur_list = st.session_state[_sstate_key]
 
             _SSCHEMA = {
+                "Select": pd.Series(dtype=bool),
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
                 "Available": pd.Series(dtype=int),
                 "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
@@ -2132,12 +2133,16 @@ with _inv_ship_tab:
                 "Gross Weight (kg)": pd.Series(dtype=float),
                 "CBM": pd.Series(dtype=float),
             }
-            _sfull_rows = [_make_ship_row(r["SKU"], _safe_int_s(r.get("# Cartons")))
+            _sfull_rows = [{"Select": False, **_make_ship_row(r["SKU"], _safe_int_s(r.get("# Cartons")))}
                            for r in _scur_list]
             _sfull_df   = pd.DataFrame(_sfull_rows) if _sfull_rows else pd.DataFrame(_SSCHEMA)
 
+            # Select is editable; everything else except SKU and # Cartons is computed/read-only
             _SCOMPUTED = ["Available", "Product", "# Units", "Product Cost ($)",
                           "Service Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
+
+            # Rows checked in the Select column (for Delete Selected)
+            _selected_idxs = {i for i, chg in _sedit_map.items() if chg.get("Select")}
 
             # Effective rows = absorbed state + any pending SKU-only edits
             def _seff_rows():
@@ -2167,6 +2172,7 @@ with _inv_ship_tab:
                 st.error(_ve)
 
             _ship_col_cfg = {
+                "Select":            st.column_config.CheckboxColumn("✔", default=False, width=40),
                 "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=150),
                 "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=100),
                 "Available":         st.column_config.NumberColumn("Available Stock", width=115),
@@ -2181,11 +2187,11 @@ with _inv_ship_tab:
 
             if _locked:
                 st.dataframe(
-                    _sfull_df,
+                    _sfull_df.drop(columns=["Select"], errors="ignore"),
                     use_container_width=True,
                     hide_index=True,
                     height=800,
-                    column_config=_ship_col_cfg,
+                    column_config={k: v for k, v in _ship_col_cfg.items() if k != "Select"},
                 )
             else:
                 st.data_editor(
@@ -2197,6 +2203,18 @@ with _inv_ship_tab:
                     height=800,
                     column_config=_ship_col_cfg,
                 )
+                if st.button(
+                    "🗑️ Delete Selected",
+                    key=f"ship_del_sel_{_ctx}",
+                    disabled=not _selected_idxs,
+                    help="Check ✔ on rows you want to remove, then click here",
+                ):
+                    st.session_state[_sstate_key] = [
+                        r for i, r in enumerate(st.session_state[_sstate_key])
+                        if i not in _selected_idxs
+                    ]
+                    st.session_state.pop(_sek, None)
+                    st.rerun()
 
             # ── Totals ────────────────────────────────────────────────────────
             _stot_cartons = _stot_units = 0
