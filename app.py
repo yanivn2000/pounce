@@ -2134,23 +2134,18 @@ with _inv_ship_tab:
                            for r in _scur_list]
             _sfull_df = pd.DataFrame(_sfull_rows) if _sfull_rows else pd.DataFrame(_SSCHEMA)
 
-            # Computed (read-only) columns — SKU is editable via SelectboxColumn in table
-            _SCOMPUTED = ["Available", "Product", "# Units", "Product Cost ($)",
+            # SKU is read-only in the table (added via the form above)
+            _SCOMPUTED = ["SKU", "Available", "Product", "# Units", "Product Cost ($)",
                           "Service Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
-            # ── Validation — includes all pending edits + newly added rows ────
+            # ── Validation — pending carton edits only (SKU never changes in table) ──
             _eff_for_val = []
             for _vi, _vr in enumerate(_scur_list):
                 _vm = dict(_vr)
                 if _vi in _sedit_map:
                     _vm.update({k: v for k, v in _sedit_map[_vi].items()
-                                 if k in ("SKU", "# Cartons")})
+                                 if k in ("# Cartons",)})
                 _eff_for_val.append(_vm)
-            for _va in _sadded:
-                _eff_for_val.append({
-                    "SKU":       str(_va.get("SKU") or "").strip(),
-                    "# Cartons": _safe_int_s(_va.get("# Cartons")),
-                })
 
             _val_errors = []
             for _vrow in _eff_for_val:
@@ -2168,13 +2163,66 @@ with _inv_ship_tab:
             for _ve in _val_errors:
                 st.error(_ve)
 
+            # ── Add Line form (always open, one liner above the table) ────────
+            if not _locked:
+                _used_skus = {r["SKU"] for r in _scur_list if r.get("SKU")}
+                _add_skus  = [s for s in all_skus if s not in _used_skus]
+                _fa, _fb, _fc, _fd = st.columns([3, 2, 1, 4])
+                with _fa:
+                    _new_sku = st.selectbox(
+                        "SKU",
+                        options=[""] + _add_skus,
+                        index=0,
+                        label_visibility="collapsed",
+                        placeholder="Select SKU to add…",
+                        key=f"ship_add_sku_{_ctx}",
+                    )
+                with _fb:
+                    _new_sku_avail = _avail_map.get(_new_sku, 0) if _new_sku else 0
+                    _new_nc = st.number_input(
+                        "# Cartons",
+                        min_value=0,
+                        max_value=_new_sku_avail if _new_sku else 9999,
+                        step=1,
+                        value=0,
+                        label_visibility="collapsed",
+                        key=f"ship_add_nc_{_ctx}",
+                    )
+                with _fc:
+                    _add_disabled = (
+                        not _new_sku
+                        or _new_nc <= 0
+                        or _new_nc > _new_sku_avail
+                    )
+                    _add_help = (
+                        f"Max {_new_sku_avail} cartons available for {_new_sku}"
+                        if _new_sku and _new_nc > _new_sku_avail
+                        else None
+                    )
+                    if st.button(
+                        "Add",
+                        key=f"ship_add_btn_{_ctx}",
+                        disabled=_add_disabled,
+                        help=_add_help,
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        st.session_state[_sstate_key].append(
+                            {"SKU": _new_sku, "# Cartons": int(_new_nc)}
+                        )
+                        st.session_state.pop(_sek, None)
+                        st.rerun()
+                with _fd:
+                    if _new_sku:
+                        st.caption(f"Available: **{_new_sku_avail}** cartons")
+
             # Read selected rows (for Delete Selected)
             _selected_idxs = {i for i, chg in _sedit_map.items()
                               if chg.get("Select", False)}
 
             _ship_col_cfg = {
                 "Select":            st.column_config.CheckboxColumn("✔", default=False, width=40),
-                "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=140),
+                "SKU":               st.column_config.TextColumn("SKU", width=140),
                 "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=100),
                 "Available":         st.column_config.NumberColumn("Available Stock", width=115),
                 "Product":           st.column_config.TextColumn("Product", width=220),
@@ -2195,11 +2243,10 @@ with _inv_ship_tab:
                     column_config={k: v for k, v in _ship_col_cfg.items() if k != "Select"},
                 )
             else:
-                st.caption("Click ✚ (bottom-left) to add a row · check ✔ then Delete Selected to remove")
                 st.data_editor(
                     _sfull_df,
                     use_container_width=True,
-                    num_rows="dynamic",
+                    num_rows="fixed",
                     key=_sek,
                     disabled=_SCOMPUTED,
                     height=800,
