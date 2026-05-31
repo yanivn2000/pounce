@@ -2218,6 +2218,9 @@ with _inv_ship_tab:
                                 {"SKU": _new_sku, "# Cartons": int(_new_nc)}
                             )
                             st.session_state.pop(sek, None)
+                            # Clear form fields so it's ready for the next SKU
+                            st.session_state.pop(f"ship_add_sku_{ctx}", None)
+                            st.session_state.pop(f"ship_add_nc_{ctx}", None)
                             st.rerun(scope="app")
                     with _fd:
                         if _sku_ok:
