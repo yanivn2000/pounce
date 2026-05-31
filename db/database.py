@@ -266,6 +266,7 @@ def init_db():
     _migrate_shipments(conn)
     _migrate_bid_changes(conn)
     _migrate_recommendations_notes(conn)
+    _migrate_placement_snapshots(conn)
     conn.close()
 
 
@@ -290,6 +291,34 @@ def _migrate_bid_changes(conn: sqlite3.Connection):
             );
             CREATE INDEX IF NOT EXISTS idx_bid_changes_camp
                 ON bid_changes(campaign_name, marketplace, report_date);
+        """)
+    except Exception:
+        pass
+
+
+def _migrate_placement_snapshots(conn: sqlite3.Connection):
+    """
+    Create placement_snapshots table — records ROAS/spend/purchases/bid_pct
+    on EVERY report upload (not only on bid changes).
+    Used to answer "did the bid change work?" by comparing ROAS before/after.
+    """
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS placement_snapshots (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_name  TEXT NOT NULL,
+                placement_type TEXT NOT NULL,
+                marketplace    TEXT NOT NULL,
+                report_date    TEXT NOT NULL,
+                roas           REAL,
+                spend          REAL,
+                purchases      INTEGER,
+                bid_pct        REAL,
+                created_at     TEXT DEFAULT (datetime('now')),
+                UNIQUE(campaign_name, placement_type, marketplace, report_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pl_snap_camp
+                ON placement_snapshots(campaign_name, marketplace, report_date);
         """)
     except Exception:
         pass

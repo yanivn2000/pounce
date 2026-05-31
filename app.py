@@ -23,7 +23,11 @@ from products import (
 )
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
 from db.performance import save_performance_snapshot, get_performance_alerts, get_bad_roas_campaigns, reset_snapshots, get_snapshot_count, get_snapshot_summary
-from db.bid_changes import record_bid_changes, get_bid_history, get_all_bid_changes, save_recommendation_note
+from db.bid_changes import (
+    record_bid_changes, record_placement_snapshots,
+    get_bid_history, get_bid_effectiveness, get_last_effectiveness_bulk,
+    get_all_bid_changes, get_untreated_losing, save_recommendation_note,
+)
 from db.settings import get_alert_thresholds, save_setting
 from db.inventory import (
     import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
@@ -2547,19 +2551,19 @@ with tab_ads:
     _placement_tab, = st.tabs(["📍 Placement"])
 
     with _placement_tab:
-        _recs_view, _history_view, _alerts_view, _analysis_view = st.tabs(["📋 Recommendations", "📜 History", "🔔 Alerts", "📤 Upload Reports"])
+        _recs_view, _history_view, _alerts_view, _analysis_view = st.tabs(["🔧 Workbench", "📜 History", "🔔 Alerts", "📤 Upload Reports"])
 
         with _recs_view:
-            # ── RECOMMENDATIONS ───────────────────────────────────────────────
-            st.markdown("# 📋 Recommendations")
+            # ── WORKBENCH ─────────────────────────────────────────────────────
+            st.markdown("# 🔧 Campaign Workbench")
             st.markdown(
                 f"<p style='color:{T['text_secondary']};'>Auto-generated placement bid recommendations. "
-                f"Select a row to see bid history and add a note.</p>",
+                f"Select a row to see bid history, effectiveness, and add a note.</p>",
                 unsafe_allow_html=True
             )
 
             # ── Filters ───────────────────────────────────────────────────────
-            rhf1, rhf2, rhf3, rhf4 = st.columns(4)
+            rhf1, rhf2, rhf3, rhf4, rhf5 = st.columns(5)
             with rhf1:
                 rh_market = st.selectbox("Marketplace", ["all", "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="rh_market")
                 rh_market = None if rh_market == "all" else rh_market
@@ -2579,6 +2583,13 @@ with tab_ads:
                 )
             with rhf4:
                 show_pending = st.checkbox("⏰ Pending review only", value=False)
+            with rhf5:
+                show_untreated = st.checkbox(
+                    "🕰️ Untreated only",
+                    value=False,
+                    key="rh_untreated",
+                    help="Losing campaigns with no bid action in the last 30 days"
+                )
 
             recs_df = get_recommendations_history(marketplace=rh_market)
             # Auto-generated only
@@ -2605,6 +2616,17 @@ with tab_ads:
                 if show_pending:
                     _today_s = str(date.today())
                     recs_df = recs_df[recs_df["review_date"].fillna("") <= _today_s]
+
+                # Untreated only — losing + no bid action in last 30 days
+                if show_untreated:
+                    _untreated_keys = get_untreated_losing(marketplace=rh_market)
+                    recs_df = recs_df[
+                        recs_df.apply(
+                            lambda r: (r["campaign_name"], r["placement_type"], r["marketplace"])
+                                      in _untreated_keys,
+                            axis=1
+                        )
+                    ]
 
                 # ── Sort: Isolation (losing) first by loss size, then Optimization by opportunity
                 def _sort_key(row):
@@ -2644,15 +2666,25 @@ with tab_ads:
                 if "notes" not in recs_display.columns:
                     recs_display["notes"] = ""
 
+                # ── Last Result column (effectiveness of most recent bid action) ──
+                _eff_map = get_last_effectiveness_bulk(marketplace=rh_market)
+                recs_display["last_result"] = recs_display.apply(
+                    lambda r: _eff_map.get(
+                        (r["campaign_name"], r["placement_type"], r["marketplace"]), "—"
+                    ),
+                    axis=1,
+                )
+
                 display_cols = [
                     "date_given", "end_date", "asin", "marketplace", "campaign_name",
-                    "placement_type", "campaign_type", "change", "reasoning", "notes"
+                    "placement_type", "campaign_type", "change", "last_result", "reasoning", "notes"
                 ]
                 existing_cols = [c for c in display_cols if c in recs_display.columns]
 
                 st.markdown(
                     f"<p style='font-size:0.8rem;color:{T['text_secondary']};margin-bottom:4px;'>"
-                    "💡 Select a row to view bid history and add a note.</p>",
+                    "💡 Select a row to view bid history and add a note. "
+                    "<b>Last Result</b> = ROAS change after the most recent bid action.</p>",
                     unsafe_allow_html=True,
                 )
                 _sel = st.dataframe(
@@ -2665,12 +2697,13 @@ with tab_ads:
                         "date_given":     st.column_config.TextColumn("Date", width=95),
                         "end_date":       st.column_config.TextColumn("📅 End Date", width=95),
                         "asin":           st.column_config.TextColumn("ASIN", width=110),
-                        "campaign_name":  st.column_config.TextColumn("Campaign", width=260),
+                        "campaign_name":  st.column_config.TextColumn("Campaign", width=240),
                         "placement_type": st.column_config.TextColumn("Placement", width=120),
                         "campaign_type":  st.column_config.TextColumn("Type", width=55),
                         "change":         st.column_config.TextColumn("Rec. Change", width=100),
-                        "reasoning":      st.column_config.TextColumn("Reasoning", width=380),
-                        "notes":          st.column_config.TextColumn("📝 Notes", width=200),
+                        "last_result":    st.column_config.TextColumn("Last Result", width=105),
+                        "reasoning":      st.column_config.TextColumn("Reasoning", width=340),
+                        "notes":          st.column_config.TextColumn("📝 Notes", width=180),
                     },
                     key="recs_table_sel",
                 )
@@ -2712,31 +2745,52 @@ with tab_ads:
                             st.success("✅ Note saved.")
                             st.rerun()
 
-                    # ── Bid history timeline ───────────────────────────────────
+                    # ── Bid history + effectiveness timeline ───────────────────
                     with _panel_hist:
-                        st.markdown("**📈 Bid History** (auto-detected changes)")
-                        _bid_hist = get_bid_history(_sel_camp, _sel_place, _sel_mkt)
-                        if not _bid_hist:
+                        st.markdown("**📈 Bid History & Effectiveness**")
+                        _bid_eff = get_bid_effectiveness(_sel_camp, _sel_place, _sel_mkt)
+                        if not _bid_eff:
                             st.caption("No bid changes detected yet for this campaign/placement.")
                         else:
-                            _bh_df = pd.DataFrame(_bid_hist)
-                            _bh_df["bid_before"] = _bh_df["bid_before"].apply(lambda x: f"{int(x)}%")
-                            _bh_df["bid_after"]  = _bh_df["bid_after"].apply(lambda x: f"{int(x)}%")
-                            _bh_df["roas"]       = _bh_df["roas"].apply(lambda x: f"{x:.2f}x" if x else "—")
-                            _bh_df["profit"]     = _bh_df["profit"].apply(lambda x: f"${x:.2f}" if x else "—")
+                            _cur_sym = "£" if "co.uk" in _sel_mkt else "$"
+                            _bh_df = pd.DataFrame(_bid_eff)
+                            # Format display columns
+                            _bh_df["bid_before"]     = _bh_df["bid_before"].apply(lambda x: f"{int(x)}%")
+                            _bh_df["bid_after"]      = _bh_df["bid_after"].apply(lambda x: f"{int(x)}%")
+                            _bh_df["roas_at_change"] = _bh_df["roas_at_change"].apply(lambda x: f"{x:.2f}x")
+                            _bh_df["roas_after"]     = _bh_df["roas_after"].apply(
+                                lambda x: f"{x:.2f}x" if x is not None else "⏳"
+                            )
+                            _bh_df["delta"] = _bh_df["delta"].apply(
+                                lambda x: (f"+{x:.2f}x" if x > 0 else f"{x:.2f}x") if x is not None else "—"
+                            )
+                            _bh_df["profit"] = _bh_df["profit"].apply(
+                                lambda x: f"{_cur_sym}{x:.2f}" if x else "—"
+                            )
                             st.dataframe(
-                                _bh_df,
+                                _bh_df[[
+                                    "report_date", "bid_before", "bid_after",
+                                    "roas_at_change", "roas_after", "delta", "result",
+                                    "spend", "purchases", "profit",
+                                ]],
                                 use_container_width=True,
                                 hide_index=True,
                                 column_config={
-                                    "report_date": st.column_config.TextColumn("Date", width=95),
-                                    "bid_before":  st.column_config.TextColumn("Bid Before", width=85),
-                                    "bid_after":   st.column_config.TextColumn("Bid After", width=85),
-                                    "roas":        st.column_config.TextColumn("ROAS", width=70),
-                                    "spend":       st.column_config.NumberColumn("Spend", format="$%.2f", width=80),
-                                    "purchases":   st.column_config.NumberColumn("Purchases", width=85),
-                                    "profit":      st.column_config.TextColumn("Profit", width=80),
+                                    "report_date":    st.column_config.TextColumn("Date",       width=95),
+                                    "bid_before":     st.column_config.TextColumn("Before",     width=70),
+                                    "bid_after":      st.column_config.TextColumn("After",      width=70),
+                                    "roas_at_change": st.column_config.TextColumn("ROAS then",  width=85),
+                                    "roas_after":     st.column_config.TextColumn("ROAS next",  width=85),
+                                    "delta":          st.column_config.TextColumn("Δ ROAS",     width=80),
+                                    "result":         st.column_config.TextColumn("Result",     width=65),
+                                    "spend":          st.column_config.NumberColumn("Spend",    format=f"{_cur_sym}%.2f", width=80),
+                                    "purchases":      st.column_config.NumberColumn("Purchases",width=85),
+                                    "profit":         st.column_config.TextColumn("Profit",     width=80),
                                 },
+                            )
+                            st.caption(
+                                "**Result:** ✅ ROAS improved · ❌ worsened · "
+                                "➡️ flat · ⏳ awaiting next upload"
                             )
 
                     # ── Debug cost breakdown panel ─────────────────────────────
@@ -3188,6 +3242,7 @@ with tab_ads:
                         else str(date.today())
                     )
                     save_performance_snapshot(results, _snap_date, detected_marketplace)
+                    record_placement_snapshots(results, _snap_date, detected_marketplace)
                     record_bid_changes(results, _snap_date, detected_marketplace)
 
                     # ── Auto-save recommendations to DB (batched) ────────────────────
