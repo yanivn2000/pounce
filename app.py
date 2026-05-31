@@ -1916,6 +1916,87 @@ with _inv_ship_tab:
     _sel_ship_id = st.session_state.get("ship_sel_id")
     _sel_ship    = get_shipment(_sel_ship_id) if _sel_ship_id else None
 
+    # ── Add Line fragment — defined at call-site scope (outside _ship_form) so
+    #    Streamlit gives it a stable identity and properly isolates its reruns.
+    #    Text-input Tab / number_input clicks rerun ONLY this fragment.
+    @st.fragment
+    def _ship_add_line_form(add_skus, avail_map, sstate_key, sek, ctx, ver):
+        _add_skus_set = set(add_skus)
+        _sku_key = f"ship_add_sku_{ctx}_{ver}"
+        _nc_key  = f"ship_add_nc_{ctx}_{ver}"
+        _btn_key = f"ship_add_btn_{ctx}_{ver}"
+
+        # Auto-focus the SKU input once per new version (after each Add)
+        _focus_key = f"ship_add_focus_{ctx}_{ver}"
+        if not st.session_state.get(_focus_key):
+            st.session_state[_focus_key] = True
+            st.components.v1.html(
+                """<script>
+                (function() {
+                    var t = setInterval(function() {
+                        var el = window.parent.document.querySelector(
+                            'input[placeholder="Paste or type SKU…"]'
+                        );
+                        if (el) { el.focus(); clearInterval(t); }
+                    }, 80);
+                    setTimeout(function() { clearInterval(t); }, 2000);
+                })();
+                </script>""",
+                height=0,
+            )
+
+        _fa, _fb, _fc, _fd = st.columns([3, 2, 1, 4])
+        with _fa:
+            _raw = st.text_input(
+                "SKU",
+                value="",
+                label_visibility="collapsed",
+                placeholder="Paste or type SKU…",
+                key=_sku_key,
+            )
+            _new_sku = _raw.strip() if _raw else ""
+            _sku_ok  = _new_sku in _add_skus_set
+            if _new_sku and not _sku_ok:
+                if _new_sku not in {s for s in avail_map if s not in _add_skus_set}:
+                    st.caption("⚠️ SKU not found")
+                else:
+                    st.caption("⚠️ Already in shipment")
+        with _fb:
+            _avail = avail_map.get(_new_sku, 0) if _sku_ok else 0
+            _new_nc = st.number_input(
+                "# Cartons",
+                min_value=0,
+                max_value=_avail if _sku_ok else 9999,
+                step=1,
+                value=0,
+                label_visibility="collapsed",
+                key=_nc_key,
+            )
+        with _fc:
+            _disabled = not _sku_ok or _new_nc <= 0 or _new_nc > _avail
+            _help     = (
+                f"Max {_avail} cartons available for {_new_sku}"
+                if _sku_ok and _new_nc > _avail else None
+            )
+            if st.button(
+                "Add",
+                key=_btn_key,
+                disabled=_disabled,
+                help=_help,
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state[sstate_key].append(
+                    {"SKU": _new_sku, "# Cartons": int(_new_nc)}
+                )
+                st.session_state.pop(sek, None)
+                # Bump version → new widget keys → inputs reset to defaults
+                st.session_state[f"ship_add_ver_{ctx}"] = ver + 1
+                st.rerun(scope="app")
+        with _fd:
+            if _sku_ok:
+                st.caption(f"Available: **{_avail}** cartons")
+
     @st.fragment
     def _ship_form(sel_ship, all_skus):
         if not sel_ship:
@@ -2163,97 +2244,12 @@ with _inv_ship_tab:
             for _ve in _val_errors:
                 st.error(_ve)
 
-            # ── Add Line form — isolated fragment so number_input reruns don't
-            #    touch the expensive data_editor below ─────────────────────────
+            # ── Add Line form ─────────────────────────────────────────────────
             if not _locked:
                 _used_skus = {r["SKU"] for r in _scur_list if r.get("SKU")}
                 _add_skus  = [s for s in all_skus if s not in _used_skus]
-                # Version counter: bumped on every Add so widget keys change,
-                # which forces Streamlit to reset the inputs to their defaults.
                 _form_ver  = st.session_state.get(f"ship_add_ver_{_ctx}", 0)
-
-                @st.fragment
-                def _add_line_form(add_skus, avail_map, sstate_key, sek, ctx, ver):
-                    _add_skus_set = set(add_skus)
-                    _sku_key = f"ship_add_sku_{ctx}_{ver}"
-                    _nc_key  = f"ship_add_nc_{ctx}_{ver}"
-                    _btn_key = f"ship_add_btn_{ctx}_{ver}"
-
-                    # Auto-focus the SKU input on first render of each new version
-                    _focus_key = f"ship_add_focus_{ctx}_{ver}"
-                    if not st.session_state.get(_focus_key):
-                        st.session_state[_focus_key] = True
-                        st.components.v1.html(
-                            f"""<script>
-                            (function() {{
-                                var t = setInterval(function() {{
-                                    var el = window.parent.document.querySelector(
-                                        'input[data-testid="stTextInput"][placeholder="Paste or type SKU…"]'
-                                    );
-                                    if (!el) el = window.parent.document.querySelector(
-                                        'input[placeholder="Paste or type SKU…"]'
-                                    );
-                                    if (el) {{ el.focus(); clearInterval(t); }}
-                                }}, 80);
-                                setTimeout(function() {{ clearInterval(t); }}, 2000);
-                            }})();
-                            </script>""",
-                            height=0,
-                        )
-
-                    _fa, _fb, _fc, _fd = st.columns([3, 2, 1, 4])
-                    with _fa:
-                        _raw = st.text_input(
-                            "SKU",
-                            value="",
-                            label_visibility="collapsed",
-                            placeholder="Paste or type SKU…",
-                            key=_sku_key,
-                        )
-                        _new_sku = _raw.strip() if _raw else ""
-                        _sku_ok  = _new_sku in _add_skus_set
-                        if _new_sku and not _sku_ok:
-                            if _new_sku not in {s for s in avail_map if s not in _add_skus_set}:
-                                st.caption("⚠️ SKU not found")
-                            else:
-                                st.caption("⚠️ Already in shipment")
-                    with _fb:
-                        _avail = avail_map.get(_new_sku, 0) if _sku_ok else 0
-                        _new_nc = st.number_input(
-                            "# Cartons",
-                            min_value=0,
-                            max_value=_avail if _sku_ok else 9999,
-                            step=1,
-                            value=0,
-                            label_visibility="collapsed",
-                            key=_nc_key,
-                        )
-                    with _fc:
-                        _disabled = not _sku_ok or _new_nc <= 0 or _new_nc > _avail
-                        _help     = (
-                            f"Max {_avail} cartons available for {_new_sku}"
-                            if _sku_ok and _new_nc > _avail else None
-                        )
-                        if st.button(
-                            "Add",
-                            key=_btn_key,
-                            disabled=_disabled,
-                            help=_help,
-                            type="primary",
-                            use_container_width=True,
-                        ):
-                            st.session_state[sstate_key].append(
-                                {"SKU": _new_sku, "# Cartons": int(_new_nc)}
-                            )
-                            st.session_state.pop(sek, None)
-                            # Bump version → new widget keys → inputs reset to defaults
-                            st.session_state[f"ship_add_ver_{ctx}"] = ver + 1
-                            st.rerun(scope="app")
-                    with _fd:
-                        if _sku_ok:
-                            st.caption(f"Available: **{_avail}** cartons")
-
-                _add_line_form(_add_skus, _avail_map, _sstate_key, _sek, _ctx, _form_ver)
+                _ship_add_line_form(_add_skus, _avail_map, _sstate_key, _sek, _ctx, _form_ver)
 
             # Read selected rows (for Delete Selected)
             _selected_idxs = {i for i, chg in _sedit_map.items()
