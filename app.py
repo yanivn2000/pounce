@@ -2093,6 +2093,8 @@ with _inv_ship_tab:
                     for ln in _db_lines
                 ]
 
+            # Stable-data pattern: only absorb structural changes (no dropdown in table
+            # so SKU edits never happen mid-table → no accidental scroll resets)
             _sdiffs    = st.session_state.get(_sek, {})
             _sedit_map = {int(k): v for k, v in (_sdiffs.get("edited_rows") or {}).items()}
             _sdel_base = set(_sdiffs.get("deleted_rows") or [])
@@ -2117,6 +2119,7 @@ with _inv_ship_tab:
 
             _scur_list = st.session_state[_sstate_key]
             _SSCHEMA = {
+                "Select": pd.Series(dtype=bool),
                 "SKU": pd.Series(dtype=str), "# Cartons": pd.Series(dtype=int),
                 "Available": pd.Series(dtype=int),
                 "Product": pd.Series(dtype=str), "# Units": pd.Series(dtype=int),
@@ -2126,26 +2129,22 @@ with _inv_ship_tab:
                 "Gross Weight (kg)": pd.Series(dtype=float),
                 "CBM": pd.Series(dtype=float),
             }
-            _sfull_rows = [_make_ship_row(r["SKU"], _safe_int_s(r.get("# Cartons")))
+            _sfull_rows = [{"Select": False, **_make_ship_row(r["SKU"], _safe_int_s(r.get("# Cartons")))}
                            for r in _scur_list]
             _sfull_df = pd.DataFrame(_sfull_rows) if _sfull_rows else pd.DataFrame(_SSCHEMA)
 
-            _SCOMPUTED = ["Available", "Product", "# Units", "Product Cost ($)",
+            # SKU is disabled (read-only) in the table — set via Add Line form only
+            _SCOMPUTED = ["SKU", "Available", "Product", "# Units", "Product Cost ($)",
                           "Service Cost ($)", "Net Weight (kg)", "Gross Weight (kg)", "CBM"]
 
-            # ── Validation — includes pending edits not yet committed ─────────
+            # ── Validation — includes pending carton edits ─────────────────────
             _eff_for_val = []
             for _vi, _vr in enumerate(_scur_list):
                 _vm = dict(_vr)
                 if _vi in _sedit_map:
                     _vm.update({k: v for k, v in _sedit_map[_vi].items()
-                                 if k in ("SKU", "# Cartons")})
+                                 if k in ("# Cartons",)})
                 _eff_for_val.append(_vm)
-            for _va in _sadded:
-                _eff_for_val.append({
-                    "SKU":       str(_va.get("SKU") or "").strip(),
-                    "# Cartons": _safe_int_s(_va.get("# Cartons")),
-                })
 
             _val_errors = []
             for _vrow in _eff_for_val:
@@ -2163,47 +2162,92 @@ with _inv_ship_tab:
             for _ve in _val_errors:
                 st.error(_ve)
 
+            # Read selected rows (for Delete Selected)
+            _selected_idxs = {i for i, chg in _sedit_map.items()
+                              if chg.get("Select", False)}
+
+            _ship_col_cfg = {
+                "Select":            st.column_config.CheckboxColumn("✔", default=False, width=40),
+                "SKU":               st.column_config.TextColumn("SKU", width=130),
+                "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=100),
+                "Available":         st.column_config.NumberColumn("Available Stock", width=115),
+                "Product":           st.column_config.TextColumn("Product", width=220),
+                "# Units":           st.column_config.NumberColumn("# Units", width=80),
+                "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=125),
+                "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=120),
+                "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
+                "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
+                "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
+            }
+
             if _locked:
                 st.dataframe(
-                    _sfull_df,
+                    _sfull_df.drop(columns=["Select"], errors="ignore"),
                     use_container_width=True,
                     hide_index=True,
-                    height=400,
-                    column_config={
-                        "SKU":               st.column_config.TextColumn("SKU", width=120),
-                        "# Cartons":         st.column_config.NumberColumn("# Cartons", width=110),
-                        "Available":         st.column_config.NumberColumn("Available Stock", width=120),
-                        "Product":           st.column_config.TextColumn("Product", width=200),
-                        "# Units":           st.column_config.NumberColumn("# Units", width=85),
-                        "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
-                        "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
-                        "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
-                        "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
-                        "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
-                    },
+                    height=800,
+                    column_config={k: v for k, v in _ship_col_cfg.items() if k != "Select"},
                 )
             else:
-                st.caption("Click + (bottom-left) to add a row · select row and press Delete to remove")
                 st.data_editor(
                     _sfull_df,
                     use_container_width=True,
-                    num_rows="dynamic",
+                    num_rows="fixed",
                     key=_sek,
                     disabled=_SCOMPUTED,
-                    height=400,
-                    column_config={
-                        "SKU":               st.column_config.SelectboxColumn("SKU", options=all_skus, required=True, width=120),
-                        "# Cartons":         st.column_config.NumberColumn("# Cartons", min_value=0, step=1, width=110),
-                        "Available":         st.column_config.NumberColumn("Available Stock", width=120),
-                        "Product":           st.column_config.TextColumn("Product", width=200),
-                        "# Units":           st.column_config.NumberColumn("# Units", width=85),
-                        "Product Cost ($)":  st.column_config.NumberColumn("Product Cost ($)", format="$%.2f", width=130),
-                        "Service Cost ($)":  st.column_config.NumberColumn("Service Cost ($)", format="$%.2f", width=125),
-                        "Net Weight (kg)":   st.column_config.NumberColumn("Net Weight (kg)", format="%.2f kg", width=120),
-                        "Gross Weight (kg)": st.column_config.NumberColumn("Gross Weight (kg)", format="%.2f kg", width=130),
-                        "CBM":               st.column_config.NumberColumn("CBM", format="%.3f", width=75),
-                    },
+                    height=800,
+                    column_config=_ship_col_cfg,
                 )
+
+                # ── Delete Selected ────────────────────────────────────────────
+                _del_col, _add_col = st.columns([1, 4])
+                with _del_col:
+                    if st.button(
+                        "🗑️ Delete Selected",
+                        key=f"ship_del_sel_{_ctx}",
+                        disabled=not _selected_idxs,
+                        help="Check the ✔ column to select rows, then click here to remove them",
+                    ):
+                        st.session_state[_sstate_key] = [
+                            r for i, r in enumerate(st.session_state[_sstate_key])
+                            if i not in _selected_idxs
+                        ]
+                        st.session_state.pop(_sek, None)
+                        st.rerun()
+
+                # ── Add Line form ──────────────────────────────────────────────
+                _used_skus = {r["SKU"] for r in _scur_list if r.get("SKU")}
+                _add_skus  = [s for s in all_skus if s not in _used_skus]
+                with st.expander("➕ Add Line", expanded=False):
+                    _af1, _af2, _af3 = st.columns([3, 2, 1])
+                    with _af1:
+                        _new_sku = st.selectbox(
+                            "SKU",
+                            options=[""] + _add_skus,
+                            index=0,
+                            key=f"ship_add_sku_{_ctx}",
+                        )
+                    with _af2:
+                        _new_nc = st.number_input(
+                            "# Cartons",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"ship_add_nc_{_ctx}",
+                        )
+                    with _af3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button(
+                            "Add",
+                            key=f"ship_add_btn_{_ctx}",
+                            disabled=not _new_sku or _new_nc <= 0,
+                            type="primary",
+                        ):
+                            st.session_state[_sstate_key].append(
+                                {"SKU": _new_sku, "# Cartons": int(_new_nc)}
+                            )
+                            st.session_state.pop(_sek, None)
+                            st.rerun()
 
             def _seff_rows():
                 _out = []
