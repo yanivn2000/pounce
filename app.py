@@ -1542,8 +1542,15 @@ with _inv_prod_tab:
             _del_base = set(_diffs.get("deleted_rows") or [])
             _added    = _diffs.get("added_rows") or []
 
-            if _del_base or _added:
-                # Structural change: commit everything into _state_key and reset
+            # Trigger re-render when # Cartons or SKU changes (not just add/delete)
+            # so computed columns (Units, Cost, Weight) update as soon as user leaves the cell
+            _has_data_change = any(
+                "# Cartons" in chg or "SKU" in chg
+                for chg in _edit_map.values()
+            )
+
+            if _del_base or _added or _has_data_change:
+                # Absorb all edits into stable state and reset editor so full_df rebuilds
                 _s = {i: dict(r) for i, r in enumerate(st.session_state[_state_key])
                       if i not in _del_base}
                 for _ri, _chg in _edit_map.items():
