@@ -244,33 +244,34 @@ def get_available_per_sku() -> dict[str, int]:
 
 def get_packing_list(shipment_id: int) -> list[dict]:
     """
-    Return packing-list data for a shipment.
-    Each dict = one shipment line (SKU) with a nested 'items' list.
+    Item-centric packing list.  Returns one dict per (shipment_line × item).
+    Items are resolved via products_catalog.part_id_1 / part_id_2 (NOT product_components).
 
-    Top-level keys:
+    Keys per row:
         sku, product, num_cartons, carton_units, total_units,
-        nw_kg, gw_kg, cbm,          ← per carton
+        nw_kg, gw_kg, cbm,                    ← per carton
         total_nw_kg, total_gw_kg, total_cbm,
-        unit_mfg, unit_svc,          ← per unit (sum of items)
+        item_name, part_id, item_type, currency,
+        hst_code_na, hst_code_uk,
+        mfg_per_unit, svc_per_unit,            ← per product unit
+        qty_total,                              ← = total_units (qty_per_product = 1)
         total_mfg, total_svc,
-        items: list[dict]
+        net_wt_g_per_unit, total_weight_kg
 
-    Item keys:
-        Item, Part ID, Type, Qty/Unit, Qty Total,
-        HS Code (NA), HS Code (UK),
-        Mfg $/unit, Svc $/unit, Mfg $ Total, Svc $ Total,
-        Net Weight (g), Currency
+    If a product has no items linked, one placeholder row is returned
+    with item fields empty so the product still appears.
     """
     conn = get_conn()
 
     lines = conn.execute("""
         SELECT sl.sku, sl.num_cartons,
-               pc.id         AS product_id,
                pc.name       AS product_name,
                pc.carton_units,
                pc.carton_nw_kg,
                pc.carton_gw_kg,
-               pc.carton_cbm
+               pc.carton_cbm,
+               pc.part_id_1,
+               pc.part_id_2
         FROM shipment_lines sl
         LEFT JOIN products_catalog pc ON pc.sku = sl.sku
         WHERE sl.shipment_id = ?
@@ -286,62 +287,63 @@ def get_packing_list(shipment_id: int) -> list[dict]:
         gw_kg  = float(ln["carton_gw_kg"] or 0)
         cbm    = float(ln["carton_cbm"]   or 0)
 
-        # ── Items linked via product_components ────────────────────────────────
-        items = []
-        if ln["product_id"]:
-            item_rows = conn.execute("""
-                SELECT i.name, i.part_id, i.item_type, i.currency,
-                       i.manufacturer_cost, i.service_cost,
-                       i.net_weight_grams,
-                       i.hst_code_na, i.hst_code_uk,
-                       pcomp.quantity
-                FROM product_components pcomp
-                JOIN items i ON i.id = pcomp.item_id
-                WHERE pcomp.product_id = ?
-                ORDER BY i.name
-            """, (ln["product_id"],)).fetchall()
+        part_ids = [p for p in (ln["part_id_1"], ln["part_id_2"]) if p]
 
-            for it in item_rows:
-                qty_pu   = int(it["quantity"] or 1)
-                mfg_pu   = round(float(it["manufacturer_cost"] or 0) * qty_pu, 4)
-                svc_pu   = round(float(it["service_cost"]      or 0) * qty_pu, 4)
-                items.append({
-                    "Item":           it["name"]         or "",
-                    "Part ID":        it["part_id"]      or "",
-                    "Type":           it["item_type"]    or "",
-                    "Qty/Unit":       qty_pu,
-                    "Qty Total":      qty_pu * total_units,
-                    "HS Code (NA)":   it["hst_code_na"]  or "",
-                    "HS Code (UK)":   it["hst_code_uk"]  or "",
-                    "Mfg $/unit":     mfg_pu,
-                    "Svc $/unit":     svc_pu,
-                    "Mfg $ Total":    round(mfg_pu * total_units, 2),
-                    "Svc $ Total":    round(svc_pu * total_units, 2),
-                    "Net Wt (g)":     float(it["net_weight_grams"] or 0),
-                    "Currency":       it["currency"] or "USD",
-                })
-
-        unit_mfg = round(sum(it["Mfg $/unit"] for it in items), 4)
-        unit_svc = round(sum(it["Svc $/unit"] for it in items), 4)
-
-        result.append({
-            "sku":          ln["sku"],
-            "product":      ln["product_name"] or ln["sku"] or "",
-            "num_cartons":  num_cartons,
+        _base = {
+            "sku":         ln["sku"] or "",
+            "product":     ln["product_name"] or ln["sku"] or "",
+            "num_cartons": num_cartons,
             "carton_units": carton_units,
-            "total_units":  total_units,
-            "nw_kg":        nw_kg,
-            "gw_kg":        gw_kg,
-            "cbm":          cbm,
-            "total_nw_kg":  round(nw_kg * num_cartons, 2),
-            "total_gw_kg":  round(gw_kg * num_cartons, 2),
-            "total_cbm":    round(cbm   * num_cartons, 3),
-            "unit_mfg":     unit_mfg,
-            "unit_svc":     unit_svc,
-            "total_mfg":    round(unit_mfg * total_units, 2),
-            "total_svc":    round(unit_svc * total_units, 2),
-            "items":        items,
-        })
+            "total_units": total_units,
+            "nw_kg":       nw_kg,
+            "gw_kg":       gw_kg,
+            "cbm":         cbm,
+            "total_nw_kg": round(nw_kg * num_cartons, 2),
+            "total_gw_kg": round(gw_kg * num_cartons, 2),
+            "total_cbm":   round(cbm   * num_cartons, 3),
+        }
+
+        if part_ids:
+            for pid in part_ids:
+                it = conn.execute("""
+                    SELECT name, part_id, item_type, currency,
+                           manufacturer_cost, service_cost,
+                           net_weight_grams, hst_code_na, hst_code_uk
+                    FROM items WHERE part_id = ?
+                """, (pid,)).fetchone()
+                if not it:
+                    continue
+                mfg_pu = float(it["manufacturer_cost"] or 0)
+                svc_pu = float(it["service_cost"]      or 0)
+                wt_g   = float(it["net_weight_grams"]  or 0)
+                result.append({
+                    **_base,
+                    "item_name":          it["name"]        or "",
+                    "part_id":            it["part_id"]     or "",
+                    "item_type":          it["item_type"]   or "",
+                    "hst_code_na":        it["hst_code_na"] or "",
+                    "hst_code_uk":        it["hst_code_uk"] or "",
+                    "mfg_per_unit":       round(mfg_pu, 4),
+                    "svc_per_unit":       round(svc_pu, 4),
+                    "qty_total":          total_units,
+                    "total_mfg":          round(mfg_pu * total_units, 2),
+                    "total_svc":          round(svc_pu * total_units, 2),
+                    "net_wt_g_per_unit":  wt_g,
+                    "total_weight_kg":    round(wt_g * total_units / 1000, 2),
+                    "currency":           it["currency"] or "USD",
+                })
+        else:
+            # Product has no items linked — show placeholder row
+            result.append({
+                **_base,
+                "item_name": "", "part_id": "", "item_type": "",
+                "hst_code_na": "", "hst_code_uk": "",
+                "mfg_per_unit": 0.0, "svc_per_unit": 0.0,
+                "qty_total": total_units,
+                "total_mfg": 0.0, "total_svc": 0.0,
+                "net_wt_g_per_unit": 0.0, "total_weight_kg": 0.0,
+                "currency": "USD",
+            })
 
     conn.close()
     return result
