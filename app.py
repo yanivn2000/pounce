@@ -64,6 +64,7 @@ from db.shipments import (
     get_stock_to_be_shipped, get_next_shipment_name,
     get_available_per_sku_excluding, get_packing_list,
 )
+from labels import generate_carton_labels_pdf
 
 init_db()
 # ── Session isolation ─────────────────────────────────────────────────────────
@@ -2247,6 +2248,31 @@ div:has(#ship-list-nav-marker) ~ div button {
                     f"**📊 TOTAL** · {_stot_cartons} cartons · {_stot_units} units · "
                     f"\\${_stot_prod:.2f} prod cost · \\${_stot_svc:.2f} svc cost · "
                     f"{_stot_nw:.2f} kg NW · {_stot_gw:.2f} kg GW · {_stot_cbm:.3f} CBM"
+                )
+
+            # ── Create Labels (always available) ──────────────────────────────
+            st.divider()
+            _lbl_col, _ = st.columns([2, 8])
+            with _lbl_col:
+                if _locked:
+                    _lbl_lines = get_shipment_lines(_sid)
+                else:
+                    _lbl_lines = [
+                        {"sku": r.get("SKU", ""), "num_cartons": _safe_int_s(r.get("# Cartons"))}
+                        for r in _seff_rows() if r.get("SKU")
+                    ]
+                _lbl_ship = {
+                    "name":        sel_ship.get("name", ""),
+                    "destination": _ship_dest if not _locked else (sel_ship.get("destination") or ""),
+                }
+                _lbl_pdf = generate_carton_labels_pdf(_lbl_ship, _lbl_lines, sku_info)
+                st.download_button(
+                    "🏷️ Create Labels",
+                    data=_lbl_pdf,
+                    file_name=f"{sel_ship['name']}_labels.pdf",
+                    mime="application/pdf",
+                    key=f"ship_labels_{_ctx}",
+                    use_container_width=True,
                 )
 
             # ── Buttons ───────────────────────────────────────────────────────
