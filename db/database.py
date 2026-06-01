@@ -907,6 +907,7 @@ def _migrate_shipments(conn: sqlite3.Connection):
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 name        TEXT NOT NULL UNIQUE,
                 destination TEXT,
+                address     TEXT,
                 status      TEXT NOT NULL DEFAULT 'draft',
                 notes       TEXT,
                 created_at  TEXT DEFAULT (datetime('now')),
@@ -919,6 +920,14 @@ def _migrate_shipments(conn: sqlite3.Connection):
                 num_cartons INTEGER NOT NULL DEFAULT 0
             );
         """)
+    except Exception:
+        pass
+    # Add address column to existing DBs that pre-date this field
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(shipments)").fetchall()]
+        if "address" not in cols:
+            conn.execute("ALTER TABLE shipments ADD COLUMN address TEXT")
+            conn.commit()
     except Exception:
         pass
 

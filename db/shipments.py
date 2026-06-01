@@ -53,7 +53,7 @@ def get_shipments() -> list[dict]:
 def get_shipment(shipment_id: int) -> dict | None:
     conn = get_conn()
     row = conn.execute(
-        "SELECT id, name, destination, status, notes FROM shipments WHERE id=?",
+        "SELECT id, name, destination, address, status, notes FROM shipments WHERE id=?",
         (shipment_id,)
     ).fetchone()
     conn.close()
@@ -63,7 +63,7 @@ def get_shipment(shipment_id: int) -> dict | None:
 def save_shipment(data: dict) -> int:
     """
     Insert or update a shipment header.
-    data keys: name, destination, notes, id (optional — omit for insert).
+    data keys: name, destination, address, notes, id (optional — omit for insert).
     Returns shipment id.
     """
     conn = get_conn()
@@ -72,21 +72,23 @@ def save_shipment(data: dict) -> int:
         if shipment_id:
             conn.execute("""
                 UPDATE shipments
-                SET name=?, destination=?, notes=?, updated_at=datetime('now')
+                SET name=?, destination=?, address=?, notes=?, updated_at=datetime('now')
                 WHERE id=? AND status='draft'
             """, (
                 data["name"].strip(),
                 data.get("destination") or None,
+                data.get("address") or None,
                 data.get("notes") or None,
                 shipment_id,
             ))
         else:
             cur = conn.execute("""
-                INSERT INTO shipments (name, destination, notes)
-                VALUES (?, ?, ?)
+                INSERT INTO shipments (name, destination, address, notes)
+                VALUES (?, ?, ?, ?)
             """, (
                 data["name"].strip(),
                 data.get("destination") or None,
+                data.get("address") or None,
                 data.get("notes") or None,
             ))
             shipment_id = cur.lastrowid

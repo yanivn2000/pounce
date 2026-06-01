@@ -1952,6 +1952,14 @@ div:has(#ship-list-nav-marker) ~ div button {
                 disabled=_locked,
                 key=f"ship_dest_{_ctx}",
             )
+        _ship_address = st.text_input(
+            "Address",
+            value=sel_ship.get("address") or "",
+            placeholder="e.g. 1 Commerce Dr, Carlisle, PA 17015, USA",
+            max_chars=100,
+            disabled=_locked,
+            key=f"ship_address_{_ctx}",
+        )
         _ship_notes = st.text_input(
             "Notes (optional)",
             value=sel_ship.get("notes") or "",
@@ -2264,6 +2272,7 @@ div:has(#ship-list-nav-marker) ~ div button {
                 _lbl_ship = {
                     "name":        sel_ship.get("name", ""),
                     "destination": _ship_dest if not _locked else (sel_ship.get("destination") or ""),
+                    "address":     _ship_address if not _locked else (sel_ship.get("address") or ""),
                 }
                 _lbl_pdf = generate_carton_labels_pdf(_lbl_ship, _lbl_lines, sku_info)
                 st.download_button(
@@ -2287,6 +2296,7 @@ div:has(#ship-list-nav-marker) ~ div button {
                                 "id":          _sid,
                                 "name":        _ship_name.strip(),
                                 "destination": _ship_dest.strip() or None,
+                                "address":     _ship_address.strip() or None,
                                 "notes":       _ship_notes.strip() or None,
                             })
                             _lines_to_save = [

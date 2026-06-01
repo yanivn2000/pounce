@@ -40,6 +40,7 @@ def generate_carton_labels_pdf(
     c = Canvas(buf, pagesize=A4)
 
     destination = (shipment.get("destination") or "").strip() or "—"
+    address     = (shipment.get("address") or "").strip()
     ship_name   = (shipment.get("name") or "").strip()
 
     page_num = 0
@@ -60,6 +61,7 @@ def generate_carton_labels_pdf(
             _draw_label(
                 c, W, H,
                 destination   = destination,
+                address       = address,
                 ship_name     = ship_name,
                 sku           = sku,
                 product_name  = product_name,
@@ -95,6 +97,7 @@ def _draw_label(
     H: float,
     *,
     destination: str,
+    address: str,
     ship_name: str,
     sku: str,
     product_name: str,
@@ -125,22 +128,31 @@ def _draw_label(
     c.setFillColor(_MUTED)
     c.drawString(x0, y, "SHIP TO")
 
-    # Destination box
+    # Destination box (destination name + optional address line)
     y -= 5 * mm
-    dest_lines = _wrap(destination, max_chars=42)
-    n_dest     = min(len(dest_lines), 3)
-    box_h      = n_dest * 7 * mm + 6 * mm
+    dest_lines = _wrap(destination, max_chars=42)[:2]
+    addr_lines = _wrap(address, max_chars=52)[:2] if address else []
+    total_lines = len(dest_lines) + len(addr_lines)
+    box_h = total_lines * 7 * mm + 6 * mm
     c.setFillColor(_LIGHT)
     c.setStrokeColor(_DARK)
     c.setLineWidth(0.5)
     c.roundRect(x0, y - box_h, width, box_h, 3 * mm, stroke=1, fill=1)
 
+    ty = y - 7 * mm
+    # Destination name — bold, larger
     c.setFont("Helvetica-Bold", 15)
     c.setFillColor(_DARK)
-    ty = y - 7 * mm
-    for dl in dest_lines[:3]:
+    for dl in dest_lines:
         c.drawString(x0 + 5 * mm, ty, dl)
         ty -= 7 * mm
+    # Address — regular, slightly smaller
+    if addr_lines:
+        c.setFont("Helvetica", 12)
+        c.setFillColor(colors.HexColor("#34495e"))
+        for al in addr_lines:
+            c.drawString(x0 + 5 * mm, ty, al)
+            ty -= 7 * mm
     y -= box_h + 8 * mm
 
     # ── Divider ───────────────────────────────────────────────────────
