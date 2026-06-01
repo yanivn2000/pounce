@@ -327,7 +327,7 @@ def get_untreated_losing(marketplace: str = None) -> set:
 
 
 def save_recommendation_note(rec_id: int, note: str):
-    """Save a short note on a recommendation row."""
+    """Save a short note on a single recommendation row."""
     conn = get_conn()
     with conn:
         conn.execute(
@@ -335,3 +335,20 @@ def save_recommendation_note(rec_id: int, note: str):
             (note.strip() or None, rec_id)
         )
     conn.close()
+
+
+def save_campaign_note(campaign_name: str, marketplace: str, note: str) -> int:
+    """
+    Save a note on ALL recommendation rows that share the same campaign_name
+    and marketplace (i.e. all placements of that campaign).
+    Returns the number of rows updated.
+    """
+    conn = get_conn()
+    with conn:
+        cur = conn.execute(
+            "UPDATE recommendations SET notes=? WHERE campaign_name=? AND marketplace=?",
+            (note.strip() or None, campaign_name, marketplace)
+        )
+        updated = cur.rowcount
+    conn.close()
+    return updated

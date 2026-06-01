@@ -26,7 +26,7 @@ from db.performance import save_performance_snapshot, get_performance_alerts, ge
 from db.bid_changes import (
     record_bid_changes, record_placement_snapshots,
     get_bid_history, get_bid_effectiveness, get_last_effectiveness_bulk,
-    get_all_bid_changes, get_untreated_losing, save_recommendation_note,
+    get_all_bid_changes, get_untreated_losing, save_recommendation_note, save_campaign_note,
 )
 from db.settings import get_alert_thresholds, save_setting
 from db.inventory import (
@@ -2914,9 +2914,18 @@ with tab_ads:
                             key=f"note_{_sel_id}",
                             height=100,
                         )
+                        _apply_all = st.checkbox(
+                            "Apply to all placements of this campaign",
+                            value=True,
+                            key=f"note_all_{_sel_id}",
+                        )
                         if st.button("💾 Save Note", key=f"save_note_{_sel_id}"):
-                            save_recommendation_note(_sel_id, _note_val)
-                            st.success("✅ Note saved.")
+                            if _apply_all:
+                                _n = save_campaign_note(_sel_camp, _sel_mkt, _note_val)
+                                st.success(f"✅ Note saved to all {_n} placements of this campaign.")
+                            else:
+                                save_recommendation_note(_sel_id, _note_val)
+                                st.success("✅ Note saved.")
                             st.rerun()
 
                     # ── Bid history + effectiveness timeline ───────────────────
