@@ -288,7 +288,7 @@ def get_sku_catalog_info() -> dict:
     """
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id, sku, name, carton_units, carton_nw_kg, carton_gw_kg, carton_cbm, "
+        "SELECT id, sku, upc, name, carton_units, carton_nw_kg, carton_gw_kg, carton_cbm, "
         "carton_length_cm, carton_width_cm, carton_height_cm "
         "FROM products_catalog WHERE sku IS NOT NULL AND sku != '' ORDER BY sku"
     ).fetchall()
@@ -299,6 +299,7 @@ def get_sku_catalog_info() -> dict:
         breakdown = calc_product_cost(row["id"])
         result[row["sku"]] = {
             "name":         row["name"] or "",
+            "upc":          row["upc"]  or "",
             "carton_units": row["carton_units"] or 0,
             "nw_kg":        row["carton_nw_kg"]  or 0.0,
             "gw_kg":        row["carton_gw_kg"]  or 0.0,

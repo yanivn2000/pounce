@@ -2289,7 +2289,7 @@ div:has(#ship-list-nav-marker) ~ div button {
 
             # ── Create Labels (always available) ──────────────────────────────
             st.divider()
-            _lbl_col, _csv_col, _ = st.columns([2, 2, 6])
+            _lbl_col, _csv_col, _wfs_col, _ = st.columns([2, 2, 2, 4])
 
             # Shared lines for both buttons
             if _locked:
@@ -2345,6 +2345,37 @@ div:has(#ship-list-nav-marker) ~ div button {
                     file_name=f"{sel_ship['name']}_box_content.csv",
                     mime="text/csv",
                     key=f"ship_csv_{_ctx}",
+                    use_container_width=True,
+                )
+
+            with _wfs_col:
+                # WFS box content CSV (Walmart Fulfillment Services format)
+                _wfs_rows = []
+                for _lr in _export_lines:
+                    _lsku = (_lr.get("sku") or "").strip()
+                    _lnc  = int(_lr.get("num_cartons") or 0)
+                    if not _lsku or _lnc <= 0:
+                        continue
+                    _inf  = sku_info.get(_lsku, {})
+                    _cu   = int(_inf.get("carton_units") or 0)
+                    _upc  = str(_inf.get("upc") or "").strip()
+                    _product_id = f"00{_upc}" if _upc else ""
+                    _wfs_rows.append({
+                        "Product type ID":                          "GTIN",
+                        "Product ID":                               _product_id,
+                        "SKU":                                      _lsku,
+                        "Item name":                                _inf.get("name") or "",
+                        "Item Qty (Total # of Sellable Units)":     _cu * _lnc,
+                        "Vendor pack Qty (# of Cases)":             _lnc,
+                        "Inner pack Qty (Sellable Units per Case)": _cu,
+                    })
+                _wfs_bytes = pd.DataFrame(_wfs_rows).to_csv(index=False).encode()
+                st.download_button(
+                    "📦 Box Content CSV WFS",
+                    data=_wfs_bytes,
+                    file_name=f"{sel_ship['name']}_box_content_wfs.csv",
+                    mime="text/csv",
+                    key=f"ship_wfs_{_ctx}",
                     use_container_width=True,
                 )
 
