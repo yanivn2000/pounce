@@ -2318,7 +2318,7 @@ div:has(#ship-list-nav-marker) ~ div button {
                     })
                 _csv_bytes = pd.DataFrame(_csv_rows).to_csv(index=False).encode()
                 st.download_button(
-                    "📦 Box Content CSV",
+                    "📦 Box Content CSV (in/lb)",
                     data=_csv_bytes,
                     file_name=f"{sel_ship['name']}_box_content.csv",
                     mime="text/csv",
