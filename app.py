@@ -339,6 +339,7 @@ with tab_inv:
         _overview     = get_inventory_overview(_cost_map_inv, _avg_sales)
 
         # ── Compare to Sold form ─────────────────────────────────────────────
+        st.markdown("#### 📊 Compare to Sold")
         _MARKETPLACES = ["amazon.com", "amazon.ca", "amazon.co.uk", "walmart.com"]
         _cs1, _cs2, _cs3, _cs4 = st.columns([2, 2, 2, 4])
         with _cs1:
