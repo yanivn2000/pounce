@@ -341,33 +341,6 @@ with tab_inv:
         if _overview.empty:
             st.info("No inventory data yet. Go to **Upload Data** or **Manual Entry** to add stock.")
         else:
-            # ── Alerts ───────────────────────────────────────────────────────
-            _alerts = get_inventory_alerts(_overview)
-            if _alerts:
-                _crit  = [a for a in _alerts if a["level"] == "critical"]
-                _urg   = [a for a in _alerts if a["level"] == "urgent"]
-                _plan  = [a for a in _alerts if a["level"] == "plan"]
-                _other = [a for a in _alerts if a["level"] not in ("critical","urgent","plan")]
-
-                if _crit:
-                    with st.expander(f"🔴 CRITICAL — {len(_crit)} stock-out risks", expanded=True):
-                        for a in _crit:
-                            st.markdown(f"**{a['title']}** (`{a['asin']}`) · {a['market']} · {a['msg']}")
-                if _urg:
-                    with st.expander(f"🟠 URGENT — {len(_urg)} need production now", expanded=True):
-                        for a in _urg:
-                            st.markdown(f"**{a['title']}** (`{a['asin']}`) · {a['market']} · {a['msg']}")
-                if _plan:
-                    with st.expander(f"🟡 PLAN — {len(_plan)} approaching reorder point"):
-                        for a in _plan:
-                            st.markdown(f"**{a['title']}** (`{a['asin']}`) · {a['market']} · {a['msg']}")
-                if _other:
-                    with st.expander(f"ℹ️ Other alerts ({len(_other)})"):
-                        for a in _other:
-                            st.markdown(f"**{a['title']}** (`{a['asin']}`) · {a['msg']}")
-
-            st.divider()
-
             # ── Summary matrix ────────────────────────────────────────────────
             # Location columns (skip PRODUCTION — replaced by Stock to Ship)
             _loc_labels   = {k: v["label"] for k, v in LOCATIONS.items()}
@@ -428,30 +401,27 @@ with tab_inv:
                 _overview[_avail_active].fillna(0).sum(axis=1).astype(int)
                 if _avail_active else 0
             )
+
+            # Value $: derive unit cost from value_usd/total_available computed
+            # in get_inventory_overview (same cost_map, avoids ASIN case issues).
+            # For rows with no FBA/AWD base (total_available=0), fall back to
+            # cost_map lookup with uppercase normalisation.
+            _cost_map_upper = {k.upper(): v for k, v in _cost_map_inv.items()}
+            _overview["_unit_cost"] = _overview.apply(
+                lambda r: (r["value_usd"] / r["total_available"])
+                          if (r.get("total_available") or 0) > 0
+                          else _cost_map_upper.get(str(r.get("asin", "")).upper(), 0),
+                axis=1,
+            )
             _overview["Value $"] = (
-                _overview["asin"].map(_cost_map_inv).fillna(0) * _overview["Total"]
+                _overview["_unit_cost"] * _overview["Total"]
             ).round(0).astype(int)
 
             _display_cols += ["Total", "Value $"]
-
-            # Days columns
-            _day_col_map = {
-                "days_fba_us": "Days US",
-                "days_fba_ca": "Days CA",
-                "days_fba_uk": "Days UK",
-            }
-            for raw_col, label in _day_col_map.items():
-                if raw_col in _overview.columns:
-                    _overview[label] = (
-                        pd.to_numeric(_overview[raw_col], errors="coerce")
-                        .round(0).astype("Int64")
-                    )
-                    _display_cols.append(label)
-
             _show_cols = [c for c in _display_cols if c in _overview.columns]
 
             # ── Totals row ────────────────────────────────────────────────────
-            _skip = {"ASIN", "Title", "asin", "title", "Days US", "Days CA", "Days UK"}
+            _skip     = {"ASIN", "Title", "asin", "title"}
             _num_cols = [c for c in _show_cols
                          if c not in _skip and pd.api.types.is_numeric_dtype(_overview[c])]
             _total_row = {c: "" for c in _show_cols}
@@ -465,53 +435,18 @@ with tab_inv:
                 ignore_index=True
             )
 
-            def _color_days(val):
-                try:
-                    if pd.isna(val):
-                        return ""
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    v = float(val)
-                except (TypeError, ValueError):
-                    return ""
-                if v < 45:
-                    return "background-color:#cf222e22;color:#cf222e;font-weight:700"
-                elif v < 90:
-                    return "background-color:#fb8f0022;color:#b45309;font-weight:700"
-                elif v < 135:
-                    return "background-color:#fff3b0;color:#7d4e00;font-weight:600"
-                return "background-color:#1a7f3722;color:#1a7f37"
-
             def _color_total_row(row):
-                """Bold + light grey background on the TOTAL row."""
                 if row.get("ASIN") == "TOTAL" or row.get("asin") == "TOTAL":
                     return ["background-color:#f0f0f0;font-weight:700"] * len(row)
                 return [""] * len(row)
 
-            _days_subset = [c for c in ["Days US", "Days CA", "Days UK"] if c in _show_cols]
             _styler = _display_df.style.apply(_color_total_row, axis=1)
-            if _days_subset:
-                _map_fn = getattr(_styler, "map", None) or getattr(_styler, "applymap")
-                _styler = _map_fn(_color_days, subset=_days_subset)
-
             st.dataframe(_styler, use_container_width=True, hide_index=True,
                          column_config={
                              "ASIN":    st.column_config.TextColumn(width=120),
                              "Title":   st.column_config.TextColumn(width=200),
                              "Value $": st.column_config.NumberColumn(format="$%d"),
-                             "Days US": st.column_config.NumberColumn(format="%d"),
-                             "Days CA": st.column_config.NumberColumn(format="%d"),
-                             "Days UK": st.column_config.NumberColumn(format="%d"),
                          })
-
-            st.markdown(
-                "<p style='font-size:0.78rem;color:#888;'>"
-                "🔴 &lt;45 days (critical) · 🟠 &lt;90 days (start production) · "
-                "🟡 &lt;135 days (plan purchase) · 🟢 OK · "
-                "Days = FBA live + inbound + AWD/3PL ÷ avg daily sales (last 30 days)</p>",
-                unsafe_allow_html=True,
-            )
 
     # ── UPLOAD DATA ───────────────────────────────────────────────────────────
     with _inv_upload_tab:
