@@ -32,7 +32,7 @@ from db.settings import get_alert_thresholds, save_setting
 from db.inventory import (
     import_fba_csv, import_awd_csv, import_spm_csv, import_whcn_csv,
     upsert_manual_inventory, save_sku_mapping,
-    get_inventory_overview, get_avg_daily_sales, get_inventory_alerts,
+    get_inventory_overview, get_avg_daily_sales, get_inventory_alerts, get_sold_units,
     get_latest_inventory, LOCATIONS, FBA_LOCATIONS,
 )
 from db.importer import import_orders_csv, save_recommendation, save_recommendations_batch, update_recommendation_outcome
@@ -338,6 +338,31 @@ with tab_inv:
         _avg_sales    = get_avg_daily_sales(days=30)
         _overview     = get_inventory_overview(_cost_map_inv, _avg_sales)
 
+        # ── Compare to Sold form ─────────────────────────────────────────────
+        _MARKETPLACES = ["amazon.com", "amazon.ca", "amazon.co.uk", "walmart.com"]
+        _cs1, _cs2, _cs3, _cs4 = st.columns([2, 2, 2, 4])
+        with _cs1:
+            _sold_mkt = st.selectbox(
+                "Marketplace", _MARKETPLACES, key="ovv_sold_mkt",
+                label_visibility="visible",
+            )
+        with _cs2:
+            _sold_start = st.date_input(
+                "Start date",
+                value=date.today().replace(day=1),
+                key="ovv_sold_start",
+            )
+        with _cs3:
+            _sold_end = st.date_input(
+                "End date",
+                value=date.today(),
+                key="ovv_sold_end",
+            )
+        with _cs4:
+            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+            _show_sold = st.checkbox("Show Sold column", value=True, key="ovv_show_sold")
+            st.markdown("</div>", unsafe_allow_html=True)
+
         if _overview.empty:
             st.info("No inventory data yet. Go to **Upload Data** or **Manual Entry** to add stock.")
         else:
@@ -409,10 +434,26 @@ with tab_inv:
                 * _overview["Total"]
             ).round(0).astype(int)
 
+            # ── Sold column ───────────────────────────────────────────────────
+            if _show_sold:
+                _sold_map = get_sold_units(
+                    _sold_mkt,
+                    str(_sold_start),
+                    str(_sold_end),
+                )
+                _overview["Sold"] = (
+                    _overview["asin"].str.upper().map(
+                        {k.upper(): v for k, v in _sold_map.items()}
+                    ).fillna(0).astype(int)
+                )
+
             # Only show active (checked) cols + always-visible cols
+            _sold_cols = (["Sold"] if _show_sold and "Sold" in _overview.columns else [])
             _show_cols = (["asin", "title"]
                           + [c for c in _active_cols if c in _overview.columns]
-                          + ["Total", "Value $"])
+                          + ["Total"]
+                          + _sold_cols
+                          + ["Value $"])
 
             # ── Totals row ────────────────────────────────────────────────────
             _skip     = {"ASIN", "Title", "asin", "title"}

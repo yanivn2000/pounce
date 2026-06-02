@@ -430,6 +430,25 @@ def get_avg_daily_sales(days: int = 30) -> dict:
     return {(r["asin"], r["marketplace"]): r["total_qty"] / days for r in rows}
 
 
+def get_sold_units(marketplace: str, start_date: str, end_date: str) -> dict[str, int]:
+    """
+    Return {asin: total_units_sold} for the given marketplace and date range (inclusive).
+    marketplace: e.g. "amazon.com", "amazon.ca", "amazon.co.uk"
+    start_date / end_date: "YYYY-MM-DD" strings
+    """
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT asin, SUM(quantity) AS total
+        FROM orders
+        WHERE marketplace = ?
+          AND order_date  >= ?
+          AND order_date  <= ?
+        GROUP BY asin
+    """, (marketplace, start_date, end_date)).fetchall()
+    conn.close()
+    return {r["asin"]: int(r["total"] or 0) for r in rows}
+
+
 def get_inventory_alerts(overview: pd.DataFrame) -> list[dict]:
     """Generate alert dicts from the overview DataFrame."""
     alerts = []
