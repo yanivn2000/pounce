@@ -310,3 +310,29 @@ def get_sku_catalog_info() -> dict:
             "unit_svc":     breakdown.get("total_service",      0.0),
         }
     return result
+
+
+def get_asin_cost_map() -> dict[str, float]:
+    """
+    Return {ASIN (uppercase): unit_cost} derived from products_catalog.
+    unit_cost = total_manufacturer + total_service per unit.
+    Used as fallback when product_costs table is not populated.
+    If multiple SKUs share the same ASIN, the highest cost wins.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, asin FROM products_catalog "
+        "WHERE asin IS NOT NULL AND asin != ''"
+    ).fetchall()
+    conn.close()
+
+    result: dict[str, float] = {}
+    for row in rows:
+        asin = str(row["asin"]).strip().upper()
+        if not asin:
+            continue
+        breakdown = calc_product_cost(row["id"])
+        cost = breakdown.get("total_manufacturer", 0.0) + breakdown.get("total_service", 0.0)
+        if cost > 0:
+            result[asin] = max(result.get(asin, 0.0), cost)
+    return result

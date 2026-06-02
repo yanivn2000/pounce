@@ -56,7 +56,7 @@ from db.productions import (
     get_productions, get_production, save_production, delete_production,
     get_production_lines, save_production_lines,
     get_production_summary, get_catalog_skus, get_sku_catalog_info,
-    get_sku_supplier_map, get_sku_supplier_cost_map,
+    get_sku_supplier_map, get_sku_supplier_cost_map, get_asin_cost_map,
 )
 from db.shipments import (
     get_shipments, get_shipment, save_shipment, delete_shipment, mark_shipped,
@@ -380,19 +380,15 @@ with tab_inv:
             # ── Column toggle checkboxes ──────────────────────────────────────
             st.markdown(
                 "<p style='font-size:0.8rem;color:#888;margin-bottom:2px;'>"
-                "☑ Toggle columns included in <strong>Total</strong> &amp; <strong>Value $</strong></p>",
+                "☑ Toggle columns included in <strong>Total</strong> &amp; <strong>Value $</strong> "
+                "(unchecked columns are hidden)</p>",
                 unsafe_allow_html=True,
             )
             _toggle_cols_ui = st.columns(len(_counting_cols))
             _active_cols: list[str] = []
             for _ti, _tc in enumerate(_counting_cols):
                 with _toggle_cols_ui[_ti]:
-                    _checked = st.checkbox(
-                        _tc, value=True,
-                        key=f"ovv_tog_{_tc}",
-                        label_visibility="visible",
-                    )
-                    if _checked:
+                    if st.checkbox(_tc, value=True, key=f"ovv_tog_{_tc}"):
                         _active_cols.append(_tc)
 
             # ── Total + Value based on active (checked) cols ──────────────────
@@ -402,23 +398,21 @@ with tab_inv:
                 if _avail_active else 0
             )
 
-            # Value $: derive unit cost from value_usd/total_available computed
-            # in get_inventory_overview (same cost_map, avoids ASIN case issues).
-            # For rows with no FBA/AWD base (total_available=0), fall back to
-            # cost_map lookup with uppercase normalisation.
-            _cost_map_upper = {k.upper(): v for k, v in _cost_map_inv.items()}
-            _overview["_unit_cost"] = _overview.apply(
-                lambda r: (r["value_usd"] / r["total_available"])
-                          if (r.get("total_available") or 0) > 0
-                          else _cost_map_upper.get(str(r.get("asin", "")).upper(), 0),
-                axis=1,
-            )
+            # Value $: build cost map from products_catalog (primary) +
+            # product_costs landed_cost (override if available).
+            _cat_cost_map  = get_asin_cost_map()                      # {ASIN: unit_cost}
+            _prod_cost_map = {k.upper(): v.get("landed_cost", 0)
+                              for k, v in _cost_map_raw.items() if v.get("landed_cost")}
+            _unit_cost_map = {**_cat_cost_map, **_prod_cost_map}      # product_costs wins
             _overview["Value $"] = (
-                _overview["_unit_cost"] * _overview["Total"]
+                _overview["asin"].str.upper().map(_unit_cost_map).fillna(0)
+                * _overview["Total"]
             ).round(0).astype(int)
 
-            _display_cols += ["Total", "Value $"]
-            _show_cols = [c for c in _display_cols if c in _overview.columns]
+            # Only show active (checked) cols + always-visible cols
+            _show_cols = (["asin", "title"]
+                          + [c for c in _active_cols if c in _overview.columns]
+                          + ["Total", "Value $"])
 
             # ── Totals row ────────────────────────────────────────────────────
             _skip     = {"ASIN", "Title", "asin", "title"}
