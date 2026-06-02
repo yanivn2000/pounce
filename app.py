@@ -1913,14 +1913,21 @@ div:has(#ship-list-nav-marker) ~ div button {
             st.session_state["ship_sel_id"] = _new_id
             st.rerun()
 
-        for _s in _all_shipments:
-            _badge = "🟢" if _s["status"] == "shipped" else "🟡"
-            _label = f"{_badge} {_s['name']}"
-            if _s.get("destination"):
-                _label += f" · {_s['destination']}"
-            if st.button(_label, key=f"ship_sel_{_s['id']}", use_container_width=True):
+        _draft_ships    = [_s for _s in _all_shipments if _s["status"] != "shipped"]
+        _shipped_ships  = [_s for _s in _all_shipments if _s["status"] == "shipped"]
+
+        for _s in _draft_ships:
+            if st.button(f"🟡 {_s['name']}", key=f"ship_sel_{_s['id']}", use_container_width=True):
                 st.session_state["ship_sel_id"] = _s["id"]
                 st.rerun()
+
+        if _shipped_ships:
+            st.divider()
+            st.caption("Shipped")
+            for _s in _shipped_ships:
+                if st.button(f"🟢 {_s['name']}", key=f"ship_sel_{_s['id']}", use_container_width=True):
+                    st.session_state["ship_sel_id"] = _s["id"]
+                    st.rerun()
 
     _sel_ship_id = st.session_state.get("ship_sel_id")
     _sel_ship    = get_shipment(_sel_ship_id) if _sel_ship_id else None
