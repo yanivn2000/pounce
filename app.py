@@ -2349,8 +2349,24 @@ div:has(#ship-list-nav-marker) ~ div button {
                 )
 
             with _wfs_col:
-                # WFS box content CSV (Walmart Fulfillment Services format)
-                _wfs_rows = []
+                # WFS box content — Excel (.xlsx) so Product ID leading zeros are preserved
+                import io as _io
+                from openpyxl import Workbook as _WB
+                from openpyxl.styles import numbers as _opxl_num
+
+                _WFS_HEADERS = [
+                    "Product type ID",
+                    "Product ID",
+                    "SKU",
+                    "Item name",
+                    "Item Qty (Total # of Sellable Units)",
+                    "Vendor pack Qty (# of Cases)",
+                    "Inner pack Qty (Sellable Units per Case)",
+                ]
+                _wb = _WB()
+                _ws = _wb.active
+                _ws.append(_WFS_HEADERS)
+
                 for _lr in _export_lines:
                     _lsku = (_lr.get("sku") or "").strip()
                     _lnc  = int(_lr.get("num_cartons") or 0)
@@ -2360,21 +2376,30 @@ div:has(#ship-list-nav-marker) ~ div button {
                     _cu   = int(_inf.get("carton_units") or 0)
                     _upc  = str(_inf.get("upc") or "").strip()
                     _product_id = f"00{_upc}" if _upc else ""
-                    _wfs_rows.append({
-                        "Product type ID":                          "GTIN",
-                        "Product ID":                               _product_id,
-                        "SKU":                                      _lsku,
-                        "Item name":                                _inf.get("name") or "",
-                        "Item Qty (Total # of Sellable Units)":     _cu * _lnc,
-                        "Vendor pack Qty (# of Cases)":             _lnc,
-                        "Inner pack Qty (Sellable Units per Case)": _cu,
-                    })
-                _wfs_bytes = pd.DataFrame(_wfs_rows).to_csv(index=False).encode()
+                    _ws.append([
+                        "GTIN",
+                        _product_id,
+                        _lsku,
+                        _inf.get("name") or "",
+                        _cu * _lnc,
+                        _lnc,
+                        _cu,
+                    ])
+
+                # Force Product ID column (col B = 2) to text so Excel
+                # preserves leading zeros
+                for _cell in _ws["B"][1:]:   # skip header
+                    _cell.number_format = "@"
+
+                _wfs_buf = _io.BytesIO()
+                _wb.save(_wfs_buf)
+                _wfs_buf.seek(0)
+
                 st.download_button(
                     "📦 Box Content CSV WFS",
-                    data=_wfs_bytes,
-                    file_name=f"{sel_ship['name']}_box_content_wfs.csv",
-                    mime="text/csv",
+                    data=_wfs_buf.getvalue(),
+                    file_name=f"{sel_ship['name']}_box_content_wfs.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"ship_wfs_{_ctx}",
                     use_container_width=True,
                 )
