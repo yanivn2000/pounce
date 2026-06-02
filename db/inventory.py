@@ -387,7 +387,7 @@ def get_inventory_overview(cost_map: dict, avg_daily_sales: dict) -> pd.DataFram
     # Totals
     fba_cols = [c for c in FBA_LOCATIONS if c in pivot.columns]
     awd_cols = [c for c in AWD_LOCATIONS if c in pivot.columns]
-    all_avail = fba_cols + awd_cols + ["3PL_UK", "WH_CN", "PRODUCTION"]
+    all_avail = fba_cols + awd_cols + ["3PL_UK", "WH_CN"]
     pivot["total_available"] = pivot[[c for c in all_avail if c in pivot.columns]].sum(axis=1)
 
     # Value = total units × landed cost

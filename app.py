@@ -63,6 +63,7 @@ from db.shipments import (
     get_shipment_lines, save_shipment_lines,
     get_stock_to_be_shipped, get_next_shipment_name,
     get_available_per_sku_excluding, get_packing_list,
+    get_overview_shipment_data,
 )
 from labels import generate_carton_labels_pdf
 
@@ -368,22 +369,72 @@ with tab_inv:
             st.divider()
 
             # ── Summary matrix ────────────────────────────────────────────────
-            _loc_labels = {k: v["label"] for k, v in LOCATIONS.items()}
+            # Location columns (skip PRODUCTION — replaced by Stock to Ship)
+            _loc_labels   = {k: v["label"] for k, v in LOCATIONS.items()}
             _display_cols = ["asin", "title"]
-            _rename = {"asin": "ASIN", "title": "Title"}
+
+            _counting_cols: list[str] = []   # columns included in Total (toggleable)
 
             for loc in LOCATIONS:
+                if loc == "PRODUCTION":
+                    continue  # replaced by Stock to Ship below
                 if loc in _overview.columns:
                     col_name = _loc_labels[loc]
                     _overview[col_name] = _overview[loc].fillna(0).astype(int)
                     _display_cols.append(col_name)
-                    _rename[col_name] = col_name
+                    _counting_cols.append(col_name)
 
-            _overview["Total"] = _overview["total_available"].fillna(0).astype(int)
-            _overview["Value $"] = _overview["value_usd"].fillna(0).round(0).astype(int)
+            # ── Stock to Ship + per-draft-shipment columns ────────────────────
+            _shp_data = get_overview_shipment_data()
+
+            _STS_COL = "Stock to Ship"
+            _overview[_STS_COL] = (
+                _overview["asin"].map(_shp_data["stock_to_ship"]).fillna(0).astype(int)
+            )
+            _display_cols.append(_STS_COL)
+            _counting_cols.append(_STS_COL)
+
+            _shipment_cols: list[str] = []
+            for _shp in _shp_data["shipments"]:
+                _sc = _shp["name"]
+                _overview[_sc] = (
+                    _overview["asin"].map(_shp["units"]).fillna(0).astype(int)
+                )
+                _display_cols.append(_sc)
+                _counting_cols.append(_sc)
+                _shipment_cols.append(_sc)
+
+            # ── Column toggle checkboxes ──────────────────────────────────────
+            st.markdown(
+                "<p style='font-size:0.8rem;color:#888;margin-bottom:2px;'>"
+                "☑ Toggle columns included in <strong>Total</strong> &amp; <strong>Value $</strong></p>",
+                unsafe_allow_html=True,
+            )
+            _toggle_cols_ui = st.columns(len(_counting_cols))
+            _active_cols: list[str] = []
+            for _ti, _tc in enumerate(_counting_cols):
+                with _toggle_cols_ui[_ti]:
+                    _checked = st.checkbox(
+                        _tc, value=True,
+                        key=f"ovv_tog_{_tc}",
+                        label_visibility="visible",
+                    )
+                    if _checked:
+                        _active_cols.append(_tc)
+
+            # ── Total + Value based on active (checked) cols ──────────────────
+            _avail_active = [c for c in _active_cols if c in _overview.columns]
+            _overview["Total"] = (
+                _overview[_avail_active].fillna(0).sum(axis=1).astype(int)
+                if _avail_active else 0
+            )
+            _overview["Value $"] = (
+                _overview["asin"].map(_cost_map_inv).fillna(0) * _overview["Total"]
+            ).round(0).astype(int)
+
             _display_cols += ["Total", "Value $"]
 
-            # Days columns — rounded to whole numbers
+            # Days columns
             _day_col_map = {
                 "days_fba_us": "Days US",
                 "days_fba_ca": "Days CA",
@@ -391,9 +442,10 @@ with tab_inv:
             }
             for raw_col, label in _day_col_map.items():
                 if raw_col in _overview.columns:
-                    # Int64 (nullable) keeps whole numbers even when NaN present
-                    _overview[label] = pd.to_numeric(_overview[raw_col], errors="coerce") \
-                                         .round(0).astype("Int64")
+                    _overview[label] = (
+                        pd.to_numeric(_overview[raw_col], errors="coerce")
+                        .round(0).astype("Int64")
+                    )
                     _display_cols.append(label)
 
             _show_cols = [c for c in _display_cols if c in _overview.columns]
@@ -403,7 +455,6 @@ with tab_inv:
             _num_cols = [c for c in _show_cols
                          if c not in _skip and pd.api.types.is_numeric_dtype(_overview[c])]
             _total_row = {c: "" for c in _show_cols}
-            # Mark the TOTAL row — handle both lowercase and display-case column names
             for _id_col in ("asin", "ASIN"):
                 if _id_col in _total_row:
                     _total_row[_id_col] = "TOTAL"

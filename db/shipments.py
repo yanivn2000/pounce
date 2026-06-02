@@ -351,6 +351,77 @@ def get_packing_list(shipment_id: int) -> list[dict]:
     return result
 
 
+def get_overview_shipment_data() -> dict:
+    """
+    Data for the Inventory Overview "production-replacement" columns:
+
+    Returns {
+      "stock_to_ship": {asin: units},   # unallocated production (all shipments subtracted)
+      "shipments":     [{"id", "name", "units": {asin: units}}]  # one entry per DRAFT shipment
+    }
+
+    Units = cartons × carton_units, mapped from SKU → ASIN via products_catalog.
+    """
+    conn = get_conn()
+
+    # SKU → (asin, carton_units)
+    sku_map: dict[str, dict] = {}
+    for r in conn.execute(
+        "SELECT sku, asin, carton_units FROM products_catalog "
+        "WHERE sku IS NOT NULL AND sku != ''"
+    ).fetchall():
+        sku_map[r["sku"]] = {"asin": (r["asin"] or "").strip().upper(),
+                             "cu":   int(r["carton_units"] or 0)}
+
+    # Production totals per SKU
+    prod_totals = get_production_totals()
+
+    # All allocated cartons per SKU (draft + shipped)
+    allocated_all: dict[str, int] = {}
+    for r in conn.execute("""
+        SELECT sl.sku, SUM(sl.num_cartons) AS total
+        FROM shipment_lines sl
+        JOIN shipments s ON s.id = sl.shipment_id
+        GROUP BY sl.sku
+    """).fetchall():
+        allocated_all[r["sku"]] = int(r["total"] or 0)
+
+    # Stock to ship — unallocated production, by ASIN (in units)
+    stock_to_ship: dict[str, int] = {}
+    for sku, total_cartons in prod_totals.items():
+        unalloc = max(0, total_cartons - allocated_all.get(sku, 0))
+        if unalloc <= 0:
+            continue
+        info = sku_map.get(sku, {})
+        asin = info.get("asin", "")
+        cu   = info.get("cu", 0)
+        if asin and cu:
+            stock_to_ship[asin] = stock_to_ship.get(asin, 0) + unalloc * cu
+
+    # Per-draft-shipment units by ASIN
+    draft_rows = conn.execute(
+        "SELECT id, name FROM shipments WHERE status='draft' ORDER BY id"
+    ).fetchall()
+    shipments = []
+    for ship in draft_rows:
+        lines = conn.execute(
+            "SELECT sku, num_cartons FROM shipment_lines WHERE shipment_id=?",
+            (ship["id"],)
+        ).fetchall()
+        units_by_asin: dict[str, int] = {}
+        for ln in lines:
+            info = sku_map.get(ln["sku"], {})
+            asin = info.get("asin", "")
+            cu   = info.get("cu", 0)
+            nc   = int(ln["num_cartons"] or 0)
+            if asin and cu and nc:
+                units_by_asin[asin] = units_by_asin.get(asin, 0) + nc * cu
+        shipments.append({"id": ship["id"], "name": ship["name"], "units": units_by_asin})
+
+    conn.close()
+    return {"stock_to_ship": stock_to_ship, "shipments": shipments}
+
+
 def get_available_per_sku_excluding(shipment_id: int) -> dict[str, int]:
     """
     Like get_available_per_sku() but excludes the given shipment's own lines
