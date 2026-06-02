@@ -282,12 +282,14 @@ def get_catalog_skus() -> list[str]:
 
 def get_sku_catalog_info() -> dict:
     """
-    Return {sku: {name, carton_units, nw_kg, gw_kg, cbm, unit_mfg, unit_svc}}
+    Return {sku: {name, carton_units, nw_kg, gw_kg, cbm, unit_mfg, unit_svc,
+                  length_cm, width_cm, height_cm}}
     for all SKU-bearing products. One DB round-trip.
     """
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id, sku, name, carton_units, carton_nw_kg, carton_gw_kg, carton_cbm "
+        "SELECT id, sku, name, carton_units, carton_nw_kg, carton_gw_kg, carton_cbm, "
+        "carton_length_cm, carton_width_cm, carton_height_cm "
         "FROM products_catalog WHERE sku IS NOT NULL AND sku != '' ORDER BY sku"
     ).fetchall()
     conn.close()
@@ -301,6 +303,9 @@ def get_sku_catalog_info() -> dict:
             "nw_kg":        row["carton_nw_kg"]  or 0.0,
             "gw_kg":        row["carton_gw_kg"]  or 0.0,
             "cbm":          row["carton_cbm"]    or 0.0,
+            "length_cm":    row["carton_length_cm"] or 0.0,
+            "width_cm":     row["carton_width_cm"]  or 0.0,
+            "height_cm":    row["carton_height_cm"] or 0.0,
             "unit_mfg":     breakdown.get("total_manufacturer", 0.0),
             "unit_svc":     breakdown.get("total_service",      0.0),
         }

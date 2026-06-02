@@ -2267,27 +2267,62 @@ div:has(#ship-list-nav-marker) ~ div button {
 
             # ── Create Labels (always available) ──────────────────────────────
             st.divider()
-            _lbl_col, _ = st.columns([2, 8])
+            _lbl_col, _csv_col, _ = st.columns([2, 2, 6])
+
+            # Shared lines for both buttons
+            if _locked:
+                _export_lines = get_shipment_lines(_sid)
+            else:
+                _export_lines = [
+                    {"sku": r.get("SKU", ""), "num_cartons": _safe_int_s(r.get("# Cartons"))}
+                    for r in _seff_rows() if r.get("SKU")
+                ]
+
             with _lbl_col:
-                if _locked:
-                    _lbl_lines = get_shipment_lines(_sid)
-                else:
-                    _lbl_lines = [
-                        {"sku": r.get("SKU", ""), "num_cartons": _safe_int_s(r.get("# Cartons"))}
-                        for r in _seff_rows() if r.get("SKU")
-                    ]
                 _lbl_ship = {
                     "name":        sel_ship.get("name", ""),
                     "destination": _ship_dest if not _locked else (sel_ship.get("destination") or ""),
                     "address":     _ship_address if not _locked else (sel_ship.get("address") or ""),
                 }
-                _lbl_pdf = generate_carton_labels_pdf(_lbl_ship, _lbl_lines, sku_info)
+                _lbl_pdf = generate_carton_labels_pdf(_lbl_ship, _export_lines, sku_info)
                 st.download_button(
                     "🏷️ Create Labels",
                     data=_lbl_pdf,
                     file_name=f"{sel_ship['name']}_labels.pdf",
                     mime="application/pdf",
                     key=f"ship_labels_{_ctx}",
+                    use_container_width=True,
+                )
+
+            with _csv_col:
+                # Box content CSV (inches + lbs)
+                _CM_TO_IN = 0.393701
+                _KG_TO_LB = 2.20462
+                _csv_rows = []
+                for _lr in _export_lines:
+                    _lsku = (_lr.get("sku") or "").strip()
+                    _lnc  = int(_lr.get("num_cartons") or 0)
+                    if not _lsku or _lnc <= 0:
+                        continue
+                    _inf  = sku_info.get(_lsku, {})
+                    _cu   = int(_inf.get("carton_units") or 0)
+                    _csv_rows.append({
+                        "Merchant SKU":    _lsku,
+                        "Quantity":        _cu * _lnc,
+                        "Units per box":   _cu,
+                        "Number of boxes": _lnc,
+                        "Box length (in)": round((_inf.get("length_cm") or 0.0) * _CM_TO_IN, 2),
+                        "Box width (in)":  round((_inf.get("width_cm")  or 0.0) * _CM_TO_IN, 2),
+                        "Box height (in)": round((_inf.get("height_cm") or 0.0) * _CM_TO_IN, 2),
+                        "Box weight (lb)": round((_inf.get("gw_kg")     or 0.0) * _KG_TO_LB, 2),
+                    })
+                _csv_bytes = pd.DataFrame(_csv_rows).to_csv(index=False).encode()
+                st.download_button(
+                    "📦 Box Content CSV",
+                    data=_csv_bytes,
+                    file_name=f"{sel_ship['name']}_box_content.csv",
+                    mime="text/csv",
+                    key=f"ship_csv_{_ctx}",
                     use_container_width=True,
                 )
 
