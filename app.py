@@ -3261,8 +3261,12 @@ with tab_ads:
                     axis=1,
                 )
 
+                _ads_img_map = get_asin_image_map()
+                recs_display.insert(0, "image",
+                    recs_display["asin"].str.upper().map(_ads_img_map).fillna(""))
+
                 display_cols = [
-                    "date_given", "end_date", "asin", "marketplace", "campaign_name",
+                    "image", "date_given", "end_date", "asin", "marketplace", "campaign_name",
                     "placement_type", "campaign_type", "change", "last_result", "reasoning", "notes"
                 ]
                 existing_cols = [c for c in display_cols if c in recs_display.columns]
@@ -3280,6 +3284,7 @@ with tab_ads:
                     on_select="rerun",
                     selection_mode="single-row",
                     column_config={
+                        "image":          st.column_config.ImageColumn("", width=55),
                         "date_given":     st.column_config.TextColumn("Date", width=95),
                         "end_date":       st.column_config.TextColumn("📅 End Date", width=95),
                         "asin":           st.column_config.TextColumn("ASIN", width=110),
