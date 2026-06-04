@@ -959,7 +959,7 @@ def _migrate_productions(conn: sqlite3.Connection):
 
 
 def _migrate_returns(conn: sqlite3.Connection):
-    """Create amazon_returns table."""
+    """Create amazon_returns table and add columns added in later migrations."""
     try:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS amazon_returns (
@@ -975,13 +975,23 @@ def _migrate_returns(conn: sqlite3.Connection):
                 status            TEXT,
                 marketplace       TEXT NOT NULL,
                 region            TEXT NOT NULL DEFAULT 'NA',
+                country           TEXT,
+                fc_id             TEXT,
                 customer_comments TEXT,
                 created_at        TEXT DEFAULT (datetime('now')),
                 UNIQUE(order_id, asin, return_date, marketplace)
             );
-            CREATE INDEX IF NOT EXISTS idx_returns_asin   ON amazon_returns(asin);
-            CREATE INDEX IF NOT EXISTS idx_returns_date   ON amazon_returns(return_date);
-            CREATE INDEX IF NOT EXISTS idx_returns_region ON amazon_returns(region);
+            CREATE INDEX IF NOT EXISTS idx_returns_asin    ON amazon_returns(asin);
+            CREATE INDEX IF NOT EXISTS idx_returns_date    ON amazon_returns(return_date);
+            CREATE INDEX IF NOT EXISTS idx_returns_region  ON amazon_returns(region);
+            CREATE INDEX IF NOT EXISTS idx_returns_country ON amazon_returns(country);
         """)
     except Exception:
         pass
+    # Add columns to existing tables that were created before these columns existed
+    for col, typedef in [("country", "TEXT"), ("fc_id", "TEXT")]:
+        try:
+            conn.execute(f"ALTER TABLE amazon_returns ADD COLUMN {col} {typedef}")
+            conn.commit()
+        except Exception:
+            pass  # column already exists

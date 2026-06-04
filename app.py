@@ -66,7 +66,11 @@ from db.shipments import (
     get_overview_shipment_data,
 )
 from labels import generate_carton_labels_pdf
-from db.returns import import_returns_csv, get_return_rate_report, get_returns_date_range
+from db.returns import (
+    import_returns_csv, get_return_rate_report, get_returns_date_range,
+    get_return_country_breakdown, get_available_countries,
+    COUNTRY_FLAG, MARKETPLACE_TO_COUNTRY,
+)
 
 init_db()
 # ── Session isolation ─────────────────────────────────────────────────────────
@@ -2487,20 +2491,17 @@ div:has(#ship-list-nav-marker) ~ div button {
         with st.expander("📤 Upload Returns CSV", expanded=False):
             st.markdown(
                 "Download the **FBA Customer Returns** report from Seller Central "
-                "(*Reports → Fulfillment → Customer Concessions → FBA Customer Returns*)."
+                "(*Reports → Fulfillment → Customer Concessions → FBA Customer Returns*).  \n"
+                "The country is **auto-detected** from the Fulfillment Center ID in each row — "
+                "just pick the region of the report (NA or EU) as a fallback for unrecognised FCs."
             )
-            _ret_mkt_options = [
-                "amazon.com", "amazon.ca", "amazon.com.mx",   # NA
-                "amazon.co.uk", "amazon.de", "amazon.fr",     # EU
-                "amazon.it", "amazon.es", "amazon.nl",
-                "amazon.se", "amazon.pl",
-            ]
-            _ret_upload_col, _ret_mkt_col = st.columns([3, 2])
-            with _ret_mkt_col:
-                _ret_mkt = st.selectbox(
-                    "Marketplace",
-                    options=_ret_mkt_options,
-                    key="ret_mkt_sel",
+            _ret_upload_col, _ret_region_col = st.columns([3, 1])
+            with _ret_region_col:
+                _ret_upload_region = st.selectbox(
+                    "Region hint",
+                    options=["NA", "EU"],
+                    key="ret_region_hint",
+                    help="Only used as a fallback when the FC code cannot be mapped to a country.",
                 )
             with _ret_upload_col:
                 _ret_file = st.file_uploader(
@@ -2511,15 +2512,15 @@ div:has(#ship-list-nav-marker) ~ div button {
             if _ret_file is not None:
                 if st.button("⬆️ Import Returns", key="ret_import_btn", type="primary"):
                     try:
-                        _ret_df = pd.read_csv(_ret_file, sep=None, engine="python")
-                        _ret_imported, _ret_warns = import_returns_csv(_ret_df, _ret_mkt)
+                        _ret_df = pd.read_csv(_ret_file, sep=None, engine="python",
+                                              encoding_errors="replace")
+                        _ret_imported, _ret_warns = import_returns_csv(_ret_df, _ret_upload_region)
                         if _ret_warns:
                             st.warning(f"⚠️ {'; '.join(_ret_warns[:5])}")
                         if _ret_imported:
-                            st.success(f"✅ Imported {_ret_imported} return records from {_ret_mkt}.")
+                            st.success(f"✅ Imported {_ret_imported} return records (country auto-detected from FC).")
                         else:
                             st.info("No new records imported (all may be duplicates).")
-                        # Reset uploader
                         st.session_state["ret_upload_key"] = st.session_state.get("ret_upload_key", 0) + 1
                         st.rerun()
                     except Exception as _re:
@@ -2529,29 +2530,64 @@ div:has(#ship-list-nav-marker) ~ div button {
 
         # ── Filters ───────────────────────────────────────────────────────────
         _ret_min_date, _ret_max_date = get_returns_date_range()
-        _ret_f1, _ret_f2, _ret_f3, _ = st.columns([2, 2, 2, 4])
+        _ret_avail_countries = get_available_countries()   # ["CA","DE","FR", ...]
+
+        _ret_f1, _ret_f2, _ret_f3, _ret_f4, _ = st.columns([1.5, 2, 2, 2, 2])
         with _ret_f1:
-            _ret_region = st.selectbox(
+            _ret_region_filter = st.selectbox(
                 "Region",
                 options=["All", "NA", "EU"],
                 key="ret_region_sel",
             )
         with _ret_f2:
+            _country_options = ["All"] + [
+                f"{COUNTRY_FLAG.get(c, '')} {c}"
+                for c in _ret_avail_countries
+            ]
+            _ret_country_disp = st.selectbox(
+                "Country",
+                options=_country_options,
+                key="ret_country_sel",
+            )
+            # Strip flag prefix back to code
+            _ret_country = None if _ret_country_disp == "All" else _ret_country_disp.split()[-1]
+        with _ret_f3:
             _ret_start = st.date_input(
                 "From",
                 value=date.fromisoformat(_ret_min_date) if _ret_min_date else date.today() - timedelta(days=90),
                 key="ret_start_date",
             )
-        with _ret_f3:
+        with _ret_f4:
             _ret_end = st.date_input(
                 "To",
                 value=date.fromisoformat(_ret_max_date) if _ret_max_date else date.today(),
                 key="ret_end_date",
             )
 
+        # ── Country breakdown mini-table ───────────────────────────────────────
+        _ret_country_df = get_return_country_breakdown(str(_ret_start), str(_ret_end))
+        if not _ret_country_df.empty:
+            with st.expander("🌍 Returns by Country", expanded=False):
+                st.dataframe(
+                    _ret_country_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Country":       st.column_config.TextColumn("Country",        width=90),
+                        "Total":         st.column_config.NumberColumn("Total",         width=70),
+                        "🔴 Amazon":     st.column_config.NumberColumn("🔴 Amazon",     width=90),
+                        "🟠 Mfg Defect": st.column_config.NumberColumn("🟠 Mfg Defect", width=110),
+                        "⚪ Customer":   st.column_config.NumberColumn("⚪ Customer",    width=100),
+                        "Other":         st.column_config.NumberColumn("Other",          width=65),
+                    },
+                )
+
+        st.divider()
+
         # ── Report ────────────────────────────────────────────────────────────
         _ret_report = get_return_rate_report(
-            region=_ret_region if _ret_region != "All" else None,
+            region=_ret_region_filter if _ret_region_filter != "All" else None,
+            country=_ret_country,
             start_date=str(_ret_start),
             end_date=str(_ret_end),
         )
@@ -2586,12 +2622,8 @@ div:has(#ship-list-nav-marker) ~ div button {
                     return "color: #e09c52; font-weight: 600"
                 return "color: #52a852"
 
-            def _style_ret_rate(col):
-                return [_ret_rate_color(v) for v in col]
-
             # Display the report table
             _ret_display = _ret_report.copy()
-            # Format Return Rate %
             _ret_display["Return Rate %"] = _ret_display["Return Rate %"].apply(
                 lambda x: f"{x:.1f}%" if x is not None else "N/A"
             )
@@ -2626,7 +2658,6 @@ div:has(#ship-list-nav-marker) ~ div button {
                 },
             )
 
-            # Legend
             st.caption(
                 "**🔴 ≥ 5%** critical &nbsp;|&nbsp; **🟠 2–5%** elevated &nbsp;|&nbsp; **🟢 < 2%** normal &nbsp;|&nbsp; "
                 "**🔴 Contact Amazon** — FC/carrier damage &nbsp;|&nbsp; "
@@ -2634,7 +2665,6 @@ div:has(#ship-list-nav-marker) ~ div button {
                 "**⚪ Normal Return** — customer preference"
             )
 
-            # Download
             st.download_button(
                 "⬇️ Download Returns Report CSV",
                 data=_ret_report.to_csv(index=False),
