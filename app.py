@@ -68,7 +68,7 @@ from db.shipments import (
 from labels import generate_carton_labels_pdf
 from db.returns import (
     import_returns_csv, get_return_rate_report, get_returns_date_range,
-    get_return_country_breakdown, get_available_countries,
+    get_return_country_breakdown, get_available_countries, clear_all_returns,
     COUNTRY_FLAG, MARKETPLACE_TO_COUNTRY,
 )
 
@@ -2525,6 +2525,26 @@ div:has(#ship-list-nav-marker) ~ div button {
                         st.rerun()
                     except Exception as _re:
                         st.error(f"Import failed: {_re}")
+
+            st.divider()
+            st.markdown("**🗑️ Danger Zone**")
+            if st.button("Delete All Returns Data", key="ret_del_all_btn",
+                         help="Permanently removes every return record from the database."):
+                st.session_state["ret_del_all_confirm"] = True
+
+            if st.session_state.get("ret_del_all_confirm"):
+                st.warning("This will permanently delete **all** returns records. Are you sure?")
+                _rd1, _rd2, _ = st.columns([2, 2, 6])
+                with _rd1:
+                    if st.button("Yes, delete all", type="primary", key="ret_del_all_yes"):
+                        _deleted = clear_all_returns()
+                        st.session_state.pop("ret_del_all_confirm", None)
+                        st.success(f"✅ Deleted {_deleted:,} records.")
+                        st.rerun()
+                with _rd2:
+                    if st.button("Cancel", key="ret_del_all_cancel"):
+                        st.session_state.pop("ret_del_all_confirm", None)
+                        st.rerun()
 
         st.divider()
 

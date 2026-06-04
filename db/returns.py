@@ -493,6 +493,16 @@ def get_available_countries() -> list[str]:
     return [r["country"] for r in rows]
 
 
+def clear_all_returns() -> int:
+    """Delete every row from amazon_returns. Returns the number of rows deleted."""
+    conn = get_conn()
+    with conn:
+        cur = conn.execute("DELETE FROM amazon_returns")
+        deleted = cur.rowcount
+    conn.close()
+    return deleted
+
+
 def get_returns_date_range() -> tuple[str | None, str | None]:
     """Return (min_date, max_date) of all stored returns."""
     conn = get_conn()
