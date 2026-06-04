@@ -57,7 +57,7 @@ from db.productions import (
     get_production_lines, save_production_lines,
     get_production_summary, get_catalog_skus, get_sku_catalog_info,
     get_sku_supplier_map, get_sku_supplier_cost_map, get_asin_cost_map,
-    get_asin_image_map,
+    get_asin_image_map, fetch_and_store_all_images,
 )
 from db.shipments import (
     get_shipments, get_shipment, save_shipment, delete_shipment, mark_shipped,
@@ -1328,6 +1328,33 @@ with _catalog_tab:
                 st.rerun()
 
     _cat_editor_fragment()
+
+    # ── Auto-fetch product images ──────────────────────────────────────────────
+    st.divider()
+    _img_col1, _img_col2 = st.columns([3, 7])
+    with _img_col1:
+        if st.button("🔍 Fetch Missing Product Images", key="cat_fetch_images",
+                     help="Visits each Amazon listing and saves the product image URL. "
+                          "Only runs for products without a stored image URL."):
+            with st.spinner("Fetching images from Amazon listings…"):
+                _img_results = fetch_and_store_all_images()
+            _img_ok  = [a for a, v in _img_results.items() if v != "NOT_FOUND"]
+            _img_err = [a for a, v in _img_results.items() if v == "NOT_FOUND"]
+            if not _img_results:
+                st.info("All products already have image URLs — nothing to fetch.")
+            else:
+                if _img_ok:
+                    st.success(f"✅ Fetched images for {len(_img_ok)} product(s): {', '.join(_img_ok)}")
+                if _img_err:
+                    st.warning(f"⚠️ Could not find image for: {', '.join(_img_err)}. Paste the URL manually in the Image URL column.")
+            st.session_state.pop(_CEST, None)   # refresh catalog view
+            st.rerun()
+    with _img_col2:
+        st.caption(
+            "Retrieves the real Amazon image URL for each product (from the listing page) "
+            "and saves it permanently. After fetching, images will appear in Overview and Returns tables.  \n"
+            "You can also paste a URL directly in the **Image URL** column of the table above."
+        )
 
     # ── Cost Breakdown ─────────────────────────────────────────────────────────
     if _cat_list:

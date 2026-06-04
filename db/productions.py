@@ -315,32 +315,107 @@ def get_sku_catalog_info() -> dict:
 
 def get_asin_image_map() -> dict[str, str]:
     """
-    Return {ASIN (uppercase): image_url} for all products in the catalog.
-
-    Priority:
-      1. image_url stored in products_catalog (user-supplied, always reliable)
-      2. Amazon CDN auto-URL constructed from ASIN (works for most products,
-         no setup required — Streamlit shows a placeholder if it 404s)
+    Return {ASIN (uppercase): image_url} for products that have a stored image_url.
+    Only includes ASINs where a URL has been explicitly saved (either fetched
+    automatically or pasted manually). No broken CDN guesses.
     """
     conn = get_conn()
     rows = conn.execute(
         "SELECT asin, image_url FROM products_catalog "
-        "WHERE asin IS NOT NULL AND asin != ''"
+        "WHERE asin IS NOT NULL AND asin != '' "
+        "  AND image_url IS NOT NULL AND image_url != ''"
     ).fetchall()
     conn.close()
 
-    result: dict[str, str] = {}
+    return {
+        str(r["asin"]).strip().upper(): r["image_url"].strip()
+        for r in rows
+        if r["asin"] and r["image_url"]
+    }
+
+
+def fetch_asin_image_url(asin: str) -> str | None:
+    """
+    Fetch the main product image URL for an ASIN by reading the Amazon listing
+    page and extracting the og:image meta tag.
+
+    Tries amazon.com first, then amazon.co.uk as a fallback.
+    Returns None if the image URL cannot be determined.
+    """
+    import re
+    try:
+        import requests as _req
+    except ImportError:
+        return None
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    for base in ("https://www.amazon.com/dp/", "https://www.amazon.co.uk/dp/"):
+        try:
+            resp = _req.get(f"{base}{asin}", headers=headers, timeout=10, allow_redirects=True)
+            if resp.status_code != 200:
+                continue
+            html = resp.text
+            # 1. og:image meta tag  (most reliable)
+            m = re.search(
+                r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+                html
+            )
+            if not m:
+                m = re.search(
+                    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+                    html
+                )
+            if m:
+                url = m.group(1).strip()
+                if url.startswith("http"):
+                    return url
+            # 2. landingAsinColor JSON blob — hiRes key
+            m = re.search(r'"hiRes"\s*:\s*"(https://[^"]+)"', html)
+            if m:
+                return m.group(1).strip()
+        except Exception:
+            continue
+    return None
+
+
+def fetch_and_store_all_images() -> dict[str, str]:
+    """
+    For every ASIN in products_catalog that has no image_url, fetch and store it.
+    Returns {asin: result} where result is the URL on success or an error string.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id, asin FROM products_catalog "
+        "WHERE asin IS NOT NULL AND asin != '' "
+        "  AND (image_url IS NULL OR image_url = '')"
+    ).fetchall()
+    conn.close()
+
+    report: dict[str, str] = {}
     for row in rows:
         asin = str(row["asin"]).strip().upper()
-        if not asin:
-            continue
-        stored = (row["image_url"] or "").strip()
-        result[asin] = (
-            stored
-            if stored
-            else f"https://m.media-amazon.com/images/P/{asin}.01._SL75_.jpg"
-        )
-    return result
+        url  = fetch_asin_image_url(asin)
+        if url:
+            conn = get_conn()
+            with conn:
+                conn.execute(
+                    "UPDATE products_catalog SET image_url=? WHERE id=?",
+                    (url, row["id"])
+                )
+            conn.close()
+            report[asin] = url
+        else:
+            report[asin] = "NOT_FOUND"
+    return report
 
 
 def get_asin_cost_map() -> dict[str, float]:
