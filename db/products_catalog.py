@@ -152,6 +152,7 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
         data.get("carton_width_cm"), data.get("carton_height_cm"),
         data.get("carton_nw_kg"), data.get("carton_gw_kg"), data.get("carton_cbm"),
         data.get("part_id_1"), data.get("part_id_2"),
+        data.get("image_url"),
     )
     with conn:
         if product_id:
@@ -163,6 +164,7 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
                     carton_units=?, carton_length_cm=?, carton_width_cm=?,
                     carton_height_cm=?, carton_nw_kg=?, carton_gw_kg=?, carton_cbm=?,
                     part_id_1=?, part_id_2=?,
+                    image_url=?,
                     updated_at=datetime('now')
                 WHERE id=?
             """, (*fields, product_id))
@@ -175,8 +177,8 @@ def upsert_product_catalog(data: dict, product_id: int | None = None) -> int:
                      is_new_product, notes,
                      carton_units, carton_length_cm, carton_width_cm,
                      carton_height_cm, carton_nw_kg, carton_gw_kg, carton_cbm,
-                     part_id_1, part_id_2)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     part_id_1, part_id_2, image_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, fields)
             result_id = cur.lastrowid
     conn.close()

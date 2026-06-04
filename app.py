@@ -57,6 +57,7 @@ from db.productions import (
     get_production_lines, save_production_lines,
     get_production_summary, get_catalog_skus, get_sku_catalog_info,
     get_sku_supplier_map, get_sku_supplier_cost_map, get_asin_cost_map,
+    get_asin_image_map,
 )
 from db.shipments import (
     get_shipments, get_shipment, save_shipment, delete_shipment, mark_shipped,
@@ -429,6 +430,10 @@ with tab_inv:
                 if _avail_active else 0
             )
 
+            # Image column
+            _asin_img_map  = get_asin_image_map()
+            _overview["Image"] = _overview["asin"].str.upper().map(_asin_img_map).fillna("")
+
             # Value $: build cost map from products_catalog (primary) +
             # product_costs landed_cost (override if available).
             _cat_cost_map  = get_asin_cost_map()                      # {ASIN: unit_cost}
@@ -455,7 +460,7 @@ with tab_inv:
 
             # Only show active (checked) cols + always-visible cols
             _sold_cols = (["Sold"] if _show_sold and "Sold" in _overview.columns else [])
-            _show_cols = (["asin", "title"]
+            _show_cols = (["Image", "asin", "title"]
                           + [c for c in _active_cols if c in _overview.columns]
                           + ["Total"]
                           + _sold_cols
@@ -484,8 +489,9 @@ with tab_inv:
             _styler = _display_df.style.apply(_color_total_row, axis=1)
             st.dataframe(_styler, use_container_width=True, hide_index=True,
                          column_config={
-                             "ASIN":    st.column_config.TextColumn(width=120),
-                             "Title":   st.column_config.TextColumn(width=200),
+                             "Image":   st.column_config.ImageColumn("", width=55),
+                             "asin":    st.column_config.TextColumn("ASIN", width=115),
+                             "title":   st.column_config.TextColumn("Product", width=200),
                              "Value $": st.column_config.NumberColumn(format="$%d"),
                          })
 
@@ -1134,6 +1140,7 @@ with _catalog_tab:
                 "CBM":        _sf(_cp.get("carton_cbm")),
                 "New?":       bool(_cp.get("is_new_product", 0)),
                 "Notes":      _cp.get("notes") or "",
+                "Img URL":    _cp.get("image_url") or "",
                 "Mfg ($)":    round(_sf(_bd.get("total_manufacturer", 0) if _bd else 0), 2),
                 "Svc ($)":    round(_sf(_bd.get("total_service", 0) if _bd else 0), 2),
                 "Total ($)":  round(
@@ -1160,7 +1167,7 @@ with _catalog_tab:
             "Ctn H": pd.Series(dtype=float),
             "NW (kg)": pd.Series(dtype=float), "GW (kg)": pd.Series(dtype=float),
             "CBM": pd.Series(dtype=float), "New?": pd.Series(dtype=bool),
-            "Notes": pd.Series(dtype=str),
+            "Notes": pd.Series(dtype=str), "Img URL": pd.Series(dtype=str),
             "Mfg ($)": pd.Series(dtype=float), "Svc ($)": pd.Series(dtype=float),
             "Total ($)": pd.Series(dtype=float),
             "Wt (g)": pd.Series(dtype=float), "Landed ($)": pd.Series(dtype=float),
@@ -1196,6 +1203,8 @@ with _catalog_tab:
                 "CBM":        st.column_config.NumberColumn("CBM", format="%.4f", width=75),
                 "New?":       st.column_config.CheckboxColumn("New?", width=60),
                 "Notes":      st.column_config.TextColumn("Notes", width=160),
+                "Img URL":    st.column_config.TextColumn("Image URL", width=200,
+                                  help="Paste any image URL. Leave blank to use Amazon CDN auto-URL."),
                 "Mfg ($)":    st.column_config.NumberColumn("Mfg ($)", format="$%.2f", width=90),
                 "Svc ($)":    st.column_config.NumberColumn("Svc ($)", format="$%.2f", width=90),
                 "Total ($)":  st.column_config.NumberColumn("Total ($)", format="$%.2f", width=95),
@@ -1241,6 +1250,7 @@ with _catalog_tab:
                     "CBM":       _sf(_a.get("CBM")),
                     "New?":      bool(_a.get("New?", False)),
                     "Notes":     str(_a.get("Notes") or ""),
+                    "Img URL":   str(_a.get("Img URL") or ""),
                     "Mfg ($)": 0.0, "Svc ($)": 0.0, "Total ($)": 0.0,
                     "Wt (g)": 0.0, "Landed ($)": 0.0,
                 })
@@ -1282,6 +1292,7 @@ with _catalog_tab:
                                 "carton_cbm":       _r["CBM"] or None,
                                 "part_id_1": _p1 if _p1 and _p1 != "—" else None,
                                 "part_id_2": _p2 if _p2 and _p2 != "—" else None,
+                                "image_url": _r.get("Img URL", "").strip() or None,
                             },
                             product_id=_r.get("_id"),
                         )
@@ -2678,6 +2689,9 @@ div:has(#ship-list-nav-marker) ~ div button {
 
             # Display the report table
             _ret_display = _ret_report.copy()
+            _ret_img_map  = get_asin_image_map()
+            _ret_display.insert(0, "Image",
+                _ret_display["ASIN"].str.upper().map(_ret_img_map).fillna(""))
             _ret_display["Return Rate %"] = _ret_display["Return Rate %"].apply(
                 lambda x: f"{x:.1f}%" if x is not None else "N/A"
             )
@@ -2698,8 +2712,9 @@ div:has(#ship-list-nav-marker) ~ div button {
                 hide_index=True,
                 height=500,
                 column_config={
+                    "Image":          st.column_config.ImageColumn("", width=55),
                     "ASIN":           st.column_config.TextColumn("ASIN",          width=110),
-                    "Product":        st.column_config.TextColumn("Product",        width=220),
+                    "Product":        st.column_config.TextColumn("Product",        width=200),
                     "Units Sold":     st.column_config.TextColumn("Units Sold",     width=90),
                     "Returns":        st.column_config.NumberColumn("Returns",      width=80),
                     "Return Rate %":  st.column_config.TextColumn("Return Rate %",  width=105),

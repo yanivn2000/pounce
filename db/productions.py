@@ -313,6 +313,36 @@ def get_sku_catalog_info() -> dict:
     return result
 
 
+def get_asin_image_map() -> dict[str, str]:
+    """
+    Return {ASIN (uppercase): image_url} for all products in the catalog.
+
+    Priority:
+      1. image_url stored in products_catalog (user-supplied, always reliable)
+      2. Amazon CDN auto-URL constructed from ASIN (works for most products,
+         no setup required — Streamlit shows a placeholder if it 404s)
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT asin, image_url FROM products_catalog "
+        "WHERE asin IS NOT NULL AND asin != ''"
+    ).fetchall()
+    conn.close()
+
+    result: dict[str, str] = {}
+    for row in rows:
+        asin = str(row["asin"]).strip().upper()
+        if not asin:
+            continue
+        stored = (row["image_url"] or "").strip()
+        result[asin] = (
+            stored
+            if stored
+            else f"https://m.media-amazon.com/images/P/{asin}.01._SL75_.jpg"
+        )
+    return result
+
+
 def get_asin_cost_map() -> dict[str, float]:
     """
     Return {ASIN (uppercase): unit_cost} derived from products_catalog.

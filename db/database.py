@@ -262,6 +262,7 @@ def init_db():
     _migrate_products_weight_gr(conn)
     _migrate_items_part_id(conn)
     _migrate_products_part_ids(conn)
+    _migrate_products_image_url(conn)
     _migrate_productions(conn)
     _migrate_shipments(conn)
     _migrate_bid_changes(conn)
@@ -895,6 +896,17 @@ def _migrate_products_upc(conn: sqlite3.Connection):
         cols = [r[1] for r in conn.execute("PRAGMA table_info(products_catalog)").fetchall()]
         if "upc" not in cols:
             conn.execute("ALTER TABLE products_catalog ADD COLUMN upc TEXT")
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_products_image_url(conn: sqlite3.Connection):
+    """Add image_url column to products_catalog."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(products_catalog)").fetchall()]
+        if "image_url" not in cols:
+            conn.execute("ALTER TABLE products_catalog ADD COLUMN image_url TEXT")
             conn.commit()
     except Exception:
         pass
