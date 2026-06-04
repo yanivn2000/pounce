@@ -147,25 +147,35 @@ _EU_FC_PREFIX: dict[str, str] = {
 }
 
 
-def _fc_to_marketplace(fc: str, region_hint: str = "NA") -> str:
+def _fc_to_marketplace(fc: str, region_hint: str = "NA") -> tuple[str, bool]:
     """
     Derive Amazon marketplace URL from Fulfillment Center ID.
 
     NA rule: FCs starting with 'Y' are Canadian (YVR, YYC, YYZ, YEG, …);
-             all other NA FCs are US.
-    EU rule: 3-letter FC prefix → country lookup; unknown → amazon.de.
+             all other NA FCs are US.  This is rule-based, so new NA FCs
+             are always classified correctly automatically.
+    EU rule: 3-letter FC prefix → country lookup.  Returns (marketplace, known)
+             where known=False signals an unrecognised FC prefix.
+
+    Returns (marketplace_url, is_known).
     """
     fc = (fc or "").strip().upper()
     if not fc:
-        return "amazon.ca" if False else ("amazon.com" if region_hint == "NA" else "amazon.co.uk")
+        # No FC in the CSV row at all — use region_hint default
+        default = "amazon.com" if region_hint == "NA" else "amazon.co.uk"
+        return default, False
 
     if region_hint == "EU":
         prefix = fc[:3]
-        return _EU_FC_PREFIX.get(prefix, "amazon.de")  # BTS2, unknown → DE
-    else:  # NA
-        if fc.startswith("Y"):   # YVR3, YYC1, YYZ1/7/9, YEG1/2 …
-            return "amazon.ca"
-        return "amazon.com"
+        mkt = _EU_FC_PREFIX.get(prefix)
+        if mkt:
+            return mkt, True
+        # Unknown EU prefix — do NOT silently guess DE; store as a neutral EU marker
+        return "amazon.de", False          # marketplace stored but flagged unknown
+    else:  # NA — pure rule, never needs a lookup table update
+        if fc.startswith("Y"):             # YVR3, YYC1, YYZ1/7/9, YEG1/2 …
+            return "amazon.ca", True
+        return "amazon.com", True
 
 
 def _region(marketplace: str) -> str:
@@ -229,6 +239,8 @@ def import_returns_csv(
     if missing:
         return 0, [f"Missing columns: {', '.join(missing)}"]
 
+    unknown_fcs: set[str] = set()   # EU prefixes not in our map
+
     with conn:
         for _, row in df.iterrows():
             asin = str(row.get("asin") or "").strip().upper()
@@ -238,9 +250,11 @@ def import_returns_csv(
             if not ret_date:
                 continue
 
-            fc_id  = str(row.get("fc_id") or "").strip().upper() or None
-            mkt    = _fc_to_marketplace(fc_id or "", region_hint)
-            region = _region(mkt)
+            fc_id             = str(row.get("fc_id") or "").strip().upper() or None
+            mkt, fc_known     = _fc_to_marketplace(fc_id or "", region_hint)
+            if not fc_known and fc_id and region_hint == "EU":
+                unknown_fcs.add(fc_id)
+            region  = _region(mkt)
             country = MARKETPLACE_TO_COUNTRY.get(mkt, "")
 
             order_id = str(row.get("order_id") or "").strip() or None
@@ -276,6 +290,14 @@ def import_returns_csv(
                 warns.append(str(e)[:120])
 
     conn.close()
+
+    if unknown_fcs:
+        warns.insert(0,
+            f"⚠️ Unrecognised EU fulfillment center(s): {', '.join(sorted(unknown_fcs))}. "
+            f"These rows were stored under amazon.de as a fallback — "
+            f"please report these FC codes so the mapping can be updated."
+        )
+
     return count, warns
 
 
