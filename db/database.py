@@ -267,6 +267,7 @@ def init_db():
     _migrate_bid_changes(conn)
     _migrate_recommendations_notes(conn)
     _migrate_placement_snapshots(conn)
+    _migrate_returns(conn)
     conn.close()
 
 
@@ -952,6 +953,35 @@ def _migrate_productions(conn: sqlite3.Connection):
                 num_cartons   INTEGER DEFAULT 0,
                 service_cost  REAL    DEFAULT 0
             );
+        """)
+    except Exception:
+        pass
+
+
+def _migrate_returns(conn: sqlite3.Connection):
+    """Create amazon_returns table."""
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS amazon_returns (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                return_date       TEXT NOT NULL,
+                order_id          TEXT,
+                sku               TEXT,
+                asin              TEXT,
+                title             TEXT,
+                quantity          INTEGER DEFAULT 1,
+                reason            TEXT,
+                disposition       TEXT,
+                status            TEXT,
+                marketplace       TEXT NOT NULL,
+                region            TEXT NOT NULL DEFAULT 'NA',
+                customer_comments TEXT,
+                created_at        TEXT DEFAULT (datetime('now')),
+                UNIQUE(order_id, asin, return_date, marketplace)
+            );
+            CREATE INDEX IF NOT EXISTS idx_returns_asin   ON amazon_returns(asin);
+            CREATE INDEX IF NOT EXISTS idx_returns_date   ON amazon_returns(return_date);
+            CREATE INDEX IF NOT EXISTS idx_returns_region ON amazon_returns(region);
         """)
     except Exception:
         pass

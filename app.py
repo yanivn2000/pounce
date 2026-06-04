@@ -66,6 +66,7 @@ from db.shipments import (
     get_overview_shipment_data,
 )
 from labels import generate_carton_labels_pdf
+from db.returns import import_returns_csv, get_return_rate_report, get_returns_date_range
 
 init_db()
 # ── Session isolation ─────────────────────────────────────────────────────────
@@ -325,8 +326,8 @@ else:
 # TAB — INVENTORY
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_inv:
-    _inv_overview_tab, _inv_upload_tab, _inv_manual_tab, _inv_prod_tab, _inv_stock_tab, _inv_ship_tab = st.tabs([
-        "📊 Overview", "📤 Upload Data", "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments"
+    _inv_overview_tab, _inv_upload_tab, _inv_manual_tab, _inv_prod_tab, _inv_stock_tab, _inv_ship_tab, _inv_returns_tab = st.tabs([
+        "📊 Overview", "📤 Upload Data", "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns"
     ])
 
     # ── OVERVIEW ─────────────────────────────────────────────────────────────
@@ -2476,6 +2477,171 @@ div:has(#ship-list-nav-marker) ~ div button {
 
     with _ship_col_form:
         _ship_form(_sel_ship, _all_skus)
+
+
+    # ── RETURNS ───────────────────────────────────────────────────────────────
+    with _inv_returns_tab:
+        st.markdown("# ↩️ Amazon FBA Returns")
+
+        # ── Upload ────────────────────────────────────────────────────────────
+        with st.expander("📤 Upload Returns CSV", expanded=False):
+            st.markdown(
+                "Download the **FBA Customer Returns** report from Seller Central "
+                "(*Reports → Fulfillment → Customer Concessions → FBA Customer Returns*)."
+            )
+            _ret_mkt_options = [
+                "amazon.com", "amazon.ca", "amazon.com.mx",   # NA
+                "amazon.co.uk", "amazon.de", "amazon.fr",     # EU
+                "amazon.it", "amazon.es", "amazon.nl",
+                "amazon.se", "amazon.pl",
+            ]
+            _ret_upload_col, _ret_mkt_col = st.columns([3, 2])
+            with _ret_mkt_col:
+                _ret_mkt = st.selectbox(
+                    "Marketplace",
+                    options=_ret_mkt_options,
+                    key="ret_mkt_sel",
+                )
+            with _ret_upload_col:
+                _ret_file = st.file_uploader(
+                    "Choose CSV file",
+                    type=["csv", "txt"],
+                    key=f"ret_upload_{st.session_state.get('ret_upload_key', 0)}",
+                )
+            if _ret_file is not None:
+                if st.button("⬆️ Import Returns", key="ret_import_btn", type="primary"):
+                    try:
+                        _ret_df = pd.read_csv(_ret_file, sep=None, engine="python")
+                        _ret_imported, _ret_warns = import_returns_csv(_ret_df, _ret_mkt)
+                        if _ret_warns:
+                            st.warning(f"⚠️ {'; '.join(_ret_warns[:5])}")
+                        if _ret_imported:
+                            st.success(f"✅ Imported {_ret_imported} return records from {_ret_mkt}.")
+                        else:
+                            st.info("No new records imported (all may be duplicates).")
+                        # Reset uploader
+                        st.session_state["ret_upload_key"] = st.session_state.get("ret_upload_key", 0) + 1
+                        st.rerun()
+                    except Exception as _re:
+                        st.error(f"Import failed: {_re}")
+
+        st.divider()
+
+        # ── Filters ───────────────────────────────────────────────────────────
+        _ret_min_date, _ret_max_date = get_returns_date_range()
+        _ret_f1, _ret_f2, _ret_f3, _ = st.columns([2, 2, 2, 4])
+        with _ret_f1:
+            _ret_region = st.selectbox(
+                "Region",
+                options=["All", "NA", "EU"],
+                key="ret_region_sel",
+            )
+        with _ret_f2:
+            _ret_start = st.date_input(
+                "From",
+                value=date.fromisoformat(_ret_min_date) if _ret_min_date else date.today() - timedelta(days=90),
+                key="ret_start_date",
+            )
+        with _ret_f3:
+            _ret_end = st.date_input(
+                "To",
+                value=date.fromisoformat(_ret_max_date) if _ret_max_date else date.today(),
+                key="ret_end_date",
+            )
+
+        # ── Report ────────────────────────────────────────────────────────────
+        _ret_report = get_return_rate_report(
+            region=_ret_region if _ret_region != "All" else None,
+            start_date=str(_ret_start),
+            end_date=str(_ret_end),
+        )
+
+        if _ret_report.empty:
+            st.info("No returns data found for the selected filters. Upload a returns CSV to get started.")
+        else:
+            # Summary KPIs
+            _ret_total_returned = int(_ret_report["Returns"].sum())
+            _ret_total_sold     = int(_ret_report["Units Sold"].sum())
+            _ret_overall_rate   = round(_ret_total_returned / _ret_total_sold * 100, 1) if _ret_total_sold else 0.0
+            _ret_amazon_cnt     = int(_ret_report["🔴 Amazon"].sum())
+            _ret_defect_cnt     = int(_ret_report["🟠 Mfg Defect"].sum())
+            _ret_cust_cnt       = int(_ret_report["⚪ Customer"].sum())
+
+            _rk1, _rk2, _rk3, _rk4, _rk5 = st.columns(5)
+            _rk1.metric("Total Returns",    f"{_ret_total_returned:,}")
+            _rk2.metric("Units Sold",        f"{_ret_total_sold:,}")
+            _rk3.metric("Overall Rate",      f"{_ret_overall_rate}%")
+            _rk4.metric("🔴 Contact Amazon", f"{_ret_amazon_cnt:,}")
+            _rk5.metric("🟠 Mfg Defects",   f"{_ret_defect_cnt:,}")
+
+            st.divider()
+
+            # Color-code Return Rate %
+            def _ret_rate_color(rate):
+                if rate is None:
+                    return "color: #888"
+                if rate >= 5:
+                    return "color: #e05252; font-weight: 700"
+                if rate >= 2:
+                    return "color: #e09c52; font-weight: 600"
+                return "color: #52a852"
+
+            def _style_ret_rate(col):
+                return [_ret_rate_color(v) for v in col]
+
+            # Display the report table
+            _ret_display = _ret_report.copy()
+            # Format Return Rate %
+            _ret_display["Return Rate %"] = _ret_display["Return Rate %"].apply(
+                lambda x: f"{x:.1f}%" if x is not None else "N/A"
+            )
+            _ret_display["Units Sold"] = _ret_display["Units Sold"].apply(
+                lambda x: f"{x:,}" if x else "—"
+            )
+
+            st.dataframe(
+                _ret_display.style.apply(
+                    lambda _col: [_ret_rate_color(
+                        float(_v.replace("%", "")) if isinstance(_v, str) and _v.endswith("%") else None
+                    ) for _v in _col]
+                    if _col.name == "Return Rate %"
+                    else [""] * len(_col),
+                    axis=0,
+                ),
+                use_container_width=True,
+                hide_index=True,
+                height=500,
+                column_config={
+                    "ASIN":           st.column_config.TextColumn("ASIN",          width=110),
+                    "Product":        st.column_config.TextColumn("Product",        width=220),
+                    "Units Sold":     st.column_config.TextColumn("Units Sold",     width=90),
+                    "Returns":        st.column_config.NumberColumn("Returns",      width=80),
+                    "Return Rate %":  st.column_config.TextColumn("Return Rate %",  width=105),
+                    "Top Reason":     st.column_config.TextColumn("Top Reason",     width=160),
+                    "Action":         st.column_config.TextColumn("Action",         width=185),
+                    "🔴 Amazon":      st.column_config.NumberColumn("🔴 Amazon",    width=90),
+                    "🟠 Mfg Defect":  st.column_config.NumberColumn("🟠 Mfg Defect", width=105),
+                    "⚪ Customer":    st.column_config.NumberColumn("⚪ Customer",   width=100),
+                    "Other":          st.column_config.NumberColumn("Other",         width=70),
+                },
+            )
+
+            # Legend
+            st.caption(
+                "**🔴 ≥ 5%** critical &nbsp;|&nbsp; **🟠 2–5%** elevated &nbsp;|&nbsp; **🟢 < 2%** normal &nbsp;|&nbsp; "
+                "**🔴 Contact Amazon** — FC/carrier damage &nbsp;|&nbsp; "
+                "**🟠 Contact Manufacturer** — product defect/quality &nbsp;|&nbsp; "
+                "**⚪ Normal Return** — customer preference"
+            )
+
+            # Download
+            st.download_button(
+                "⬇️ Download Returns Report CSV",
+                data=_ret_report.to_csv(index=False),
+                file_name=f"returns_report_{_ret_start}_{_ret_end}.csv",
+                mime="text/csv",
+                key="ret_dl_btn",
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
