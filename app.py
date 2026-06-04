@@ -69,7 +69,7 @@ from labels import generate_carton_labels_pdf
 from db.returns import (
     import_returns_csv, get_return_rate_report, get_returns_date_range,
     get_return_country_breakdown, get_available_countries, clear_all_returns,
-    COUNTRY_FLAG, MARKETPLACE_TO_COUNTRY,
+    get_upload_meta, COUNTRY_FLAG, MARKETPLACE_TO_COUNTRY,
 )
 
 init_db()
@@ -2492,18 +2492,32 @@ div:has(#ship-list-nav-marker) ~ div button {
             st.markdown(
                 "Download the **FBA Customer Returns** report from Seller Central "
                 "(*Reports → Fulfillment → Customer Concessions → FBA Customer Returns*).  \n"
-                "The country is **auto-detected** from the Fulfillment Center ID in each row — "
-                "just pick the region of the report (NA or EU) as a fallback for unrecognised FCs."
+                "The country is **auto-detected** from the Fulfillment Center ID — "
+                "just pick the region (NA or EU) as a fallback for unrecognised FCs."
             )
-            _ret_upload_col, _ret_region_col = st.columns([3, 1])
-            with _ret_region_col:
+            _ru1, _ru2, _ru3, _ru4 = st.columns([2, 2, 2, 1])
+            with _ru4:
                 _ret_upload_region = st.selectbox(
-                    "Region hint",
+                    "Region",
                     options=["NA", "EU"],
                     key="ret_region_hint",
                     help="Only used as a fallback when the FC code cannot be mapped to a country.",
                 )
-            with _ret_upload_col:
+            with _ru2:
+                _ret_rpt_from = st.date_input(
+                    "Report from",
+                    value=date.today().replace(day=1),
+                    key="ret_rpt_from",
+                    help="Start date of the report period you downloaded from Seller Central.",
+                )
+            with _ru3:
+                _ret_rpt_to = st.date_input(
+                    "Report to",
+                    value=date.today(),
+                    key="ret_rpt_to",
+                    help="End date of the report period you downloaded from Seller Central.",
+                )
+            with _ru1:
                 _ret_file = st.file_uploader(
                     "Choose CSV file",
                     type=["csv", "txt"],
@@ -2514,11 +2528,18 @@ div:has(#ship-list-nav-marker) ~ div button {
                     try:
                         _ret_df = pd.read_csv(_ret_file, sep=None, engine="python",
                                               encoding_errors="replace")
-                        _ret_imported, _ret_warns = import_returns_csv(_ret_df, _ret_upload_region)
+                        _ret_imported, _ret_warns = import_returns_csv(
+                            _ret_df, _ret_upload_region,
+                            report_from=str(_ret_rpt_from),
+                            report_to=str(_ret_rpt_to),
+                        )
                         if _ret_warns:
                             st.warning(f"⚠️ {'; '.join(_ret_warns[:5])}")
                         if _ret_imported:
-                            st.success(f"✅ Imported {_ret_imported} return records (country auto-detected from FC).")
+                            st.success(
+                                f"✅ Imported {_ret_imported} return records "
+                                f"({_ret_upload_region} · {_ret_rpt_from} → {_ret_rpt_to})."
+                            )
                         else:
                             st.info("No new records imported (all may be duplicates).")
                         st.session_state["ret_upload_key"] = st.session_state.get("ret_upload_key", 0) + 1
@@ -2545,6 +2566,19 @@ div:has(#ship-list-nav-marker) ~ div button {
                     if st.button("Cancel", key="ret_del_all_cancel"):
                         st.session_state.pop("ret_del_all_confirm", None)
                         st.rerun()
+
+        # ── Uploaded data coverage ────────────────────────────────────────────
+        _ret_meta = get_upload_meta()
+        if _ret_meta:
+            _cov_parts = []
+            for _rg in ("NA", "EU"):
+                _m = _ret_meta.get(_rg)
+                if _m and _m.get("report_from") and _m.get("report_to"):
+                    _cov_parts.append(
+                        f"**{_rg}** {_m['report_from']} → {_m['report_to']}"
+                    )
+            if _cov_parts:
+                st.info("📅 Uploaded data covers: " + " &nbsp;|&nbsp; ".join(_cov_parts))
 
         st.divider()
 

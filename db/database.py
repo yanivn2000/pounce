@@ -995,3 +995,17 @@ def _migrate_returns(conn: sqlite3.Connection):
             conn.commit()
         except Exception:
             pass  # column already exists
+
+    # Metadata table — one row per region, records what date range was uploaded
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS returns_meta (
+                region          TEXT PRIMARY KEY,
+                report_from     TEXT,
+                report_to       TEXT,
+                last_imported   TEXT,
+                rows_imported   INTEGER DEFAULT 0
+            );
+        """)
+    except Exception:
+        pass

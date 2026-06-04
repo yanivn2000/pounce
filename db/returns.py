@@ -219,6 +219,8 @@ def _norm_cols(df: pd.DataFrame) -> pd.DataFrame:
 def import_returns_csv(
     df: pd.DataFrame,
     region_hint: str = "NA",
+    report_from: str | None = None,
+    report_to:   str | None = None,
 ) -> tuple[int, list[str]]:
     """
     Parse and store an Amazon FBA Returns CSV.
@@ -226,6 +228,9 @@ def import_returns_csv(
     Marketplace and country are auto-detected from the fulfillment-center-id
     column in each row.  region_hint ("NA" or "EU") is used as a fallback for
     rows where the FC code is missing or unrecognised.
+
+    report_from / report_to — the date range declared by the user at upload
+    time; stored in returns_meta so it can be shown as a coverage hint.
 
     Returns (rows_imported, warnings).
     """
@@ -297,6 +302,10 @@ def import_returns_csv(
             f"These rows were stored under amazon.de as a fallback — "
             f"please report these FC codes so the mapping can be updated."
         )
+
+    # Persist the declared report date range
+    if report_from and report_to:
+        save_upload_meta(region_hint, report_from, report_to, count)
 
     return count, warns
 
@@ -491,6 +500,35 @@ def get_available_countries() -> list[str]:
     ).fetchall()
     conn.close()
     return [r["country"] for r in rows]
+
+
+def save_upload_meta(region: str, report_from: str, report_to: str, rows: int):
+    """Upsert one row per region recording the declared report date range."""
+    conn = get_conn()
+    with conn:
+        conn.execute("""
+            INSERT INTO returns_meta (region, report_from, report_to, last_imported, rows_imported)
+            VALUES (?, ?, ?, datetime('now'), ?)
+            ON CONFLICT(region) DO UPDATE SET
+                report_from   = excluded.report_from,
+                report_to     = excluded.report_to,
+                last_imported = excluded.last_imported,
+                rows_imported = excluded.rows_imported
+        """, (region, report_from, report_to, rows))
+    conn.close()
+
+
+def get_upload_meta() -> dict[str, dict]:
+    """
+    Return {region: {report_from, report_to, last_imported, rows_imported}}
+    for every region that has been uploaded.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT region, report_from, report_to, last_imported, rows_imported FROM returns_meta"
+    ).fetchall()
+    conn.close()
+    return {r["region"]: dict(r) for r in rows}
 
 
 def clear_all_returns() -> int:
