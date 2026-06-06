@@ -373,22 +373,6 @@ with tab_inv:
         if _overview.empty:
             st.info("No inventory data yet. Go to **Upload Data** or **Manual Entry** to add stock.")
         else:
-            # ── Summary matrix ────────────────────────────────────────────────
-            # Location columns (skip PRODUCTION — replaced by Stock to Ship)
-            _loc_labels   = {k: v["label"] for k, v in LOCATIONS.items()}
-            _display_cols = ["asin", "title"]
-
-            _counting_cols: list[str] = []   # columns included in Total (toggleable)
-
-            for loc in LOCATIONS:
-                if loc == "PRODUCTION":
-                    continue  # replaced by Stock to Ship below
-                if loc in _overview.columns:
-                    col_name = _loc_labels[loc]
-                    _overview[col_name] = _overview[loc].fillna(0).astype(int)
-                    _display_cols.append(col_name)
-                    _counting_cols.append(col_name)
-
             # ── Stock to Ship + per-draft-shipment columns ────────────────────
             _shp_data = get_overview_shipment_data()
 
@@ -396,8 +380,6 @@ with tab_inv:
             _overview[_STS_COL] = (
                 _overview["asin"].map(_shp_data["stock_to_ship"]).fillna(0).astype(int)
             )
-            _display_cols.append(_STS_COL)
-            _counting_cols.append(_STS_COL)
 
             _shipment_cols: list[str] = []
             for _shp in _shp_data["shipments"]:
@@ -405,23 +387,113 @@ with tab_inv:
                 _overview[_sc] = (
                     _overview["asin"].map(_shp["units"]).fillna(0).astype(int)
                 )
-                _display_cols.append(_sc)
-                _counting_cols.append(_sc)
                 _shipment_cols.append(_sc)
 
-            # ── Column toggle checkboxes ──────────────────────────────────────
+            # ── Region grouping ───────────────────────────────────────────────
+            # Map a free-text shipment destination to a region code.
+            def _dest_region(dest: str) -> str:
+                d = (dest or "").lower()
+                if any(x in d for x in ["amazon.com", ".com/", "walmart", " us", "usa", "united states"]):
+                    return "US"
+                if any(x in d for x in ["amazon.ca", " ca ", "canada", "ca\n"]) or d.strip() in ("ca",):
+                    return "CA"
+                if any(x in d for x in ["amazon.co.uk", "amazon.de", "amazon.fr",
+                                         "amazon.it", "amazon.es", "amazon.nl",
+                                         " uk", "united kingdom", "europe", " eu"]):
+                    return "UK"
+                # fall back to "US" if blank (most common)
+                return "US"
+
+            # Build region → [col_name] mapping
+            _REGION_BASE: dict[str, list[str]] = {
+                "US": [],
+                "CA": [],
+                "UK": [],
+                "China": [],
+            }
+            for _loc, _meta in LOCATIONS.items():
+                if _loc == "PRODUCTION":
+                    continue
+                if _loc not in _overview.columns:
+                    continue
+                _col_label = _meta["label"]
+                if _loc in ("FBA_US", "AWD_US"):
+                    _REGION_BASE["US"].append(_col_label)
+                elif _loc in ("FBA_CA",):
+                    _REGION_BASE["CA"].append(_col_label)
+                elif _loc in ("FBA_UK", "3PL_UK"):
+                    _REGION_BASE["UK"].append(_col_label)
+                elif _loc in ("AWD_CN", "WH_CN"):
+                    _REGION_BASE["China"].append(_col_label)
+
+            # Assign shipment columns to regions by destination
+            for _shp in _shp_data["shipments"]:
+                _rg = _dest_region(_shp["destination"])
+                if _rg in _REGION_BASE:
+                    _REGION_BASE[_rg].append(_shp["name"])
+                else:
+                    _REGION_BASE["US"].append(_shp["name"])  # safe default
+
+            _REGION_LABELS = {
+                "US":    "🇺🇸 US",
+                "CA":    "🇨🇦 CA",
+                "UK":    "🇬🇧 UK",
+                "China": "🏭 China",
+            }
+
+            # ── Region toggle checkboxes ──────────────────────────────────────
             st.markdown(
                 "<p style='font-size:0.8rem;color:#888;margin-bottom:2px;'>"
-                "☑ Toggle columns included in <strong>Total</strong> &amp; <strong>Value $</strong> "
+                "☑ Toggle regions included in <strong>Total</strong> &amp; <strong>Value $</strong> "
                 "(unchecked columns are hidden)</p>",
                 unsafe_allow_html=True,
             )
-            _toggle_cols_ui = st.columns(len(_counting_cols))
+            _sts_checked = st.checkbox(_STS_COL, value=True, key="ovv_tog_sts",
+                                       help="Unallocated production units ready to ship")
+
+            _reg_cols_ui = st.columns(len(_REGION_BASE))
+            _active_regions: set[str] = set()
+            for _ri, (_rcode, _rcols) in enumerate(_REGION_BASE.items()):
+                with _reg_cols_ui[_ri]:
+                    _rlabel = _REGION_LABELS[_rcode]
+                    _col_hint = ", ".join(_rcols) if _rcols else "—"
+                    _checked  = st.checkbox(
+                        _rlabel,
+                        value=bool(_rcols),          # off by default if no columns
+                        disabled=not _rcols,
+                        key=f"ovv_tog_reg_{_rcode}",
+                        help=f"Columns: {_col_hint}",
+                    )
+                    if _checked:
+                        _active_regions.add(_rcode)
+
+            # Expand active regions → active individual columns
             _active_cols: list[str] = []
-            for _ti, _tc in enumerate(_counting_cols):
-                with _toggle_cols_ui[_ti]:
-                    if st.checkbox(_tc, value=True, key=f"ovv_tog_{_tc}"):
-                        _active_cols.append(_tc)
+            if _sts_checked:
+                _active_cols.append(_STS_COL)
+            for _rcode, _rcols in _REGION_BASE.items():
+                if _rcode in _active_regions:
+                    _active_cols.extend(_rcols)
+
+            # All columns to show in the table (active only)
+            _display_cols = ["asin", "title"]
+            _counting_cols = []
+            for _loc, _meta in LOCATIONS.items():
+                if _loc == "PRODUCTION":
+                    continue
+                _col_label = _meta["label"]
+                if _loc in _overview.columns:
+                    _overview[_col_label] = _overview[_loc].fillna(0).astype(int)
+                if _col_label in _active_cols:
+                    _display_cols.append(_col_label)
+                    _counting_cols.append(_col_label)
+            if _sts_checked:
+                _display_cols.append(_STS_COL)
+                _counting_cols.append(_STS_COL)
+            for _sc in _shipment_cols:
+                if _sc in _active_cols:
+                    _display_cols.append(_sc)
+                    _counting_cols.append(_sc)
 
             # ── Total + Value based on active (checked) cols ──────────────────
             _avail_active = [c for c in _active_cols if c in _overview.columns]

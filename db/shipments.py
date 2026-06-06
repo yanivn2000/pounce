@@ -400,7 +400,7 @@ def get_overview_shipment_data() -> dict:
 
     # Per-draft-shipment units by ASIN
     draft_rows = conn.execute(
-        "SELECT id, name FROM shipments WHERE status='draft' ORDER BY id"
+        "SELECT id, name, destination FROM shipments WHERE status='draft' ORDER BY id"
     ).fetchall()
     shipments = []
     for ship in draft_rows:
@@ -416,7 +416,12 @@ def get_overview_shipment_data() -> dict:
             nc   = int(ln["num_cartons"] or 0)
             if asin and cu and nc:
                 units_by_asin[asin] = units_by_asin.get(asin, 0) + nc * cu
-        shipments.append({"id": ship["id"], "name": ship["name"], "units": units_by_asin})
+        shipments.append({
+            "id":          ship["id"],
+            "name":        ship["name"],
+            "destination": ship["destination"] or "",
+            "units":       units_by_asin,
+        })
 
     conn.close()
     return {"stock_to_ship": stock_to_ship, "shipments": shipments}
