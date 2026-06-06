@@ -392,16 +392,24 @@ with tab_inv:
             # ── Region grouping ───────────────────────────────────────────────
             # Map a free-text shipment destination to a region code.
             def _dest_region(dest: str) -> str:
-                d = (dest or "").lower()
-                if any(x in d for x in ["amazon.com", ".com/", "walmart", " us", "usa", "united states"]):
-                    return "US"
-                if any(x in d for x in ["amazon.ca", " ca ", "canada", "ca\n"]) or d.strip() in ("ca",):
-                    return "CA"
-                if any(x in d for x in ["amazon.co.uk", "amazon.de", "amazon.fr",
-                                         "amazon.it", "amazon.es", "amazon.nl",
-                                         " uk", "united kingdom", "europe", " eu"]):
+                d  = (dest or "").lower().strip()
+                # UK / EU — check first so "amazon.co.uk" doesn't match ".com"
+                if d in ("uk", "gb", "united kingdom", "europe", "eu") or any(
+                    x in d for x in ["amazon.co.uk", "amazon.de", "amazon.fr",
+                                     "amazon.it", "amazon.es", "amazon.nl",
+                                     "amazon.se", "amazon.pl",
+                                     " uk", "united kingdom", " eu", "europe"]
+                ):
                     return "UK"
-                # fall back to "US" if blank (most common)
+                if d in ("ca", "canada") or any(
+                    x in d for x in ["amazon.ca", " ca ", "canada"]
+                ):
+                    return "CA"
+                if d in ("us", "usa", "united states") or any(
+                    x in d for x in ["amazon.com", "walmart", " us", "usa", "united states"]
+                ):
+                    return "US"
+                # fall back to "US" if blank / unrecognised
                 return "US"
 
             # Build region → [col_name] mapping
