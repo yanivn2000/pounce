@@ -6,16 +6,19 @@ import pandas as pd
 from db.database import get_conn
 
 
-def get_daily_sales(marketplace: str = None, days: int = 30) -> pd.DataFrame:
+def get_daily_sales(marketplace: str = None, days: int = 30,
+                    include_pending: bool = False) -> pd.DataFrame:
     """
     Returns daily units + revenue per ASIN for the last N days.
     When marketplace is specified: one row per (date, asin, marketplace).
     When marketplace is None (all): aggregated by (date, asin) across all marketplaces,
     title preferred from amazon.com.
+    include_pending: when True, Pending orders are counted alongside Shipped ones.
     """
     conn = get_conn()
+    _status_filter = "AND order_status NOT IN ('Cancelled')" if include_pending else "AND order_status NOT IN ('Cancelled', 'Pending')"
     if marketplace:
-        sql = """
+        sql = f"""
             SELECT order_date, asin,
                    MAX(title) AS title,
                    marketplace,
@@ -24,13 +27,13 @@ def get_daily_sales(marketplace: str = None, days: int = 30) -> pd.DataFrame:
             FROM orders
             WHERE marketplace = ?
               AND order_date >= date('now', '-' || ? || ' days')
-              AND order_status NOT IN ('Cancelled', 'Pending')
+              {_status_filter}
             GROUP BY order_date, asin, marketplace
             ORDER BY order_date DESC, units DESC
         """
         params = [marketplace, days]
     else:
-        sql = """
+        sql = f"""
             SELECT order_date, asin,
                    COALESCE(
                        MAX(CASE WHEN marketplace = 'amazon.com' THEN title END),
@@ -40,7 +43,7 @@ def get_daily_sales(marketplace: str = None, days: int = 30) -> pd.DataFrame:
                    SUM(item_price) AS revenue
             FROM orders
             WHERE order_date >= date('now', '-' || ? || ' days')
-              AND order_status NOT IN ('Cancelled', 'Pending')
+              {_status_filter}
             GROUP BY order_date, asin
             ORDER BY order_date DESC, units DESC
         """
@@ -68,9 +71,10 @@ def get_daily_sales(marketplace: str = None, days: int = 30) -> pd.DataFrame:
     return df
 
 
-def get_sales_matrix(marketplace: str = None, days: int = 30) -> pd.DataFrame:
+def get_sales_matrix(marketplace: str = None, days: int = 30,
+                     include_pending: bool = False) -> pd.DataFrame:
     """Daily pivot: ASIN × Date, values = revenue (kept for legacy use)."""
-    df = get_daily_sales(marketplace=marketplace, days=days)
+    df = get_daily_sales(marketplace=marketplace, days=days, include_pending=include_pending)
     if df.empty:
         return df
     pivot = df.pivot_table(
@@ -83,9 +87,10 @@ def get_sales_matrix(marketplace: str = None, days: int = 30) -> pd.DataFrame:
     return pivot[["asin", "title"] + date_cols]
 
 
-def get_units_matrix(marketplace: str = None, days: int = 30) -> pd.DataFrame:
+def get_units_matrix(marketplace: str = None, days: int = 30,
+                     include_pending: bool = False) -> pd.DataFrame:
     """Daily pivot: ASIN × Date, values = units sold."""
-    df = get_daily_sales(marketplace=marketplace, days=days)
+    df = get_daily_sales(marketplace=marketplace, days=days, include_pending=include_pending)
     if df.empty:
         return df
     pivot = df.pivot_table(
@@ -98,9 +103,10 @@ def get_units_matrix(marketplace: str = None, days: int = 30) -> pd.DataFrame:
     return pivot[["asin", "title"] + date_cols]
 
 
-def get_weekly_units_matrix(marketplace: str = None, weeks: int = 8) -> pd.DataFrame:
+def get_weekly_units_matrix(marketplace: str = None, weeks: int = 8,
+                            include_pending: bool = False) -> pd.DataFrame:
     """Weekly pivot: ASIN × week_start, values = units sold."""
-    df = get_weekly_summary(marketplace=marketplace, weeks=weeks)
+    df = get_weekly_summary(marketplace=marketplace, weeks=weeks, include_pending=include_pending)
     if df.empty:
         return df
     pivot = df.pivot_table(
@@ -113,7 +119,8 @@ def get_weekly_units_matrix(marketplace: str = None, weeks: int = 8) -> pd.DataF
     return pivot[["asin", "title"] + date_cols]
 
 
-def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8) -> tuple[pd.DataFrame, pd.DataFrame]:
+def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8,
+                                include_pending: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Returns (current_pivot, ly_pivot) both ASIN × week_start with units.
     LY uses +364 days shift (52 exact weeks) to align same weekday.
@@ -125,6 +132,7 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8) -> tupl
     mkt_clause = "AND marketplace = ?" if marketplace else ""
     title_expr = ("MAX(title)" if marketplace else
                   "COALESCE(MAX(CASE WHEN marketplace='amazon.com' THEN title END), MAX(title))")
+    _sf = "AND order_status NOT IN ('Cancelled')" if include_pending else "AND order_status NOT IN ('Cancelled', 'Pending')"
 
     # Current period
     sql_cur = f"""
@@ -132,7 +140,7 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8) -> tupl
                asin, {title_expr} AS title, SUM(quantity) AS units
         FROM orders
         WHERE order_date >= date('now', '-' || ? || ' days')
-          AND order_status NOT IN ('Cancelled', 'Pending')
+          {_sf}
           {mkt_clause}
         GROUP BY week_start, asin
     """
@@ -146,7 +154,7 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8) -> tupl
         FROM orders
         WHERE order_date >= date('now', '-' || ? || ' days', '-364 days')
           AND order_date <  date('now', '-364 days')
-          AND order_status NOT IN ('Cancelled', 'Pending')
+          {_sf}
           {mkt_clause}
         GROUP BY week_start, asin
     """
@@ -169,7 +177,8 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8) -> tupl
     return _pivot(df_cur), _pivot(df_ly)
 
 
-def get_weekly_summary(marketplace: str = None, weeks: int = 8) -> pd.DataFrame:
+def get_weekly_summary(marketplace: str = None, weeks: int = 8,
+                       include_pending: bool = False) -> pd.DataFrame:
     """
     Weekly units + revenue per ASIN.
     When marketplace specified: grouped by (week, asin, marketplace).
@@ -177,21 +186,22 @@ def get_weekly_summary(marketplace: str = None, weeks: int = 8) -> pd.DataFrame:
     """
     conn = get_conn()
     days = weeks * 7
+    _sf = "AND order_status NOT IN ('Cancelled')" if include_pending else "AND order_status NOT IN ('Cancelled', 'Pending')"
     if marketplace:
-        sql = """
+        sql = f"""
             SELECT date(order_date, 'weekday 1', '-7 days') AS week_start,
                    asin, MAX(title) AS title, marketplace,
                    SUM(quantity) AS units, SUM(item_price) AS revenue
             FROM orders
             WHERE marketplace = ?
               AND order_date >= date('now', '-' || ? || ' days')
-              AND order_status NOT IN ('Cancelled', 'Pending')
+              {_sf}
             GROUP BY week_start, asin, marketplace
             ORDER BY week_start DESC, units DESC
         """
         params = [marketplace, days]
     else:
-        sql = """
+        sql = f"""
             SELECT date(order_date, 'weekday 1', '-7 days') AS week_start,
                    asin,
                    COALESCE(
@@ -201,7 +211,7 @@ def get_weekly_summary(marketplace: str = None, weeks: int = 8) -> pd.DataFrame:
                    SUM(quantity) AS units, SUM(item_price) AS revenue
             FROM orders
             WHERE order_date >= date('now', '-' || ? || ' days')
-              AND order_status NOT IN ('Cancelled', 'Pending')
+              {_sf}
             GROUP BY week_start, asin
             ORDER BY week_start DESC, units DESC
         """

@@ -2934,13 +2934,25 @@ with tab_sales:
             else:
                 yoy_mode = False
 
-        # ── ASIN / product search ─────────────────────────────────────────────
-        _asin_search = st.text_input(
-            "🔍 Search ASIN or product name",
-            value="",
-            placeholder="Filter rows by ASIN or title…",
-            key="dash_asin_search",
-        )
+        # ── ASIN / product search + pending toggle ────────────────────────────
+        _dash_s1, _dash_s2 = st.columns([5, 2])
+        with _dash_s1:
+            _asin_search = st.text_input(
+                "🔍 Search ASIN or product name",
+                value="",
+                placeholder="Filter rows by ASIN or title…",
+                key="dash_asin_search",
+            )
+        with _dash_s2:
+            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+            _include_pending = st.checkbox(
+                "Include Pending orders",
+                value=True,
+                key="dash_include_pending",
+                help="Pending orders are real orders but not yet shipped. "
+                     "Uncheck to see confirmed/shipped only.",
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
 
         # ── Load change log early so matrix can use it ────────────────────────
         cl_df = get_change_log(marketplace=sel_market, days=days_back_raw if view_mode == "Daily" else days_back_raw * 7)
@@ -2967,15 +2979,18 @@ with tab_sales:
 
         ly_matrix = None
         if view_mode == "Daily":
-            matrix = get_units_matrix(marketplace=sel_market, days=days_back_raw)
+            matrix = get_units_matrix(marketplace=sel_market, days=days_back_raw,
+                                      include_pending=_include_pending)
             threshold = 30
         elif yoy_mode:
             matrix, ly_matrix = get_weekly_units_matrix_yoy(
-                marketplace=sel_market, weeks=days_back_raw
+                marketplace=sel_market, weeks=days_back_raw,
+                include_pending=_include_pending,
             )
             threshold = 20
         else:
-            matrix = get_weekly_units_matrix(marketplace=sel_market, weeks=days_back_raw)
+            matrix = get_weekly_units_matrix(marketplace=sel_market, weeks=days_back_raw,
+                                             include_pending=_include_pending)
             threshold = 20
 
         # Apply ASIN / title search filter
