@@ -3079,14 +3079,14 @@ with tab_sales:
             # ── Per-ASIN row totals — inserted right after "Last Change" ──────
             asin_row_totals = matrix[date_cols].sum(axis=1).astype(int)
             _lc_pos = display_marked.columns.get_loc("Last Change")
-            display_marked.insert(_lc_pos + 1, "Total", [f"{t:,}" for t in asin_row_totals.values])
+            display_marked.insert(_lc_pos + 1, "Total", asin_row_totals.values)
 
             col_cfg = {
                 "Image":       st.column_config.ImageColumn("",           width=55),
                 "asin":        st.column_config.TextColumn("ASIN",        width=120),
                 "title":       st.column_config.TextColumn("Title",       width=200),
                 "Last Change": st.column_config.TextColumn("Last Change", width=220),
-                "Total":       st.column_config.TextColumn("Total",       width=90),
+                "Total":       st.column_config.NumberColumn("Total",      width=90),
             }
 
             # ── Totals row — prepended as row 0 in the same dataframe ─────────
@@ -3096,7 +3096,7 @@ with tab_sales:
                 [{
                     "Image":       "",
                     "Last Change": "",
-                    "Total":       f"{_grand_total:,}",
+                    "Total":       _grand_total,
                     **{col: f"{_col_sums[col]:,}" for col in date_cols},
                 }],
                 index=pd.MultiIndex.from_tuples(
