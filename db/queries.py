@@ -48,6 +48,23 @@ def get_daily_sales(marketplace: str = None, days: int = 30) -> pd.DataFrame:
 
     df = pd.read_sql_query(sql, conn, params=params)
     conn.close()
+
+    # Normalise titles: same ASIN must get one consistent title across all dates,
+    # otherwise pivot_table(index=["asin","title"]) creates duplicate ASIN rows
+    # (e.g. English title on amazon.com days, German title on amazon.de-only days).
+    # Prefer amazon.com title; fall back to the most common title for that ASIN.
+    if not df.empty and "title" in df.columns:
+        _com_titles = (
+            df[df["marketplace"] == "amazon.com"].groupby("asin")["title"].first()
+            if "marketplace" in df.columns else pd.Series(dtype=str)
+        )
+        _any_title = df.groupby("asin")["title"].agg(
+            lambda x: x.dropna().mode().iloc[0] if not x.dropna().empty else ""
+        )
+        _title_map = _any_title.to_dict()
+        _title_map.update(_com_titles.dropna().to_dict())   # amazon.com wins
+        df["title"] = df["asin"].map(_title_map).fillna("")
+
     return df
 
 
@@ -210,6 +227,20 @@ def get_recommendations_history(marketplace: str = None) -> pd.DataFrame:
 
     df = pd.read_sql_query(sql, conn, params=params)
     conn.close()
+
+    # Same title-normalisation as get_daily_sales to prevent duplicate ASIN rows
+    if not df.empty and "title" in df.columns:
+        _com_titles = (
+            df[df["marketplace"] == "amazon.com"].groupby("asin")["title"].first()
+            if "marketplace" in df.columns else pd.Series(dtype=str)
+        )
+        _any_title = df.groupby("asin")["title"].agg(
+            lambda x: x.dropna().mode().iloc[0] if not x.dropna().empty else ""
+        )
+        _title_map = _any_title.to_dict()
+        _title_map.update(_com_titles.dropna().to_dict())
+        df["title"] = df["asin"].map(_title_map).fillna("")
+
     return df
 
 
