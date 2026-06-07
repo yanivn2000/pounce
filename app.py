@@ -3065,16 +3065,16 @@ with tab_sales:
                 for asin, _ in display_marked.index
             ])
 
+            # Store date columns as integers (enables numeric sort).
+            # Changed cells are still highlighted yellow by _color_matrix below.
             for col in date_cols:
                 col_idx = display_marked.columns.get_loc(col)
                 for pos, (asin, title) in enumerate(display_marked.index):
                     val = display_marked.iloc[pos, col_idx]
                     try:
-                        num_str = f"{int(float(val)):,}" if pd.notna(val) else "0"
+                        display_marked.iloc[pos, col_idx] = int(float(val)) if pd.notna(val) else 0
                     except (ValueError, TypeError):
-                        num_str = "0"
-                    flag = " ⚑" if (str(asin), col) in change_set else ""
-                    display_marked.iloc[pos, col_idx] = num_str + flag
+                        display_marked.iloc[pos, col_idx] = 0
 
             # ── Per-ASIN row totals — inserted right after "Last Change" ──────
             asin_row_totals = matrix[date_cols].sum(axis=1).astype(int)
@@ -3088,6 +3088,8 @@ with tab_sales:
                 "Last Change": st.column_config.TextColumn("Last Change", width=220),
                 "Total":       st.column_config.NumberColumn("Total",      width=90),
             }
+            for _dc in date_cols:
+                col_cfg[_dc] = st.column_config.NumberColumn(_dc, width=80)
 
             # ── Totals row — prepended as row 0 in the same dataframe ─────────
             _col_sums    = {col: int(matrix[col].sum()) for col in date_cols}
@@ -3097,7 +3099,7 @@ with tab_sales:
                     "Image":       "",
                     "Last Change": "",
                     "Total":       _grand_total,
-                    **{col: f"{_col_sums[col]:,}" for col in date_cols},
+                    **{col: _col_sums[col] for col in date_cols},
                 }],
                 index=pd.MultiIndex.from_tuples(
                     [("📊 TOTAL", "")], names=display_marked.index.names
