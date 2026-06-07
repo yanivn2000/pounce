@@ -3039,8 +3039,13 @@ with tab_sales:
             # Pre-format cell values: numbers with commas, ⚑ appended for changed cells
             display_marked = display.copy().astype(object)
 
-            # Insert "Last Change" as the first data column (before date columns)
-            display_marked.insert(0, "Last Change", [
+            # Insert image thumbnail as column 0, then "Last Change"
+            _sales_img_map = get_asin_image_map()
+            display_marked.insert(0, "Image", [
+                _sales_img_map.get(str(asin).upper(), "")
+                for asin, _ in display_marked.index
+            ])
+            display_marked.insert(1, "Last Change", [
                 _last_change_map.get(str(asin), "—")
                 for asin, _ in display_marked.index
             ])
@@ -3062,6 +3067,7 @@ with tab_sales:
             display_marked.insert(_lc_pos + 1, "Total", [f"{t:,}" for t in asin_row_totals.values])
 
             col_cfg = {
+                "Image":       st.column_config.ImageColumn("",           width=55),
                 "asin":        st.column_config.TextColumn("ASIN",        width=120),
                 "title":       st.column_config.TextColumn("Title",       width=200),
                 "Last Change": st.column_config.TextColumn("Last Change", width=220),
@@ -3073,6 +3079,7 @@ with tab_sales:
             _grand_total = sum(_col_sums.values())
             _totals_row  = pd.DataFrame(
                 [{
+                    "Image":       "",
                     "Last Change": "",
                     "Total":       f"{_grand_total:,}",
                     **{col: f"{_col_sums[col]:,}" for col in date_cols},
