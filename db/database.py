@@ -270,6 +270,7 @@ def init_db():
     _migrate_placement_snapshots(conn)
     _migrate_returns(conn)
     _migrate_orders_address_fields(conn)
+    _migrate_bundle_sales(conn)
     conn.close()
 
 
@@ -967,6 +968,33 @@ def _migrate_productions(conn: sqlite3.Connection):
                 service_cost  REAL    DEFAULT 0
             );
         """)
+    except Exception:
+        pass
+
+
+def _migrate_bundle_sales(conn: sqlite3.Connection):
+    """
+    Create bundle_sales table for Amazon Bundle Performance reports.
+    Columns mirror the CSV: DATE, BUNDLE_ASIN, TITLE, IS_VIRTUAL_MULTIPACK,
+    BUNDLES_SOLD, TOTAL_SALES.
+    """
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS bundle_sales (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                sale_date    TEXT NOT NULL,
+                bundle_asin  TEXT NOT NULL,
+                title        TEXT,
+                is_virtual   INTEGER DEFAULT 0,
+                bundles_sold INTEGER DEFAULT 0,
+                total_sales  REAL    DEFAULT 0,
+                created_at   TEXT DEFAULT (datetime('now')),
+                UNIQUE(sale_date, bundle_asin)
+            );
+            CREATE INDEX IF NOT EXISTS idx_bundle_date  ON bundle_sales(sale_date);
+            CREATE INDEX IF NOT EXISTS idx_bundle_asin  ON bundle_sales(bundle_asin);
+        """)
+        conn.commit()
     except Exception:
         pass
 

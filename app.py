@@ -46,6 +46,11 @@ from db.queries import (
     get_units_matrix, get_weekly_units_matrix, get_weekly_units_matrix_yoy,
     search_orders_by_address,
 )
+from db.bundles import (
+    import_bundle_csv, count_bundle_rows, get_bundle_date_range,
+    get_bundle_summary, get_bundle_units_matrix, get_bundle_revenue_matrix,
+    get_bundle_daily_trend, get_bundle_per_asin_trend, clear_all_bundles,
+)
 from db.products_catalog import (
     get_suppliers, upsert_supplier, delete_supplier,
     get_items, upsert_item, delete_item,
@@ -2855,474 +2860,608 @@ div:has(#ship-list-nav-marker) ~ div button {
 # TAB 3 — SALES DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_sales:
-    st.markdown(
-        f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>📈 Sales Dashboard &nbsp;"
-        f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
-        f"Units sold by ASIN × date. Upload Amazon order reports to populate.</span></p>",
-        unsafe_allow_html=True
+    # ── View toggle: Orders vs Bundles ────────────────────────────────────────
+    _sales_view = st.radio(
+        "View",
+        ["📊 Orders", "📦 Bundles"],
+        horizontal=True,
+        key="sales_view_toggle",
+        label_visibility="collapsed",
     )
 
-    # ── Import orders ─────────────────────────────────────────────────────────
-    with st.expander("📤 Import Amazon Orders CSV", expanded=(count_orders() == 0)):
+    st.markdown("<div style='margin:4px 0 8px;'></div>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # BUNDLES VIEW
+    # ══════════════════════════════════════════════════════════════════════════
+    if _sales_view == "📦 Bundles":
         st.markdown(
-            f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
-            f"Download from Seller Central → Reports → Business Reports → Orders. "
-            f"You can import multiple files — duplicates are handled automatically.</p>",
-            unsafe_allow_html=True
+            f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>📦 Bundle Sales &nbsp;"
+            f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
+            f"Units and revenue from Amazon Bundle Performance reports.</span></p>",
+            unsafe_allow_html=True,
         )
-        st.markdown(
-            f"<p style='color:{T['text_secondary']};font-size:0.82rem;'>"
-            f"Marketplace is auto-detected from the <code>sales-channel</code> or <code>currency</code> column in your CSV. "
-            f"No manual selection needed.</p>",
-            unsafe_allow_html=True
-        )
-        orders_file = st.file_uploader("Upload Orders CSV", type=["csv", "txt"], key="orders_csv")
 
-        if orders_file and st.button("📥 Import Orders", type="primary"):
-            override = None  # always use CSV auto-detection
-            with st.spinner("Importing..."):
-                n, warns = import_orders_csv(orders_file, marketplace_override=override)
-            if warns:
-                for w in warns[:5]:
-                    st.warning(w)
-            if n > 0:
-                st.success(f"✅ Imported {n} orders.")
-                st.rerun()
-            else:
-                st.error("No rows imported. Check warnings above.")
-
-    # ── Stats bar ─────────────────────────────────────────────────────────────
-    total_orders = count_orders()
-    if total_orders == 0:
-        st.info("No order data yet. Import an Amazon Orders CSV above to get started.")
-    else:
-        min_date, max_date = get_order_date_range()
-        sc1, sc2, sc3 = st.columns(3)
-        sc1.markdown(f'<div class="metric-card"><p class="metric-val">{total_orders:,}</p><p class="metric-label">Total Orders</p></div>', unsafe_allow_html=True)
-        sc2.markdown(f'<div class="metric-card"><p class="metric-val">{min_date}</p><p class="metric-label">Earliest Date</p></div>', unsafe_allow_html=True)
-        sc3.markdown(f'<div class="metric-card"><p class="metric-val">{max_date}</p><p class="metric-label">Latest Date</p></div>', unsafe_allow_html=True)
-
-        st.markdown("<div style='margin: 6px 0 0;'></div>", unsafe_allow_html=True)
-
-        # ── Order Search ──────────────────────────────────────────────────────
-        with st.expander("🔍 Order Lookup — search by recipient / address / zip", expanded=False):
+        # ── Import ────────────────────────────────────────────────────────────
+        with st.expander("📤 Import Bundle Performance CSV", expanded=(count_bundle_rows() == 0)):
             st.markdown(
-                f"<p style='color:{T['text_secondary']};font-size:0.84rem;margin:0 0 10px;'>"
-                "Find a specific order when a customer contacts you with their address details. "
-                "Leave any field blank to ignore it. Returns up to 500 matches.</p>",
+                f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
+                "Download from Seller Central → Reports → Business Reports → "
+                "<b>Bundle Performance</b>. Duplicates are handled automatically.</p>",
                 unsafe_allow_html=True,
             )
-            _sc1, _sc2, _sc3 = st.columns(3)
-            with _sc1:
-                _srch_name    = st.text_input("👤 Recipient / buyer name", key="srch_name",
-                                               placeholder="e.g. John Smith")
-                _srch_country = st.text_input("🌍 Country (code or name)", key="srch_country",
-                                               placeholder="e.g. US  or  United States")
-            with _sc2:
-                _srch_address = st.text_input("🏠 Address / City / State", key="srch_address",
-                                               placeholder="e.g. Main St  or  Brooklyn")
-                _srch_zip     = st.text_input("📮 Zip / Postal code", key="srch_zip",
-                                               placeholder="e.g. 10001")
-            with _sc3:
-                _srch_from = st.date_input("📅 Order from", value=None, key="srch_from")
-                _srch_to   = st.date_input("📅 Order to",   value=None, key="srch_to")
-
-            _srch_btn = st.button("🔍 Search Orders", type="primary", key="srch_btn")
-
-            if _srch_btn:
-                _any_filter = any([
-                    _srch_name.strip(), _srch_address.strip(),
-                    _srch_zip.strip(), _srch_country.strip(),
-                    _srch_from, _srch_to,
-                ])
-                if not _any_filter:
-                    st.warning("Please enter at least one search term.")
+            _bundle_file = st.file_uploader("Upload Bundle CSV", type=["csv", "txt"], key="bundle_csv")
+            if _bundle_file and st.button("📥 Import Bundles", type="primary", key="bundle_import_btn"):
+                with st.spinner("Importing..."):
+                    _bn, _bw = import_bundle_csv(_bundle_file)
+                for w in _bw[:5]:
+                    st.warning(w)
+                if _bn > 0:
+                    st.success(f"✅ Imported {_bn} rows.")
+                    st.rerun()
                 else:
-                    with st.spinner("Searching..."):
-                        _srch_df = search_orders_by_address(
-                            name        = _srch_name,
-                            address     = _srch_address,
-                            zip_code    = _srch_zip,
-                            country     = _srch_country,
-                            date_from   = str(_srch_from) if _srch_from else "",
-                            date_to     = str(_srch_to)   if _srch_to   else "",
-                        )
-                    if _srch_df.empty:
-                        st.info("No orders found matching your search.")
-                    else:
-                        st.success(f"Found **{len(_srch_df)}** order line(s).")
-                        # Friendly column labels
-                        _srch_display = _srch_df.rename(columns={
-                            "order_id":         "Order ID",
-                            "order_date":       "Date",
-                            "asin":             "ASIN",
-                            "title":            "Product",
-                            "marketplace":      "Marketplace",
-                            "quantity":         "Qty",
-                            "item_price":       "Price",
-                            "currency":         "Currency",
-                            "order_status":     "Status",
-                            "ship_name":        "Ship-to Name",
-                            "buyer_name":       "Buyer Name",
-                            "ship_address_1":   "Address",
-                            "ship_city":        "City",
-                            "ship_state":       "State",
-                            "ship_postal_code": "Zip",
-                            "ship_country":     "Country",
-                            "buyer_email":      "Email",
-                        })
-                        st.dataframe(
-                            _srch_display,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "Order ID":   st.column_config.TextColumn("Order ID", width="medium"),
-                                "Date":       st.column_config.TextColumn("Date",     width="small"),
-                                "Product":    st.column_config.TextColumn("Product",  width="large"),
-                                "Qty":        st.column_config.NumberColumn("Qty",    width="small"),
-                                "Price":      st.column_config.NumberColumn("Price",  format="%.2f"),
-                                "Address":    st.column_config.TextColumn("Address",  width="medium"),
-                            },
-                        )
-                        # Download button
-                        _csv_bytes = _srch_display.to_csv(index=False).encode()
-                        st.download_button(
-                            "⬇️ Download results as CSV",
-                            data=_csv_bytes,
-                            file_name="order_search_results.csv",
-                            mime="text/csv",
-                            key="srch_download",
-                        )
+                    st.error("No rows imported. Check warnings above.")
 
-        # ── Filters ───────────────────────────────────────────────────────────
-        available_markets = get_marketplaces()
-        _PRIORITY = ["amazon.com", "amazon.ca", "amazon.co.uk"]
-        _SEP      = "── Other ──────────────"
-        _main     = [m for m in _PRIORITY if m in available_markets]
-        _others   = sorted(m for m in available_markets if m not in _PRIORITY)
-        mkt_options = ["all"] + _main + ([_SEP] + _others if _others else [])
-
-        fcol1, fcol2, fcol3, fcol4 = st.columns([2, 2, 2, 1])
-        with fcol1:
-            sel_market_raw = st.selectbox("Marketplace", mkt_options, key="dash_market")
-            # Treat separator as "all"
-            if sel_market_raw == _SEP:
-                sel_market_raw = "all"
-            sel_market = None if sel_market_raw == "all" else sel_market_raw
-        with fcol2:
-            view_mode = st.radio("View", ["Daily", "Weekly"], horizontal=True, key="dash_view")
-        with fcol3:
-            period_opts = [7, 14, 30, 60, 90] if view_mode == "Daily" else [4, 8, 12, 26, 52]
-            period_labels = [f"{v} days" for v in period_opts] if view_mode == "Daily" else [f"{v} weeks" for v in period_opts]
-            period_idx = 2
-            days_back_raw = st.selectbox("Period", period_opts, index=period_idx,
-                                         format_func=lambda v: f"{v} {'days' if view_mode == 'Daily' else 'weeks'}",
-                                         key="dash_days")
-        with fcol4:
-            if view_mode == "Weekly":
-                yoy_mode = st.checkbox("YoY", value=False, key="dash_yoy",
-                                       help="Compare to same week last year")
-            else:
-                yoy_mode = False
-
-        # ── ASIN / product search + pending toggle ────────────────────────────
-        _dash_s1, _dash_s2 = st.columns([5, 2])
-        with _dash_s1:
-            _asin_search = st.text_input(
-                "🔍 Search ASIN or product name",
-                value="",
-                placeholder="Filter rows by ASIN or title…",
-                key="dash_asin_search",
-            )
-        with _dash_s2:
-            st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
-            _include_pending = st.checkbox(
-                "Include Pending orders",
-                value=True,
-                key="dash_include_pending",
-                help="Pending orders are real orders but not yet shipped. "
-                     "Uncheck to see confirmed/shipped only.",
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        # ── Load change log early so matrix can use it ────────────────────────
-        cl_df = get_change_log(marketplace=sel_market, days=days_back_raw if view_mode == "Daily" else days_back_raw * 7)
-
-        def _to_week_start(date_str: str) -> str:
-            """Replicate SQLite: date(d,'weekday 1','-7 days') → Monday of that week."""
-            d = pd.Timestamp(date_str)
-            days_to_next_monday = 0 if d.weekday() == 0 else (7 - d.weekday())
-            return (d + pd.Timedelta(days=days_to_next_monday) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
-
-        if not cl_df.empty:
-            if view_mode == "Daily":
-                change_set = {(str(r.asin), str(r.log_date)) for _, r in cl_df.iterrows()}
-            else:
-                change_set = {(str(r.asin), _to_week_start(str(r.log_date))) for _, r in cl_df.iterrows()}
+        _b_total = count_bundle_rows()
+        if _b_total == 0:
+            st.info("No bundle data yet. Import an Amazon Bundle Performance CSV above.")
         else:
-            change_set = set()
+            _b_min, _b_max = get_bundle_date_range()
 
-        # ── Units matrix ──────────────────────────────────────────────────────
-        st.divider()
-        compare_label = ("vs same week LY" if yoy_mode else
-                         "vs prev week" if view_mode == "Weekly" else "vs prev day")
-        st.markdown(f"### Units Sold — color coded {compare_label}")
-
-        ly_matrix = None
-        if view_mode == "Daily":
-            matrix = get_units_matrix(marketplace=sel_market, days=days_back_raw,
-                                      include_pending=_include_pending)
-            threshold = 30
-        elif yoy_mode:
-            matrix, ly_matrix = get_weekly_units_matrix_yoy(
-                marketplace=sel_market, weeks=days_back_raw,
-                include_pending=_include_pending,
-            )
-            threshold = 20
-        else:
-            matrix = get_weekly_units_matrix(marketplace=sel_market, weeks=days_back_raw,
-                                             include_pending=_include_pending)
-            threshold = 20
-
-        # Apply ASIN / title search filter
-        if _asin_search.strip():
-            _q = _asin_search.strip().upper()
-            _mask = (
-                matrix["asin"].str.upper().str.contains(_q, na=False) |
-                matrix["title"].str.upper().str.contains(_q, na=False)
-            )
-            matrix = matrix[_mask].reset_index(drop=True)
-            if yoy_mode and ly_matrix is not None and not ly_matrix.empty:
-                _ly_mask = (
-                    ly_matrix["asin"].str.upper().str.contains(_q, na=False) |
-                    ly_matrix["title"].str.upper().str.contains(_q, na=False)
+            # ── Period selector ───────────────────────────────────────────────
+            _bp_col1, _bp_col2, _bp_col3 = st.columns([2, 2, 2])
+            with _bp_col1:
+                _b_period = st.selectbox(
+                    "Period", [30, 60, 90, 180, 365], index=2,
+                    format_func=lambda v: f"{v} days", key="bundle_period"
                 )
-                ly_matrix = ly_matrix[_ly_mask].reset_index(drop=True)
+            with _bp_col2:
+                _b_metric = st.radio(
+                    "Metric", ["Units", "Revenue"], horizontal=True, key="bundle_metric"
+                )
 
-        if matrix.empty:
-            st.info("No data for the selected filters.")
-        else:
-            date_cols = [c for c in matrix.columns if c not in ("asin", "title")]
+            # ── KPI bar ───────────────────────────────────────────────────────
+            _bsum = get_bundle_summary()
+            _total_units   = int(_bsum["total_units"].sum())   if not _bsum.empty else 0
+            _total_revenue = float(_bsum["total_revenue"].sum()) if not _bsum.empty else 0
+            _num_asins     = len(_bsum) if not _bsum.empty else 0
 
-            # Build pct_change matrix aligned to matrix index
-            pct = pd.DataFrame(index=matrix.index, columns=date_cols, dtype=float)
-            for i, col in enumerate(date_cols):
-                if yoy_mode and ly_matrix is not None and col in ly_matrix.columns:
-                    ly_by_asin = ly_matrix.groupby("asin")[col].sum()
-                    ly_vals = ly_by_asin.reindex(matrix["asin"].values).values
-                    cur_vals = matrix[col].values.astype(float)
-                    pct[col] = pd.Series(
-                        [(c - l) / l * 100 if l and l > 0 else None
-                         for c, l in zip(cur_vals, ly_vals)],
-                        index=matrix.index
+            _bk1, _bk2, _bk3, _bk4 = st.columns(4)
+            _bk1.markdown(f'<div class="metric-card"><p class="metric-val">{_total_units:,}</p><p class="metric-label">Bundles Sold</p></div>', unsafe_allow_html=True)
+            _bk2.markdown(f'<div class="metric-card"><p class="metric-val">${_total_revenue:,.0f}</p><p class="metric-label">Total Revenue</p></div>', unsafe_allow_html=True)
+            _bk3.markdown(f'<div class="metric-card"><p class="metric-val">{_num_asins}</p><p class="metric-label">Bundle ASINs</p></div>', unsafe_allow_html=True)
+            _bk4.markdown(f'<div class="metric-card"><p class="metric-val">{_b_min} → {_b_max}</p><p class="metric-label">Date Range</p></div>', unsafe_allow_html=True)
+
+            st.markdown("<div style='margin:10px 0 4px;'></div>", unsafe_allow_html=True)
+
+            # ── Trend chart ───────────────────────────────────────────────────
+            _b_trend_all = get_bundle_daily_trend(days=_b_period)
+            _b_trend_per = get_bundle_per_asin_trend(days=_b_period)
+
+            if not _b_trend_per.empty:
+                _b_chart_df = _b_trend_per.pivot_table(
+                    index="sale_date", columns="bundle_asin",
+                    values="bundles_sold", aggfunc="sum", fill_value=0
+                )
+                _b_chart_df.index.name = "Date"
+                st.line_chart(_b_chart_df, use_container_width=True, height=200)
+
+            # ── Matrix table ──────────────────────────────────────────────────
+            if _b_metric == "Units":
+                _b_matrix = get_bundle_units_matrix(days=_b_period)
+                _val_label = "units"
+            else:
+                _b_matrix = get_bundle_revenue_matrix(days=_b_period)
+                _val_label = "$"
+
+            if not _b_matrix.empty:
+                # Attach product images from catalog
+                _b_img_map = get_asin_image_map()
+                _b_matrix.insert(0, "img", _b_matrix["bundle_asin"].map(_b_img_map))
+
+                _b_date_cols = [c for c in _b_matrix.columns
+                                if c not in ("bundle_asin", "title", "img", "Total")]
+                _b_col_cfg = {
+                    "img":          st.column_config.ImageColumn("", width=55),
+                    "bundle_asin":  st.column_config.TextColumn("ASIN",    width="small"),
+                    "title":        st.column_config.TextColumn("Title",   width="large"),
+                    "Total":        st.column_config.NumberColumn("Total", format="%d" if _b_metric == "Units" else "$%.2f"),
+                }
+                for _dc in _b_date_cols:
+                    _b_col_cfg[_dc] = st.column_config.NumberColumn(
+                        _dc, format="%d" if _b_metric == "Units" else "$%.2f"
                     )
-                elif i + 1 < len(date_cols):
-                    prev = matrix[date_cols[i + 1]].replace(0, None)
-                    pct[col] = (matrix[col] - matrix[date_cols[i + 1]]) / prev * 100
-                else:
-                    pct[col] = None
 
-            pct_indexed = pct  # shares integer index with matrix
+                st.dataframe(
+                    _b_matrix,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=_b_col_cfg,
+                )
 
-            # ── Latest change log per ASIN ────────────────────────────────────
-            from db.database import get_conn as _gcl
-            _cl_conn = _gcl()
-            _lc_rows = _cl_conn.execute("""
-                SELECT asin, log_date, change_type, notes
-                FROM change_log
-                WHERE id IN (SELECT MAX(id) FROM change_log GROUP BY asin)
-            """).fetchall()
-            _cl_conn.close()
-            _last_change_map = {}
-            for _r in _lc_rows:
-                _note = (str(_r["notes"] or "")).strip()[:35]
-                _note_part = f" · {_note}" if _note else ""
-                _last_change_map[str(_r["asin"])] = f"{_r['log_date']} · {_r['change_type']}{_note_part}"
+                # ── Download ──────────────────────────────────────────────────
+                st.download_button(
+                    "⬇️ Download as CSV",
+                    data=_b_matrix.drop(columns=["img"], errors="ignore").to_csv(index=False).encode(),
+                    file_name=f"bundle_sales_{_b_metric.lower()}.csv",
+                    mime="text/csv",
+                    key="bundle_dl",
+                )
 
-            # Freeze asin + title by setting them as the DataFrame index
-            display = matrix.set_index(["asin", "title"])
+            # ── Danger zone ───────────────────────────────────────────────────
+            with st.expander("🗑️ Danger Zone", expanded=False):
+                st.warning("This will permanently delete **all** bundle data.")
+                if st.button("🗑️ Delete All Bundle Data", type="secondary", key="bundle_clear"):
+                    _del_n = clear_all_bundles()
+                    st.success(f"Deleted {_del_n} rows.")
+                    st.rerun()
 
-            # Pre-format cell values: numbers with commas, ⚑ appended for changed cells
-            display_marked = display.copy().astype(object)
+    # ══════════════════════════════════════════════════════════════════════════
+    # ORDERS VIEW (original content)
+    # ══════════════════════════════════════════════════════════════════════════
 
-            # Insert image thumbnail as column 0, then "Last Change"
-            _sales_img_map = get_asin_image_map()
-            display_marked.insert(0, "Image", [
-                _sales_img_map.get(str(asin).upper(), "")
-                for asin, _ in display_marked.index
-            ])
-            display_marked.insert(1, "Last Change", [
-                _last_change_map.get(str(asin), "—")
-                for asin, _ in display_marked.index
-            ])
-
-            # Store date columns as integers (enables numeric sort).
-            # Changed cells are still highlighted yellow by _color_matrix below.
-            for col in date_cols:
-                col_idx = display_marked.columns.get_loc(col)
-                for pos, (asin, title) in enumerate(display_marked.index):
-                    val = display_marked.iloc[pos, col_idx]
-                    try:
-                        display_marked.iloc[pos, col_idx] = int(float(val)) if pd.notna(val) else 0
-                    except (ValueError, TypeError):
-                        display_marked.iloc[pos, col_idx] = 0
-
-            # ── Per-ASIN row totals — inserted right after "Last Change" ──────
-            asin_row_totals = matrix[date_cols].sum(axis=1).astype(int)
-            _lc_pos = display_marked.columns.get_loc("Last Change")
-            display_marked.insert(_lc_pos + 1, "Total", asin_row_totals.values)
-
-            col_cfg = {
-                "Image":       st.column_config.ImageColumn("",           width=55),
-                "asin":        st.column_config.TextColumn("ASIN",        width=120),
-                "title":       st.column_config.TextColumn("Title",       width=200),
-                "Last Change": st.column_config.TextColumn("Last Change", width=220),
-                "Total":       st.column_config.NumberColumn("Total",      width=90),
-            }
-            for _dc in date_cols:
-                col_cfg[_dc] = st.column_config.NumberColumn(_dc, width=80)
-
-            # ── Totals row — prepended as row 0 in the same dataframe ─────────
-            _col_sums    = {col: int(matrix[col].sum()) for col in date_cols}
-            _grand_total = sum(_col_sums.values())
-            _totals_row  = pd.DataFrame(
-                [{
-                    "Image":       "",
-                    "Last Change": "",
-                    "Total":       _grand_total,
-                    **{col: _col_sums[col] for col in date_cols},
-                }],
-                index=pd.MultiIndex.from_tuples(
-                    [("📊 TOTAL", "")], names=display_marked.index.names
-                ),
+    if _sales_view == "📊 Orders":
+        # ── Import orders ─────────────────────────────────────────────────────────
+        with st.expander("📤 Import Amazon Orders CSV", expanded=(count_orders() == 0)):
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
+                f"Download from Seller Central → Reports → Business Reports → Orders. "
+                f"You can import multiple files — duplicates are handled automatically.</p>",
+                unsafe_allow_html=True
             )
-            display_with_totals = pd.concat([_totals_row, display_marked])
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.82rem;'>"
+                f"Marketplace is auto-detected from the <code>sales-channel</code> or <code>currency</code> column in your CSV. "
+                f"No manual selection needed.</p>",
+                unsafe_allow_html=True
+            )
+            orders_file = st.file_uploader("Upload Orders CSV", type=["csv", "txt"], key="orders_csv")
 
-            def _color_matrix(df):
-                styles = pd.DataFrame("", index=df.index, columns=df.columns)
-                # Row 0 is always the totals row — bold gray, no pct coloring
-                for col_name in df.columns:
-                    styles.iloc[0, styles.columns.get_loc(col_name)] = (
-                        "background-color:#e8edf2;color:#24292f;font-weight:700;"
+            if orders_file and st.button("📥 Import Orders", type="primary"):
+                override = None  # always use CSV auto-detection
+                with st.spinner("Importing..."):
+                    n, warns = import_orders_csv(orders_file, marketplace_override=override)
+                if warns:
+                    for w in warns[:5]:
+                        st.warning(w)
+                if n > 0:
+                    st.success(f"✅ Imported {n} orders.")
+                    st.rerun()
+                else:
+                    st.error("No rows imported. Check warnings above.")
+
+        # ── Stats bar ─────────────────────────────────────────────────────────────
+        total_orders = count_orders()
+        if total_orders == 0:
+            st.info("No order data yet. Import an Amazon Orders CSV above to get started.")
+        else:
+            min_date, max_date = get_order_date_range()
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.markdown(f'<div class="metric-card"><p class="metric-val">{total_orders:,}</p><p class="metric-label">Total Orders</p></div>', unsafe_allow_html=True)
+            sc2.markdown(f'<div class="metric-card"><p class="metric-val">{min_date}</p><p class="metric-label">Earliest Date</p></div>', unsafe_allow_html=True)
+            sc3.markdown(f'<div class="metric-card"><p class="metric-val">{max_date}</p><p class="metric-label">Latest Date</p></div>', unsafe_allow_html=True)
+
+            st.markdown("<div style='margin: 6px 0 0;'></div>", unsafe_allow_html=True)
+
+            # ── Order Search ──────────────────────────────────────────────────────
+            with st.expander("🔍 Order Lookup — search by recipient / address / zip", expanded=False):
+                st.markdown(
+                    f"<p style='color:{T['text_secondary']};font-size:0.84rem;margin:0 0 10px;'>"
+                    "Find a specific order when a customer contacts you with their address details. "
+                    "Leave any field blank to ignore it. Returns up to 500 matches.</p>",
+                    unsafe_allow_html=True,
+                )
+                _sc1, _sc2, _sc3 = st.columns(3)
+                with _sc1:
+                    _srch_name    = st.text_input("👤 Recipient / buyer name", key="srch_name",
+                                                   placeholder="e.g. John Smith")
+                    _srch_country = st.text_input("🌍 Country (code or name)", key="srch_country",
+                                                   placeholder="e.g. US  or  United States")
+                with _sc2:
+                    _srch_address = st.text_input("🏠 Address / City / State", key="srch_address",
+                                                   placeholder="e.g. Main St  or  Brooklyn")
+                    _srch_zip     = st.text_input("📮 Zip / Postal code", key="srch_zip",
+                                                   placeholder="e.g. 10001")
+                with _sc3:
+                    _srch_from = st.date_input("📅 Order from", value=None, key="srch_from")
+                    _srch_to   = st.date_input("📅 Order to",   value=None, key="srch_to")
+
+                _srch_btn = st.button("🔍 Search Orders", type="primary", key="srch_btn")
+
+                if _srch_btn:
+                    _any_filter = any([
+                        _srch_name.strip(), _srch_address.strip(),
+                        _srch_zip.strip(), _srch_country.strip(),
+                        _srch_from, _srch_to,
+                    ])
+                    if not _any_filter:
+                        st.warning("Please enter at least one search term.")
+                    else:
+                        with st.spinner("Searching..."):
+                            _srch_df = search_orders_by_address(
+                                name        = _srch_name,
+                                address     = _srch_address,
+                                zip_code    = _srch_zip,
+                                country     = _srch_country,
+                                date_from   = str(_srch_from) if _srch_from else "",
+                                date_to     = str(_srch_to)   if _srch_to   else "",
+                            )
+                        if _srch_df.empty:
+                            st.info("No orders found matching your search.")
+                        else:
+                            st.success(f"Found **{len(_srch_df)}** order line(s).")
+                            # Friendly column labels
+                            _srch_display = _srch_df.rename(columns={
+                                "order_id":         "Order ID",
+                                "order_date":       "Date",
+                                "asin":             "ASIN",
+                                "title":            "Product",
+                                "marketplace":      "Marketplace",
+                                "quantity":         "Qty",
+                                "item_price":       "Price",
+                                "currency":         "Currency",
+                                "order_status":     "Status",
+                                "ship_name":        "Ship-to Name",
+                                "buyer_name":       "Buyer Name",
+                                "ship_address_1":   "Address",
+                                "ship_city":        "City",
+                                "ship_state":       "State",
+                                "ship_postal_code": "Zip",
+                                "ship_country":     "Country",
+                                "buyer_email":      "Email",
+                            })
+                            st.dataframe(
+                                _srch_display,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "Order ID":   st.column_config.TextColumn("Order ID", width="medium"),
+                                    "Date":       st.column_config.TextColumn("Date",     width="small"),
+                                    "Product":    st.column_config.TextColumn("Product",  width="large"),
+                                    "Qty":        st.column_config.NumberColumn("Qty",    width="small"),
+                                    "Price":      st.column_config.NumberColumn("Price",  format="%.2f"),
+                                    "Address":    st.column_config.TextColumn("Address",  width="medium"),
+                                },
+                            )
+                            # Download button
+                            _csv_bytes = _srch_display.to_csv(index=False).encode()
+                            st.download_button(
+                                "⬇️ Download results as CSV",
+                                data=_csv_bytes,
+                                file_name="order_search_results.csv",
+                                mime="text/csv",
+                                key="srch_download",
+                            )
+
+            # ── Filters ───────────────────────────────────────────────────────────
+            available_markets = get_marketplaces()
+            _PRIORITY = ["amazon.com", "amazon.ca", "amazon.co.uk"]
+            _SEP      = "── Other ──────────────"
+            _main     = [m for m in _PRIORITY if m in available_markets]
+            _others   = sorted(m for m in available_markets if m not in _PRIORITY)
+            mkt_options = ["all"] + _main + ([_SEP] + _others if _others else [])
+
+            fcol1, fcol2, fcol3, fcol4 = st.columns([2, 2, 2, 1])
+            with fcol1:
+                sel_market_raw = st.selectbox("Marketplace", mkt_options, key="dash_market")
+                # Treat separator as "all"
+                if sel_market_raw == _SEP:
+                    sel_market_raw = "all"
+                sel_market = None if sel_market_raw == "all" else sel_market_raw
+            with fcol2:
+                view_mode = st.radio("View", ["Daily", "Weekly"], horizontal=True, key="dash_view")
+            with fcol3:
+                period_opts = [7, 14, 30, 60, 90] if view_mode == "Daily" else [4, 8, 12, 26, 52]
+                period_labels = [f"{v} days" for v in period_opts] if view_mode == "Daily" else [f"{v} weeks" for v in period_opts]
+                period_idx = 2
+                days_back_raw = st.selectbox("Period", period_opts, index=period_idx,
+                                             format_func=lambda v: f"{v} {'days' if view_mode == 'Daily' else 'weeks'}",
+                                             key="dash_days")
+            with fcol4:
+                if view_mode == "Weekly":
+                    yoy_mode = st.checkbox("YoY", value=False, key="dash_yoy",
+                                           help="Compare to same week last year")
+                else:
+                    yoy_mode = False
+
+            # ── ASIN / product search + pending toggle ────────────────────────────
+            _dash_s1, _dash_s2 = st.columns([5, 2])
+            with _dash_s1:
+                _asin_search = st.text_input(
+                    "🔍 Search ASIN or product name",
+                    value="",
+                    placeholder="Filter rows by ASIN or title…",
+                    key="dash_asin_search",
+                )
+            with _dash_s2:
+                st.markdown("<div style='margin-top:28px'>", unsafe_allow_html=True)
+                _include_pending = st.checkbox(
+                    "Include Pending orders",
+                    value=True,
+                    key="dash_include_pending",
+                    help="Pending orders are real orders but not yet shipped. "
+                         "Uncheck to see confirmed/shipped only.",
+                )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # ── Load change log early so matrix can use it ────────────────────────
+            cl_df = get_change_log(marketplace=sel_market, days=days_back_raw if view_mode == "Daily" else days_back_raw * 7)
+
+            def _to_week_start(date_str: str) -> str:
+                """Replicate SQLite: date(d,'weekday 1','-7 days') → Monday of that week."""
+                d = pd.Timestamp(date_str)
+                days_to_next_monday = 0 if d.weekday() == 0 else (7 - d.weekday())
+                return (d + pd.Timedelta(days=days_to_next_monday) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+
+            if not cl_df.empty:
+                if view_mode == "Daily":
+                    change_set = {(str(r.asin), str(r.log_date)) for _, r in cl_df.iterrows()}
+                else:
+                    change_set = {(str(r.asin), _to_week_start(str(r.log_date))) for _, r in cl_df.iterrows()}
+            else:
+                change_set = set()
+
+            # ── Units matrix ──────────────────────────────────────────────────────
+            st.divider()
+            compare_label = ("vs same week LY" if yoy_mode else
+                             "vs prev week" if view_mode == "Weekly" else "vs prev day")
+            st.markdown(f"### Units Sold — color coded {compare_label}")
+
+            ly_matrix = None
+            if view_mode == "Daily":
+                matrix = get_units_matrix(marketplace=sel_market, days=days_back_raw,
+                                          include_pending=_include_pending)
+                threshold = 30
+            elif yoy_mode:
+                matrix, ly_matrix = get_weekly_units_matrix_yoy(
+                    marketplace=sel_market, weeks=days_back_raw,
+                    include_pending=_include_pending,
+                )
+                threshold = 20
+            else:
+                matrix = get_weekly_units_matrix(marketplace=sel_market, weeks=days_back_raw,
+                                                 include_pending=_include_pending)
+                threshold = 20
+
+            # Apply ASIN / title search filter
+            if _asin_search.strip():
+                _q = _asin_search.strip().upper()
+                _mask = (
+                    matrix["asin"].str.upper().str.contains(_q, na=False) |
+                    matrix["title"].str.upper().str.contains(_q, na=False)
+                )
+                matrix = matrix[_mask].reset_index(drop=True)
+                if yoy_mode and ly_matrix is not None and not ly_matrix.empty:
+                    _ly_mask = (
+                        ly_matrix["asin"].str.upper().str.contains(_q, na=False) |
+                        ly_matrix["title"].str.upper().str.contains(_q, na=False)
                     )
-                # Rows 1+ are data rows — color by day-over-day pct change
+                    ly_matrix = ly_matrix[_ly_mask].reset_index(drop=True)
+
+            if matrix.empty:
+                st.info("No data for the selected filters.")
+            else:
+                date_cols = [c for c in matrix.columns if c not in ("asin", "title")]
+
+                # Build pct_change matrix aligned to matrix index
+                pct = pd.DataFrame(index=matrix.index, columns=date_cols, dtype=float)
+                for i, col in enumerate(date_cols):
+                    if yoy_mode and ly_matrix is not None and col in ly_matrix.columns:
+                        ly_by_asin = ly_matrix.groupby("asin")[col].sum()
+                        ly_vals = ly_by_asin.reindex(matrix["asin"].values).values
+                        cur_vals = matrix[col].values.astype(float)
+                        pct[col] = pd.Series(
+                            [(c - l) / l * 100 if l and l > 0 else None
+                             for c, l in zip(cur_vals, ly_vals)],
+                            index=matrix.index
+                        )
+                    elif i + 1 < len(date_cols):
+                        prev = matrix[date_cols[i + 1]].replace(0, None)
+                        pct[col] = (matrix[col] - matrix[date_cols[i + 1]]) / prev * 100
+                    else:
+                        pct[col] = None
+
+                pct_indexed = pct  # shares integer index with matrix
+
+                # ── Latest change log per ASIN ────────────────────────────────────
+                from db.database import get_conn as _gcl
+                _cl_conn = _gcl()
+                _lc_rows = _cl_conn.execute("""
+                    SELECT asin, log_date, change_type, notes
+                    FROM change_log
+                    WHERE id IN (SELECT MAX(id) FROM change_log GROUP BY asin)
+                """).fetchall()
+                _cl_conn.close()
+                _last_change_map = {}
+                for _r in _lc_rows:
+                    _note = (str(_r["notes"] or "")).strip()[:35]
+                    _note_part = f" · {_note}" if _note else ""
+                    _last_change_map[str(_r["asin"])] = f"{_r['log_date']} · {_r['change_type']}{_note_part}"
+
+                # Freeze asin + title by setting them as the DataFrame index
+                display = matrix.set_index(["asin", "title"])
+
+                # Pre-format cell values: numbers with commas, ⚑ appended for changed cells
+                display_marked = display.copy().astype(object)
+
+                # Insert image thumbnail as column 0, then "Last Change"
+                _sales_img_map = get_asin_image_map()
+                display_marked.insert(0, "Image", [
+                    _sales_img_map.get(str(asin).upper(), "")
+                    for asin, _ in display_marked.index
+                ])
+                display_marked.insert(1, "Last Change", [
+                    _last_change_map.get(str(asin), "—")
+                    for asin, _ in display_marked.index
+                ])
+
+                # Store date columns as integers (enables numeric sort).
+                # Changed cells are still highlighted yellow by _color_matrix below.
                 for col in date_cols:
-                    if col not in df.columns:
-                        continue
-                    for data_pos, idx in enumerate(matrix.index):
-                        df_pos = data_pos + 1  # +1 because row 0 is totals
-                        p = pct_indexed.loc[idx, col]
+                    col_idx = display_marked.columns.get_loc(col)
+                    for pos, (asin, title) in enumerate(display_marked.index):
+                        val = display_marked.iloc[pos, col_idx]
                         try:
-                            p = float(p)
-                        except (TypeError, ValueError):
-                            continue
-                        col_loc = styles.columns.get_loc(col)
-                        if p >= threshold:
-                            styles.iloc[df_pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
-                        elif p <= -threshold:
-                            styles.iloc[df_pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
-                # Change-set highlighting (skip totals row at pos 0)
-                if change_set:
-                    for pos, (asin, _title) in enumerate(df.index):
-                        if pos == 0:
-                            continue
-                        for col in date_cols:
-                            if col in df.columns and (str(asin), col) in change_set:
-                                col_loc = styles.columns.get_loc(col)
-                                if styles.iloc[pos, col_loc] == "":
-                                    styles.iloc[pos, col_loc] = "background-color:#fff3b0;color:#7d4e00;font-weight:700"
-                return styles
+                            display_marked.iloc[pos, col_idx] = int(float(val)) if pd.notna(val) else 0
+                        except (ValueError, TypeError):
+                            display_marked.iloc[pos, col_idx] = 0
 
-            # ── Single dataframe: totals row + all data rows ───────────────────
-            styled = display_with_totals.style.apply(_color_matrix, axis=None)
-            st.dataframe(styled, use_container_width=True, column_config=col_cfg)
+                # ── Per-ASIN row totals — inserted right after "Last Change" ──────
+                asin_row_totals = matrix[date_cols].sum(axis=1).astype(int)
+                _lc_pos = display_marked.columns.get_loc("Last Change")
+                display_marked.insert(_lc_pos + 1, "Total", asin_row_totals.values)
 
-            # ── Change log grouped by ASIN ────────────────────────────────────
-            if change_set and not cl_df.empty:
-                visible_asins   = set(matrix["asin"].astype(str))
-                visible_changes = cl_df[cl_df["asin"].astype(str).isin(visible_asins)].sort_values(["asin", "log_date"])
-                if not visible_changes.empty:
-                    blocks = ""
-                    for asin_val, grp in visible_changes.groupby("asin"):
-                        rows_html = "".join(
-                            f"<tr>"
-                            f"<td style='padding:2px 12px 2px 0;color:#888;font-size:0.81rem;'>{r.log_date}</td>"
-                            f"<td style='padding:2px 12px 2px 0;'><span style='background:#fff3b0;padding:1px 7px;"
-                            f"border-radius:4px;font-size:0.79rem;font-weight:600;color:#7d4e00;'>"
-                            f"{r.change_type.capitalize()}</span></td>"
-                            f"<td style='padding:2px 0;color:#444;font-size:0.81rem;'>{r.get('notes') or ''}</td>"
-                            f"</tr>"
-                            for _, r in grp.iterrows()
+                col_cfg = {
+                    "Image":       st.column_config.ImageColumn("",           width=55),
+                    "asin":        st.column_config.TextColumn("ASIN",        width=120),
+                    "title":       st.column_config.TextColumn("Title",       width=200),
+                    "Last Change": st.column_config.TextColumn("Last Change", width=220),
+                    "Total":       st.column_config.NumberColumn("Total",      width=90),
+                }
+                for _dc in date_cols:
+                    col_cfg[_dc] = st.column_config.NumberColumn(_dc, width=80)
+
+                # ── Totals row — prepended as row 0 in the same dataframe ─────────
+                _col_sums    = {col: int(matrix[col].sum()) for col in date_cols}
+                _grand_total = sum(_col_sums.values())
+                _totals_row  = pd.DataFrame(
+                    [{
+                        "Image":       "",
+                        "Last Change": "",
+                        "Total":       _grand_total,
+                        **{col: _col_sums[col] for col in date_cols},
+                    }],
+                    index=pd.MultiIndex.from_tuples(
+                        [("📊 TOTAL", "")], names=display_marked.index.names
+                    ),
+                )
+                display_with_totals = pd.concat([_totals_row, display_marked])
+
+                def _color_matrix(df):
+                    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+                    # Row 0 is always the totals row — bold gray, no pct coloring
+                    for col_name in df.columns:
+                        styles.iloc[0, styles.columns.get_loc(col_name)] = (
+                            "background-color:#e8edf2;color:#24292f;font-weight:700;"
                         )
-                        blocks += (
-                            f"<div style='margin-bottom:8px;'>"
-                            f"<span style='font-weight:700;font-size:0.82rem;'>⚑ {asin_val}</span>"
-                            f"<table style='border-collapse:collapse;margin-top:3px;'>{rows_html}</table></div>"
+                    # Rows 1+ are data rows — color by day-over-day pct change
+                    for col in date_cols:
+                        if col not in df.columns:
+                            continue
+                        for data_pos, idx in enumerate(matrix.index):
+                            df_pos = data_pos + 1  # +1 because row 0 is totals
+                            p = pct_indexed.loc[idx, col]
+                            try:
+                                p = float(p)
+                            except (TypeError, ValueError):
+                                continue
+                            col_loc = styles.columns.get_loc(col)
+                            if p >= threshold:
+                                styles.iloc[df_pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
+                            elif p <= -threshold:
+                                styles.iloc[df_pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                    # Change-set highlighting (skip totals row at pos 0)
+                    if change_set:
+                        for pos, (asin, _title) in enumerate(df.index):
+                            if pos == 0:
+                                continue
+                            for col in date_cols:
+                                if col in df.columns and (str(asin), col) in change_set:
+                                    col_loc = styles.columns.get_loc(col)
+                                    if styles.iloc[pos, col_loc] == "":
+                                        styles.iloc[pos, col_loc] = "background-color:#fff3b0;color:#7d4e00;font-weight:700"
+                    return styles
+
+                # ── Single dataframe: totals row + all data rows ───────────────────
+                styled = display_with_totals.style.apply(_color_matrix, axis=None)
+                st.dataframe(styled, use_container_width=True, column_config=col_cfg)
+
+                # ── Change log grouped by ASIN ────────────────────────────────────
+                if change_set and not cl_df.empty:
+                    visible_asins   = set(matrix["asin"].astype(str))
+                    visible_changes = cl_df[cl_df["asin"].astype(str).isin(visible_asins)].sort_values(["asin", "log_date"])
+                    if not visible_changes.empty:
+                        blocks = ""
+                        for asin_val, grp in visible_changes.groupby("asin"):
+                            rows_html = "".join(
+                                f"<tr>"
+                                f"<td style='padding:2px 12px 2px 0;color:#888;font-size:0.81rem;'>{r.log_date}</td>"
+                                f"<td style='padding:2px 12px 2px 0;'><span style='background:#fff3b0;padding:1px 7px;"
+                                f"border-radius:4px;font-size:0.79rem;font-weight:600;color:#7d4e00;'>"
+                                f"{r.change_type.capitalize()}</span></td>"
+                                f"<td style='padding:2px 0;color:#444;font-size:0.81rem;'>{r.get('notes') or ''}</td>"
+                                f"</tr>"
+                                for _, r in grp.iterrows()
+                            )
+                            blocks += (
+                                f"<div style='margin-bottom:8px;'>"
+                                f"<span style='font-weight:700;font-size:0.82rem;'>⚑ {asin_val}</span>"
+                                f"<table style='border-collapse:collapse;margin-top:3px;'>{rows_html}</table></div>"
+                            )
+                        st.markdown(
+                            f"<div style='margin-top:8px;padding:10px 14px;border-left:3px solid #d4a72c;"
+                            f"background:#fffdf0;border-radius:4px;'>{blocks}</div>",
+                            unsafe_allow_html=True
                         )
+
+                # ── Legend ────────────────────────────────────────────────────────
+                if yoy_mode:
                     st.markdown(
-                        f"<div style='margin-top:8px;padding:10px 14px;border-left:3px solid #d4a72c;"
-                        f"background:#fffdf0;border-radius:4px;'>{blocks}</div>",
+                        "<p style='font-size:0.78rem;color:#888;margin-top:6px;'>"
+                        "🟢 Green = sold more than same week last year (&gt;+20%) &nbsp;·&nbsp; "
+                        "🔴 Red = sold less than same week last year (&gt;−20%) &nbsp;·&nbsp; "
+                        "⬜ White = within ±20% of last year &nbsp;·&nbsp; "
+                        "Colors compare vs same week shifted by exactly 364 days (52 weeks)"
+                        "</p>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    period = "previous day" if view_mode == "Daily" else "previous week"
+                    st.markdown(
+                        f"<p style='font-size:0.78rem;color:#888;margin-top:6px;'>"
+                        f"🟢 Green = &gt;+{threshold}% vs {period} &nbsp;·&nbsp; "
+                        f"🔴 Red = &gt;−{threshold}% vs {period}"
+                        f"</p>",
                         unsafe_allow_html=True
                     )
 
-            # ── Legend ────────────────────────────────────────────────────────
-            if yoy_mode:
-                st.markdown(
-                    "<p style='font-size:0.78rem;color:#888;margin-top:6px;'>"
-                    "🟢 Green = sold more than same week last year (&gt;+20%) &nbsp;·&nbsp; "
-                    "🔴 Red = sold less than same week last year (&gt;−20%) &nbsp;·&nbsp; "
-                    "⬜ White = within ±20% of last year &nbsp;·&nbsp; "
-                    "Colors compare vs same week shifted by exactly 364 days (52 weeks)"
-                    "</p>",
-                    unsafe_allow_html=True
-                )
-            else:
-                period = "previous day" if view_mode == "Daily" else "previous week"
-                st.markdown(
-                    f"<p style='font-size:0.78rem;color:#888;margin-top:6px;'>"
-                    f"🟢 Green = &gt;+{threshold}% vs {period} &nbsp;·&nbsp; "
-                    f"🔴 Red = &gt;−{threshold}% vs {period}"
-                    f"</p>",
-                    unsafe_allow_html=True
-                )
+                if not cl_df.empty:
+                    st.markdown("<p style='font-size:0.78rem;color:#888;margin-top:4px;'>🟡 Yellow cell = change logged on that date</p>", unsafe_allow_html=True)
 
-            if not cl_df.empty:
-                st.markdown("<p style='font-size:0.78rem;color:#888;margin-top:4px;'>🟡 Yellow cell = change logged on that date</p>", unsafe_allow_html=True)
+            # ── Change log per product ────────────────────────────────────────────
+            st.divider()
+            st.markdown("### 📝 Change Log")
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
+                f"Record manual changes (price, image, title, deal) to track their sales impact.</p>",
+                unsafe_allow_html=True
+            )
 
-        # ── Change log per product ────────────────────────────────────────────
-        st.divider()
-        st.markdown("### 📝 Change Log")
-        st.markdown(
-            f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>"
-            f"Record manual changes (price, image, title, deal) to track their sales impact.</p>",
-            unsafe_allow_html=True
-        )
+            with st.form("change_log_form"):
+                cl1, cl2, cl3 = st.columns([2, 2, 3])
+                with cl1:
+                    cl_asin = st.text_input("ASIN", placeholder="B0XXXXXXXX")
+                with cl2:
+                    cl_type = st.selectbox("Change Type", ["bid", "price", "image", "title", "deal", "listing", "other"])
+                with cl3:
+                    cl_notes = st.text_input("Notes", placeholder="Reduced price from $29.99 to $24.99")
+                cl_date = st.date_input("Date", value=date.today())
+                cl_mkt  = st.selectbox("Marketplace", ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="cl_market")
 
-        with st.form("change_log_form"):
-            cl1, cl2, cl3 = st.columns([2, 2, 3])
-            with cl1:
-                cl_asin = st.text_input("ASIN", placeholder="B0XXXXXXXX")
-            with cl2:
-                cl_type = st.selectbox("Change Type", ["bid", "price", "image", "title", "deal", "listing", "other"])
-            with cl3:
-                cl_notes = st.text_input("Notes", placeholder="Reduced price from $29.99 to $24.99")
-            cl_date = st.date_input("Date", value=date.today())
-            cl_mkt  = st.selectbox("Marketplace", ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"], key="cl_market")
-
-            if st.form_submit_button("➕ Add Entry"):
-                if cl_asin.strip():
-                    from db.database import get_conn
-                    conn2 = get_conn()
-                    with conn2:
-                        conn2.execute(
-                            "INSERT INTO change_log (log_date, asin, marketplace, change_type, notes) VALUES (?,?,?,?,?)",
-                            (str(cl_date), cl_asin.strip().upper(), cl_mkt, cl_type, cl_notes)
-                        )
-                    conn2.close()
-                    st.success("✅ Logged.")
-                    st.rerun()
-                else:
-                    st.warning("ASIN is required.")
+                if st.form_submit_button("➕ Add Entry"):
+                    if cl_asin.strip():
+                        from db.database import get_conn
+                        conn2 = get_conn()
+                        with conn2:
+                            conn2.execute(
+                                "INSERT INTO change_log (log_date, asin, marketplace, change_type, notes) VALUES (?,?,?,?,?)",
+                                (str(cl_date), cl_asin.strip().upper(), cl_mkt, cl_type, cl_notes)
+                            )
+                        conn2.close()
+                        st.success("✅ Logged.")
+                        st.rerun()
+                    else:
+                        st.warning("ASIN is required.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
