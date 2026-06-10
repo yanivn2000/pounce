@@ -221,6 +221,72 @@ def get_weekly_summary(marketplace: str = None, weeks: int = 8,
     return df
 
 
+def search_orders_by_address(
+    name: str = "",
+    address: str = "",
+    zip_code: str = "",
+    country: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    marketplace: str = "",
+) -> pd.DataFrame:
+    """
+    Full-text order lookup by shipping address / recipient.
+    All parameters are optional — only non-empty values are applied as filters.
+    Returns one row per order line with order details + shipping address.
+    """
+    conn = get_conn()
+    clauses = []
+    params = []
+
+    if name.strip():
+        clauses.append("(LOWER(ship_name) LIKE ? OR LOWER(buyer_name) LIKE ?)")
+        _n = f"%{name.strip().lower()}%"
+        params += [_n, _n]
+
+    if address.strip():
+        clauses.append("(LOWER(ship_address_1) LIKE ? OR LOWER(ship_city) LIKE ? OR LOWER(ship_state) LIKE ?)")
+        _a = f"%{address.strip().lower()}%"
+        params += [_a, _a, _a]
+
+    if zip_code.strip():
+        clauses.append("ship_postal_code LIKE ?")
+        params.append(f"%{zip_code.strip()}%")
+
+    if country.strip():
+        # Accept 2-letter code (US, GB, CA…) or full country name fragment
+        clauses.append("LOWER(ship_country) LIKE ?")
+        params.append(f"%{country.strip().lower()}%")
+
+    if date_from.strip():
+        clauses.append("order_date >= ?")
+        params.append(date_from.strip())
+
+    if date_to.strip():
+        clauses.append("order_date <= ?")
+        params.append(date_to.strip())
+
+    if marketplace.strip() and marketplace.strip() != "all":
+        clauses.append("marketplace = ?")
+        params.append(marketplace.strip())
+
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    sql = f"""
+        SELECT order_id, order_date, asin, title, marketplace,
+               quantity, item_price, currency, order_status,
+               ship_name, buyer_name, ship_address_1, ship_city,
+               ship_state, ship_postal_code, ship_country, buyer_email
+        FROM orders
+        {where}
+        ORDER BY order_date DESC, order_id
+        LIMIT 500
+    """
+    df = pd.read_sql_query(sql, conn, params=params)
+    conn.close()
+    return df
+
+
 def get_recommendations_history(marketplace: str = None) -> pd.DataFrame:
     """All saved placement recommendations, newest first."""
     conn = get_conn()

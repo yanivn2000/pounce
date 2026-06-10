@@ -269,6 +269,7 @@ def init_db():
     _migrate_recommendations_notes(conn)
     _migrate_placement_snapshots(conn)
     _migrate_returns(conn)
+    _migrate_orders_address_fields(conn)
     conn.close()
 
 
@@ -966,6 +967,38 @@ def _migrate_productions(conn: sqlite3.Connection):
                 service_cost  REAL    DEFAULT 0
             );
         """)
+    except Exception:
+        pass
+
+
+def _migrate_orders_address_fields(conn: sqlite3.Connection):
+    """
+    Add shipping-address and buyer-name columns to the orders table.
+    Amazon order CSVs contain these fields; we start capturing them so
+    the Order Search feature can find orders by recipient / address / zip.
+    """
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(orders)").fetchall()]
+        for col, typedef in [
+            ("ship_name",        "TEXT"),
+            ("ship_address_1",   "TEXT"),
+            ("ship_city",        "TEXT"),
+            ("ship_state",       "TEXT"),
+            ("ship_postal_code", "TEXT"),
+            ("ship_country",     "TEXT"),
+            ("buyer_name",       "TEXT"),
+            ("buyer_email",      "TEXT"),
+        ]:
+            if col not in cols:
+                conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {typedef}")
+        # Indexes for fast address search
+        conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_orders_ship_country
+                ON orders(ship_country);
+            CREATE INDEX IF NOT EXISTS idx_orders_ship_postal
+                ON orders(ship_postal_code);
+        """)
+        conn.commit()
     except Exception:
         pass
 

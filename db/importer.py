@@ -13,19 +13,30 @@ from db.database import get_conn
 
 # Map Amazon CSV column names → our schema
 _COL_MAP = {
-    "order-id":       "order_id",
-    "amazon-order-id": "order_id",
-    "purchase-date":  "order_date",
-    "asin":           "asin",
-    "sku":            "sku",
-    "product-name":   "title",
-    "sales-channel":  "marketplace",
-    "quantity":       "quantity",
-    "item-price":     "item_price",
-    "item-tax":       "item_tax",
-    "shipping-price": "shipping_price",
-    "currency":       "currency",
-    "order-status":   "order_status",
+    "order-id":           "order_id",
+    "amazon-order-id":    "order_id",
+    "purchase-date":      "order_date",
+    "asin":               "asin",
+    "sku":                "sku",
+    "product-name":       "title",
+    "sales-channel":      "marketplace",
+    "quantity":           "quantity",
+    "item-price":         "item_price",
+    "item-tax":           "item_tax",
+    "shipping-price":     "shipping_price",
+    "currency":           "currency",
+    "order-status":       "order_status",
+    # Shipping address fields (present in many Amazon order reports)
+    "ship-name":          "ship_name",
+    "recipient-name":     "ship_name",   # alternate header name
+    "ship-address-1":     "ship_address_1",
+    "ship-address-2":     "ship_address_1",  # fallback if only -2 present
+    "ship-city":          "ship_city",
+    "ship-state":         "ship_state",
+    "ship-postal-code":   "ship_postal_code",
+    "ship-country":       "ship_country",
+    "buyer-name":         "buyer_name",
+    "buyer-email":        "buyer_email",
 }
 
 _MARKETPLACE_MAP = {
@@ -106,7 +117,9 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
         warnings.append(f"{invalid_dates} rows had unparseable dates and were skipped.")
     df = df.dropna(subset=["order_date"])
 
-    for col in ("sku", "title", "currency", "order_status"):
+    for col in ("sku", "title", "currency", "order_status",
+                "ship_name", "ship_address_1", "ship_city", "ship_state",
+                "ship_postal_code", "ship_country", "buyer_name", "buyer_email"):
         if col not in df.columns:
             df[col] = None
 
@@ -118,15 +131,25 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
                 conn.execute("""
                     INSERT INTO orders
                         (order_id, order_date, asin, sku, title, marketplace,
-                         quantity, item_price, item_tax, shipping_price, currency, order_status)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                         quantity, item_price, item_tax, shipping_price, currency, order_status,
+                         ship_name, ship_address_1, ship_city, ship_state,
+                         ship_postal_code, ship_country, buyer_name, buyer_email)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(order_id, asin) DO UPDATE SET
-                        order_date      = excluded.order_date,
-                        quantity        = excluded.quantity,
-                        item_price      = excluded.item_price,
-                        item_tax        = excluded.item_tax,
-                        shipping_price  = excluded.shipping_price,
-                        order_status    = excluded.order_status
+                        order_date       = excluded.order_date,
+                        quantity         = excluded.quantity,
+                        item_price       = excluded.item_price,
+                        item_tax         = excluded.item_tax,
+                        shipping_price   = excluded.shipping_price,
+                        order_status     = excluded.order_status,
+                        ship_name        = COALESCE(excluded.ship_name,        ship_name),
+                        ship_address_1   = COALESCE(excluded.ship_address_1,   ship_address_1),
+                        ship_city        = COALESCE(excluded.ship_city,        ship_city),
+                        ship_state       = COALESCE(excluded.ship_state,       ship_state),
+                        ship_postal_code = COALESCE(excluded.ship_postal_code, ship_postal_code),
+                        ship_country     = COALESCE(excluded.ship_country,     ship_country),
+                        buyer_name       = COALESCE(excluded.buyer_name,       buyer_name),
+                        buyer_email      = COALESCE(excluded.buyer_email,      buyer_email)
                 """, (
                     str(row["order_id"]).strip(),
                     row["order_date"],
@@ -140,6 +163,14 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
                     float(row["shipping_price"]),
                     row.get("currency"),
                     row.get("order_status"),
+                    row.get("ship_name"),
+                    row.get("ship_address_1"),
+                    row.get("ship_city"),
+                    row.get("ship_state"),
+                    row.get("ship_postal_code"),
+                    row.get("ship_country"),
+                    row.get("buyer_name"),
+                    row.get("buyer_email"),
                 ))
                 imported += 1
             except Exception as e:

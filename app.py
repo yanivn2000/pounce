@@ -44,6 +44,7 @@ from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
     get_change_log, get_marketplaces, get_order_date_range, count_orders,
     get_units_matrix, get_weekly_units_matrix, get_weekly_units_matrix_yoy,
+    search_orders_by_address,
 )
 from db.products_catalog import (
     get_suppliers, upsert_supplier, delete_supplier,
@@ -2902,6 +2903,96 @@ with tab_sales:
         sc3.markdown(f'<div class="metric-card"><p class="metric-val">{max_date}</p><p class="metric-label">Latest Date</p></div>', unsafe_allow_html=True)
 
         st.markdown("<div style='margin: 6px 0 0;'></div>", unsafe_allow_html=True)
+
+        # ── Order Search ──────────────────────────────────────────────────────
+        with st.expander("🔍 Order Lookup — search by recipient / address / zip", expanded=False):
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.84rem;margin:0 0 10px;'>"
+                "Find a specific order when a customer contacts you with their address details. "
+                "Leave any field blank to ignore it. Returns up to 500 matches.</p>",
+                unsafe_allow_html=True,
+            )
+            _sc1, _sc2, _sc3 = st.columns(3)
+            with _sc1:
+                _srch_name    = st.text_input("👤 Recipient / buyer name", key="srch_name",
+                                               placeholder="e.g. John Smith")
+                _srch_country = st.text_input("🌍 Country (code or name)", key="srch_country",
+                                               placeholder="e.g. US  or  United States")
+            with _sc2:
+                _srch_address = st.text_input("🏠 Address / City / State", key="srch_address",
+                                               placeholder="e.g. Main St  or  Brooklyn")
+                _srch_zip     = st.text_input("📮 Zip / Postal code", key="srch_zip",
+                                               placeholder="e.g. 10001")
+            with _sc3:
+                _srch_from = st.date_input("📅 Order from", value=None, key="srch_from")
+                _srch_to   = st.date_input("📅 Order to",   value=None, key="srch_to")
+
+            _srch_btn = st.button("🔍 Search Orders", type="primary", key="srch_btn")
+
+            if _srch_btn:
+                _any_filter = any([
+                    _srch_name.strip(), _srch_address.strip(),
+                    _srch_zip.strip(), _srch_country.strip(),
+                    _srch_from, _srch_to,
+                ])
+                if not _any_filter:
+                    st.warning("Please enter at least one search term.")
+                else:
+                    with st.spinner("Searching..."):
+                        _srch_df = search_orders_by_address(
+                            name        = _srch_name,
+                            address     = _srch_address,
+                            zip_code    = _srch_zip,
+                            country     = _srch_country,
+                            date_from   = str(_srch_from) if _srch_from else "",
+                            date_to     = str(_srch_to)   if _srch_to   else "",
+                        )
+                    if _srch_df.empty:
+                        st.info("No orders found matching your search.")
+                    else:
+                        st.success(f"Found **{len(_srch_df)}** order line(s).")
+                        # Friendly column labels
+                        _srch_display = _srch_df.rename(columns={
+                            "order_id":         "Order ID",
+                            "order_date":       "Date",
+                            "asin":             "ASIN",
+                            "title":            "Product",
+                            "marketplace":      "Marketplace",
+                            "quantity":         "Qty",
+                            "item_price":       "Price",
+                            "currency":         "Currency",
+                            "order_status":     "Status",
+                            "ship_name":        "Ship-to Name",
+                            "buyer_name":       "Buyer Name",
+                            "ship_address_1":   "Address",
+                            "ship_city":        "City",
+                            "ship_state":       "State",
+                            "ship_postal_code": "Zip",
+                            "ship_country":     "Country",
+                            "buyer_email":      "Email",
+                        })
+                        st.dataframe(
+                            _srch_display,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Order ID":   st.column_config.TextColumn("Order ID", width="medium"),
+                                "Date":       st.column_config.TextColumn("Date",     width="small"),
+                                "Product":    st.column_config.TextColumn("Product",  width="large"),
+                                "Qty":        st.column_config.NumberColumn("Qty",    width="small"),
+                                "Price":      st.column_config.NumberColumn("Price",  format="%.2f"),
+                                "Address":    st.column_config.TextColumn("Address",  width="medium"),
+                            },
+                        )
+                        # Download button
+                        _csv_bytes = _srch_display.to_csv(index=False).encode()
+                        st.download_button(
+                            "⬇️ Download results as CSV",
+                            data=_csv_bytes,
+                            file_name="order_search_results.csv",
+                            mime="text/csv",
+                            key="srch_download",
+                        )
 
         # ── Filters ───────────────────────────────────────────────────────────
         available_markets = get_marketplaces()
