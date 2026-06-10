@@ -50,6 +50,7 @@ from db.bundles import (
     import_bundle_csv, count_bundle_rows, get_bundle_date_range,
     get_bundle_summary, get_bundle_units_matrix, get_bundle_revenue_matrix,
     get_bundle_daily_trend, get_bundle_per_asin_trend, clear_all_bundles,
+    fetch_bundle_images, get_bundle_asins,
 )
 from db.products_catalog import (
     get_suppliers, upsert_supplier, delete_supplier,
@@ -2907,6 +2908,22 @@ with tab_sales:
             st.info("No bundle data yet. Import an Amazon Bundle Performance CSV above.")
         else:
             _b_min, _b_max = get_bundle_date_range()
+
+            # ── Image fetch ───────────────────────────────────────────────────
+            _b_img_map_check = get_asin_image_map()
+            _b_missing_imgs  = [a for a in get_bundle_asins() if a not in _b_img_map_check]
+            if _b_missing_imgs:
+                _bimg_col1, _bimg_col2 = st.columns([3, 1])
+                with _bimg_col1:
+                    st.caption(f"🖼️ {len(_b_missing_imgs)} bundle ASIN(s) are missing product images: "
+                               f"{', '.join(_b_missing_imgs)}")
+                with _bimg_col2:
+                    if st.button("🔍 Fetch Bundle Images", key="bundle_fetch_imgs"):
+                        with st.spinner(f"Fetching images for {len(_b_missing_imgs)} ASIN(s)…"):
+                            _bimg_results = fetch_bundle_images()
+                        _bfound = sum(1 for v in _bimg_results.values() if v != "NOT_FOUND")
+                        st.success(f"✅ Found {_bfound} / {len(_bimg_results)} images.")
+                        st.rerun()
 
             # ── Period selector ───────────────────────────────────────────────
             _bp_col1, _bp_col2, _bp_col3 = st.columns([2, 2, 2])

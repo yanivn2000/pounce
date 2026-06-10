@@ -63,6 +63,26 @@ def import_bundle_csv(file_obj) -> tuple[int, list[str]]:
         df["title"] = None
 
     conn = get_conn()
+
+    # Auto-create stub entries in products_catalog for any new bundle ASINs
+    # so the image fetch mechanism works without manual catalog management.
+    _asin_titles = (
+        df.groupby("bundle_asin")["title"].first().dropna().to_dict()
+        if "title" in df.columns else {}
+    )
+    for _asin, _title in _asin_titles.items():
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO products_catalog (asin, name)
+                VALUES (?, ?)
+            """, (_asin, _title[:120] if _title else _asin))
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
     imported = 0
     with conn:
         for _, row in df.iterrows():
@@ -221,6 +241,58 @@ def get_bundle_per_asin_trend(days: int = 90) -> pd.DataFrame:
     """, conn, params=[days])
     conn.close()
     return df
+
+
+def get_bundle_asins() -> list[str]:
+    """Return all distinct bundle ASINs stored in bundle_sales."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT bundle_asin FROM bundle_sales ORDER BY bundle_asin"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def fetch_bundle_images() -> dict[str, str]:
+    """
+    Fetch og:image URLs for all bundle ASINs that don't yet have one in
+    products_catalog, then store them.  Returns {asin: url_or_NOT_FOUND}.
+    """
+    from db.productions import fetch_asin_image_url   # local import avoids circular deps
+
+    conn = get_conn()
+    # Find bundle ASINs that are missing image_url
+    rows = conn.execute("""
+        SELECT b.bundle_asin
+        FROM (SELECT DISTINCT bundle_asin FROM bundle_sales) b
+        LEFT JOIN products_catalog pc ON pc.asin = b.bundle_asin
+        WHERE pc.image_url IS NULL OR pc.image_url = ''
+    """).fetchall()
+    missing = [r[0] for r in rows]
+    conn.close()
+
+    results = {}
+    for asin in missing:
+        url = fetch_asin_image_url(asin)
+        results[asin] = url or "NOT_FOUND"
+        if url:
+            conn2 = get_conn()
+            try:
+                with conn2:
+                    # Ensure stub row exists first
+                    conn2.execute(
+                        "INSERT OR IGNORE INTO products_catalog (asin, name) VALUES (?,?)",
+                        (asin, asin)
+                    )
+                    conn2.execute(
+                        "UPDATE products_catalog SET image_url = ? WHERE asin = ?",
+                        (url, asin)
+                    )
+            except Exception:
+                pass
+            finally:
+                conn2.close()
+    return results
 
 
 def clear_all_bundles() -> int:
