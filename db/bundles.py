@@ -6,6 +6,7 @@ Amazon Bundle CSV columns:
 """
 
 import pandas as pd
+import streamlit as st
 from db.database import get_conn
 
 
@@ -112,6 +113,7 @@ def import_bundle_csv(file_obj) -> tuple[int, list[str]]:
     return imported, warnings
 
 
+@st.cache_data(ttl=300)
 def count_bundle_rows() -> int:
     conn = get_conn()
     n = conn.execute("SELECT COUNT(*) FROM bundle_sales").fetchone()[0]
@@ -119,6 +121,7 @@ def count_bundle_rows() -> int:
     return n
 
 
+@st.cache_data(ttl=300)
 def get_bundle_date_range() -> tuple[str, str]:
     conn = get_conn()
     row = conn.execute(
@@ -128,6 +131,7 @@ def get_bundle_date_range() -> tuple[str, str]:
     return (row[0] or "—", row[1] or "—")
 
 
+@st.cache_data(ttl=300)
 def get_bundle_summary() -> pd.DataFrame:
     """
     Per-ASIN totals: bundles_sold, total_sales, avg_price, first_sale, last_sale.
@@ -149,6 +153,7 @@ def get_bundle_summary() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=300)
 def get_bundle_units_matrix(days: int = 90) -> pd.DataFrame:
     """
     Daily pivot: bundle_asin × sale_date, values = bundles_sold.
@@ -179,6 +184,7 @@ def get_bundle_units_matrix(days: int = 90) -> pd.DataFrame:
     return pivot[["bundle_asin", "title", "Total"] + date_cols]
 
 
+@st.cache_data(ttl=300)
 def get_bundle_revenue_matrix(days: int = 90) -> pd.DataFrame:
     """
     Daily pivot: bundle_asin × sale_date, values = total_sales (revenue).
@@ -208,6 +214,7 @@ def get_bundle_revenue_matrix(days: int = 90) -> pd.DataFrame:
     return pivot[["bundle_asin", "title", "Total"] + date_cols]
 
 
+@st.cache_data(ttl=300)
 def get_bundle_daily_trend(days: int = 90) -> pd.DataFrame:
     """
     Daily totals across ALL bundles: sale_date, bundles_sold, total_sales.
@@ -227,6 +234,7 @@ def get_bundle_daily_trend(days: int = 90) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=300)
 def get_bundle_per_asin_trend(days: int = 90) -> pd.DataFrame:
     """
     Daily bundles_sold per ASIN — for multi-line chart.
@@ -243,6 +251,7 @@ def get_bundle_per_asin_trend(days: int = 90) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=300)
 def get_bundle_asins() -> list[str]:
     """Return all distinct bundle ASINs stored in bundle_sales."""
     conn = get_conn()
