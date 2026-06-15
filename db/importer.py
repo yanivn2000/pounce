@@ -180,77 +180,71 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
     return imported, warnings
 
 
+_UPSERT_RECOMMENDATIONS = """
+    INSERT INTO recommendations
+        (date_given, asin, marketplace, campaign_name, placement_type,
+         campaign_type, current_multiplier, recommended_action,
+         recommended_multiplier, reasoning, window_days, review_date, score, source,
+         end_date, debug_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(campaign_name, placement_type, marketplace) DO UPDATE SET
+        date_given             = excluded.date_given,
+        asin                   = excluded.asin,
+        campaign_type          = excluded.campaign_type,
+        current_multiplier     = excluded.current_multiplier,
+        recommended_action     = excluded.recommended_action,
+        recommended_multiplier = excluded.recommended_multiplier,
+        reasoning              = excluded.reasoning,
+        window_days            = excluded.window_days,
+        review_date            = excluded.review_date,
+        score                  = excluded.score,
+        source                 = excluded.source,
+        end_date               = excluded.end_date,
+        debug_json             = excluded.debug_json
+        -- notes intentionally NOT updated: preserve user-written notes across uploads
+"""
+
+
+def _rec_to_row(rec: dict) -> tuple:
+    return (
+        rec.get("date_given"),
+        rec.get("asin"),
+        rec.get("marketplace", "amazon.com"),
+        rec.get("campaign_name"),
+        rec.get("placement_type"),
+        rec.get("campaign_type"),
+        rec.get("current_multiplier"),
+        rec.get("recommended_action"),
+        rec.get("recommended_multiplier"),
+        rec.get("reasoning"),
+        rec.get("window_days", 14),
+        rec.get("review_date"),
+        rec.get("score"),
+        rec.get("source", "auto"),
+        rec.get("end_date"),
+        json.dumps(rec.get("debug") or {}),
+    )
+
+
 def save_recommendation(rec: dict) -> int:
-    """Insert a placement recommendation row. Returns new row id."""
+    """Upsert a placement recommendation row, preserving existing notes. Returns row id."""
     conn = get_conn()
     with conn:
-        cur = conn.execute("""
-            INSERT OR REPLACE INTO recommendations
-                (date_given, asin, marketplace, campaign_name, placement_type,
-                 campaign_type, current_multiplier, recommended_action,
-                 recommended_multiplier, reasoning, window_days, review_date, score, source,
-                 end_date, debug_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            rec.get("date_given"),
-            rec.get("asin"),
-            rec.get("marketplace", "amazon.com"),
-            rec.get("campaign_name"),
-            rec.get("placement_type"),
-            rec.get("campaign_type"),
-            rec.get("current_multiplier"),
-            rec.get("recommended_action"),
-            rec.get("recommended_multiplier"),
-            rec.get("reasoning"),
-            rec.get("window_days", 14),
-            rec.get("review_date"),
-            rec.get("score"),
-            rec.get("source", "auto"),
-            rec.get("end_date"),
-            json.dumps(rec.get("debug") or {}),
-        ))
+        cur = conn.execute(_UPSERT_RECOMMENDATIONS, _rec_to_row(rec))
         row_id = cur.lastrowid
     conn.close()
     return row_id
 
 
 def save_recommendations_batch(recs: list[dict]) -> int:
-    """Bulk-insert/replace a list of recommendation dicts. Returns count saved."""
+    """Bulk-upsert a list of recommendation dicts, preserving existing notes."""
     if not recs:
         return 0
-    rows = [
-        (
-            rec.get("date_given"),
-            rec.get("asin"),
-            rec.get("marketplace", "amazon.com"),
-            rec.get("campaign_name"),
-            rec.get("placement_type"),
-            rec.get("campaign_type"),
-            rec.get("current_multiplier"),
-            rec.get("recommended_action"),
-            rec.get("recommended_multiplier"),
-            rec.get("reasoning"),
-            rec.get("window_days", 14),
-            rec.get("review_date"),
-            rec.get("score"),
-            rec.get("source", "auto"),
-            rec.get("end_date"),
-            json.dumps(rec.get("debug") or {}),
-        )
-        for rec in recs
-    ]
     conn = get_conn()
     with conn:
-        conn.executemany("""
-            INSERT OR REPLACE INTO recommendations
-                (date_given, asin, marketplace, campaign_name, placement_type,
-                 campaign_type, current_multiplier, recommended_action,
-                 recommended_multiplier, reasoning, window_days, review_date, score, source,
-                 end_date, debug_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, rows)
+        conn.executemany(_UPSERT_RECOMMENDATIONS, [_rec_to_row(r) for r in recs])
     conn.close()
-    return len(rows)
+    return len(recs)
 
 
 def update_recommendation_outcome(rec_id: int, outcome: str):
