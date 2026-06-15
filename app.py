@@ -4022,11 +4022,16 @@ with tab_ads:
                             help="e.g. 50 = +50%, 0 = removed adjustment",
                         )
 
-                st.markdown(
-                    f"<p style='color:{T['text_secondary']};font-size:0.82rem;'>"
-                    "💡 The ROAS and spend shown in the Impact Report (Period 1) will be pulled "
-                    "automatically from the most recent uploaded report on or before the change date.</p>",
-                    unsafe_allow_html=True,
+                _log_note = st.text_area(
+                    "📝 Note (optional)",
+                    placeholder="e.g. Reduced bid after ROAS dropped below breakeven…",
+                    key="log_bc_note",
+                    height=68,
+                )
+
+                st.caption(
+                    "💡 ROAS and spend for Period 1 will be pulled automatically "
+                    "from the most recent uploaded report on or before the change date."
                 )
 
                 if st.button("💾 Save Bid Change", key="log_bc_save", type="primary"):
@@ -4044,6 +4049,7 @@ with tab_ads:
                             change_date=str(_log_date),
                             bid_before=int(_log_bid_before),
                             bid_after=int(_log_bid_after),
+                            notes=_log_note.strip() or None,
                         )
                         if _log_status == "saved":
                             st.success(
