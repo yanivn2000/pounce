@@ -121,44 +121,105 @@ T = {
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
-html, body, [class*="css"] {{ font-family: 'IBM Plex Sans', sans-serif; }}
-h1, h2, h3 {{ font-family: 'IBM Plex Mono', monospace !important; letter-spacing: -0.03em; }}
-/* Tighten Streamlit's default top padding (default is 5rem, min needed to clear fixed header ~2.5rem) */
-.block-container {{ padding-top: 2.5rem !important; padding-bottom: 1rem !important; }}
-/* Reduce vertical gap between widgets */
-div[data-testid="stVerticalBlock"] > div {{ gap: 0.3rem !important; }}
-div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div {{ gap: 0.2rem !important; }}
-/* Compact dataframe row height */
+
+/* ── Base font ─────────────────────────────────────────────────── */
+html, body, [class*="css"] {{ font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; }}
+
+/* ── Headings — compact, not massive ───────────────────────────── */
+h1 {{ font-family:'IBM Plex Mono',monospace !important; letter-spacing:-0.03em;
+      font-size:1.35rem !important; font-weight:700 !important; margin:0 0 4px !important; line-height:1.2 !important; }}
+h2 {{ font-family:'IBM Plex Mono',monospace !important; letter-spacing:-0.02em;
+      font-size:1.1rem !important;  font-weight:700 !important; margin:0 0 3px !important; line-height:1.2 !important; }}
+h3 {{ font-family:'IBM Plex Mono',monospace !important; letter-spacing:-0.02em;
+      font-size:0.95rem !important; font-weight:600 !important; margin:0 0 2px !important; line-height:1.2 !important; }}
+h4, h5, h6 {{ font-family:'IBM Plex Sans',sans-serif !important;
+      font-size:0.85rem !important; font-weight:600 !important; margin:0 0 2px !important; line-height:1.2 !important; }}
+p {{ margin:0 0 4px !important; line-height:1.45 !important; }}
+
+/* ── Page container — much less top padding ─────────────────────── */
+.block-container {{ padding-top: 1rem !important; padding-bottom: 0.5rem !important;
+                    max-width: 1400px !important; }}
+
+/* ── Vertical widget gaps — very tight ──────────────────────────── */
+div[data-testid="stVerticalBlock"] > div {{ gap: 0.2rem !important; }}
+div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div {{ gap: 0.15rem !important; }}
+
+/* ── Tabs — smaller text, less padding ──────────────────────────── */
+[data-testid="stTabs"] [role="tablist"] {{ gap: 0 !important; border-bottom: 1px solid #d0d7de; margin-bottom: 6px !important; }}
+[data-testid="stTabs"] [role="tab"] {{ font-size: 0.8rem !important; padding: 5px 14px !important;
+                                        font-weight: 500 !important; }}
+[data-testid="stTabs"] [data-baseweb="tab-panel"] {{ padding-top: 4px !important; }}
+
+/* ── Dividers — slim, low margin ────────────────────────────────── */
+hr {{ margin: 6px 0 !important; border-color: #e6e8ea !important; }}
+
+/* ── Streamlit native metrics — compact ─────────────────────────── */
+[data-testid="stMetric"] {{ padding: 6px 8px !important; }}
+[data-testid="stMetricLabel"] {{ font-size: 0.72rem !important; }}
+[data-testid="stMetricValue"] {{ font-size: 1.1rem !important; }}
+
+/* ── Expanders — tighter header ─────────────────────────────────── */
+[data-testid="stExpander"] summary {{ padding: 6px 10px !important; font-size: 0.82rem !important; }}
+[data-testid="stExpander"] [data-testid="stVerticalBlock"] {{ padding: 6px 4px !important; }}
+
+/* ── Alerts / info / success / warning / error ──────────────────── */
+[data-testid="stAlert"] {{ padding: 6px 12px !important; font-size: 0.82rem !important; margin: 2px 0 !important; }}
+
+/* ── Buttons — slightly shorter ─────────────────────────────────── */
+[data-testid="stButton"] > button {{ padding: 4px 14px !important; font-size: 0.82rem !important; }}
+
+/* ── Selectbox / number_input / text_input labels ───────────────── */
+[data-testid="stSelectbox"] label,
+[data-testid="stNumberInput"] label,
+[data-testid="stTextInput"] label,
+[data-testid="stTextArea"] label,
+[data-testid="stCheckbox"] label,
+[data-testid="stMultiSelect"] label {{ font-size: 0.78rem !important; font-weight: 600 !important;
+                                        margin-bottom: 1px !important; color: {T['text_secondary']} !important; }}
+
+/* ── Input fields — compact height ──────────────────────────────── */
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input {{ padding: 4px 8px !important; font-size: 0.82rem !important; }}
+[data-testid="stSelectbox"] [data-baseweb="select"] {{ font-size: 0.82rem !important; }}
+
+/* ── Captions ────────────────────────────────────────────────────── */
+[data-testid="stCaptionContainer"] {{ font-size: 0.74rem !important; color: {T['text_secondary']} !important; }}
+
+/* ── Compact dataframe rows ─────────────────────────────────────── */
 [data-testid="stDataFrame"] .dvn-scroller [role="gridcell"],
 [data-testid="stDataFrame"] .dvn-scroller [role="columnheader"] {{
-    padding-top: 2px !important;
-    padding-bottom: 2px !important;
-    min-height: unset !important;
-    line-height: 1.3 !important;
+    padding-top: 2px !important; padding-bottom: 2px !important;
+    min-height: unset !important; line-height: 1.3 !important; font-size: 0.8rem !important;
 }}
+
+/* ── Top nav (Streamlit header) — hide deploy button clutter ────── */
+[data-testid="stToolbar"] {{ display: none !important; }}
+[data-testid="stDecoration"] {{ display: none !important; }}
+
+/* ── Custom component classes ───────────────────────────────────── */
 .metric-card {{
     background: {T['card_bg']}; border: 1px solid {T['card_border']};
-    border-radius: 6px; padding: 0.45rem 1rem; text-align: center;
+    border-radius: 6px; padding: 0.3rem 0.75rem; text-align: center;
 }}
 .metric-val {{
-    font-family: 'IBM Plex Mono', monospace; font-size: 1.15rem;
+    font-family: 'IBM Plex Mono', monospace; font-size: 1rem;
     font-weight: 600; color: {T['metric_val']}; margin: 0;
 }}
 .metric-label {{
-    font-size: 0.68rem; color: {T['text_secondary']};
-    text-transform: uppercase; letter-spacing: 0.08em; margin: 2px 0 0;
+    font-size: 0.64rem; color: {T['text_secondary']};
+    text-transform: uppercase; letter-spacing: 0.07em; margin: 1px 0 0;
 }}
 .alert-box {{
     background: {T['alert_bg']}; border: 1px solid {T['alert_border']};
-    border-radius: 6px; padding: 0.8rem 1rem; margin: 0.4rem 0;
-    font-size: 0.85rem; color: {T['alert_text']};
+    border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.25rem 0;
+    font-size: 0.82rem; color: {T['alert_text']};
 }}
 .score-hi  {{ color: {T['score_hi']}  !important; font-weight: 600; }}
 .score-mid {{ color: {T['score_mid']} !important; font-weight: 600; }}
 .score-lo  {{ color: {T['score_lo']}  !important; font-weight: 600; }}
-.tag-sp   {{ background:{T['tag_sp_bg']};   color:{T['tag_sp_text']};   padding:2px 8px; border-radius:4px; font-size:0.75rem; }}
-.tag-sb   {{ background:{T['tag_sb_bg']};   color:{T['tag_sb_text']};   padding:2px 8px; border-radius:4px; font-size:0.75rem; }}
-.tag-auto {{ background:{T['tag_auto_bg']}; color:{T['tag_auto_text']}; padding:2px 8px; border-radius:4px; font-size:0.75rem; }}
+.tag-sp   {{ background:{T['tag_sp_bg']};   color:{T['tag_sp_text']};   padding:1px 6px; border-radius:4px; font-size:0.72rem; }}
+.tag-sb   {{ background:{T['tag_sb_bg']};   color:{T['tag_sb_text']};   padding:1px 6px; border-radius:4px; font-size:0.72rem; }}
+.tag-auto {{ background:{T['tag_auto_bg']}; color:{T['tag_auto_text']}; padding:1px 6px; border-radius:4px; font-size:0.72rem; }}
 .be-roas  {{ font-family:'IBM Plex Mono',monospace; font-weight:600; color:{T['metric_val']}; }}
 .be-warn  {{ font-family:'IBM Plex Mono',monospace; font-weight:600; color:{T['score_lo']}; }}
 </style>
