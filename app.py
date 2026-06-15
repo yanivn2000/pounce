@@ -4886,10 +4886,9 @@ with tab_amazon:
             # amazon_transactions → orders (asin+qty) → get_asin_cost_map() for unit cost
             if metric == "cogs":
                 from db.amazon_module import get_sellerboard_cost_map as _get_sb_costs
-                from db.productions import get_asin_cost_map as _get_cost_map
-                # SellerBoard costs (full landed COGS) take priority; fall back to items table
-                _sb_map   = _get_sb_costs(conn)      # {ASIN_UPPER: cost_usd} from sellerboard_cogs
-                _cost_map = _get_cost_map()           # {ASIN_UPPER: cost_usd} from products_catalog/items
+                # Only use SellerBoard costs (full landed COGS per unit).
+                # ASINs not in sellerboard_cogs contribute 0 (old DB costs excluded).
+                _sb_map = _get_sb_costs(conn)        # {ASIN_UPPER: cost_usd}
                 ph = ",".join("?" * len(mps))
                 _unit_rows = conn.execute(f"""
                     SELECT at.month, o.asin, SUM(o.quantity) AS units
@@ -4907,8 +4906,7 @@ with tab_amazon:
                     if _m not in MONTHS:
                         continue
                     _asin = str(_ur[1] or "").upper()
-                    # Prefer SellerBoard cost (includes shipping + FBA fees); fall back to items table
-                    _unit_cost = _sb_map.get(_asin) or _cost_map.get(_asin, 0.0)
+                    _unit_cost = _sb_map.get(_asin, 0.0)
                     _monthly_cogs[_m] = _monthly_cogs.get(_m, 0.0) + float(_ur[2] or 0) * _unit_cost
                 return _monthly_cogs
 
