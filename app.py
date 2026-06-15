@@ -3677,9 +3677,12 @@ with tab_ads:
                     _rec_after  = int(round(float(_sel_data.get("recommended_multiplier") or 0)))
                     _rec_before = int(round(float(_sel_data.get("current_multiplier")     or 0)))
 
-                    _panel_left, _panel_right = st.columns([3, 2])
+                    # ── Narrow log panel (≈ 1/3 width) ───────────────────────
+                    _log_col, _ = st.columns([1, 2])
+                    with _log_col:
+                        st.markdown("##### ✍️ Document This Change")
 
-                    with _panel_left:
+                        # — Note —
                         st.markdown("**📝 Note**")
                         _note_val = st.text_area(
                             "Note",
@@ -3687,40 +3690,49 @@ with tab_ads:
                             placeholder="e.g. Seasonal campaign, competitor left…",
                             label_visibility="collapsed",
                             key=f"note_{_sel_id}",
-                            height=68,
+                            height=80,
                         )
                         _apply_all = st.checkbox(
-                            "Note → all placements of this campaign",
+                            "Apply note to all placements of this campaign",
                             value=True,
                             key=f"note_all_{_sel_id}",
                         )
 
-                    with _panel_right:
+                        st.divider()
+
+                        # — Applied in Amazon? —
+                        st.markdown(
+                            f"**☑️ Applied in Amazon?** &nbsp; "
+                            f"<span style='color:#888;font-size:0.85em'>rec: {_fmt_change(_sel_data)}</span>",
+                            unsafe_allow_html=True,
+                        )
                         _did_apply = st.checkbox(
-                            f"✅ Applied in Amazon?  "
-                            f"*(rec: {_fmt_change(_sel_data)})*",
+                            "Yes, I changed the bid",
                             value=False,
                             key=f"did_apply_{_sel_id}",
                         )
-                        _ab1, _ab2 = st.columns(2)
-                        with _ab1:
-                            _applied_before = st.number_input(
-                                "Was %", min_value=0, max_value=900,
-                                value=_rec_before, step=10,
-                                key=f"applied_before_{_sel_id}",
-                                disabled=not _did_apply,
-                            )
-                        with _ab2:
-                            _applied_after = st.number_input(
-                                "Now %", min_value=0, max_value=900,
-                                value=_rec_after, step=10,
-                                key=f"applied_after_{_sel_id}",
-                                disabled=not _did_apply,
-                            )
+                        if _did_apply:
+                            _ab1, _ab2 = st.columns(2)
+                            with _ab1:
+                                _applied_before = st.number_input(
+                                    "Was %", min_value=0, max_value=900,
+                                    value=_rec_before, step=10,
+                                    key=f"applied_before_{_sel_id}",
+                                )
+                            with _ab2:
+                                _applied_after = st.number_input(
+                                    "Now %", min_value=0, max_value=900,
+                                    value=_rec_after, step=10,
+                                    key=f"applied_after_{_sel_id}",
+                                )
+                        else:
+                            _applied_before = _rec_before
+                            _applied_after  = _rec_after
 
-                    # ── Single Save button ─────────────────────────────────────
-                    if st.button("💾 Save", key=f"save_btn_{_sel_id}",
-                                 type="primary", use_container_width=True):
+                    # ── Single Save button (same 1/3 width) ────────────────────
+                    with st.columns([1, 2])[0]:
+                      if st.button("💾 Save", key=f"save_btn_{_sel_id}",
+                                   type="primary", use_container_width=True):
                         _note_saved = False
                         _bid_saved  = False
                         _msg_parts  = []
