@@ -4855,30 +4855,115 @@ with tab_amazon:
 
         st.markdown("<div style='margin:4px 0'></div>", unsafe_allow_html=True)
 
-        # ── Monthly table ─────────────────────────────────────────────────────────
+        # ── Chart controls ────────────────────────────────────────────────────────
+        _METRIC_LABELS = {
+            "💵 Sales":             "sales",
+            "🔁 Refunds":           "refunds",
+            "📢 Advertising":       "advertising",
+            "📦 Storage":           "storage",
+            "🏭 Long-term Storage": "lt_storage",
+            "🧾 VAT / Tax":         "vat",
+            "✅ Net Revenue":       "net",
+            "🏷️ Promos":            "promos",
+        }
+
+        _gc1, _gc2 = st.columns([3, 1])
+        with _gc1:
+            _metric_label = st.radio(
+                "Show", list(_METRIC_LABELS.keys()),
+                horizontal=True, key="amz_metric",
+                index=list(_METRIC_LABELS.keys()).index("✅ Net Revenue"),
+            )
+        with _gc2:
+            _yoy = st.checkbox("Compare to last year", value=False, key="amz_yoy")
+
+        _sel_metric = _METRIC_LABELS[_metric_label]
+
+        def _monthly_metric(conn, year, metric, mps):
+            """Return {month: usd_value} for the given metric/year/marketplaces."""
+            ph = ",".join("?" * len(mps))
+            p  = [year] + mps
+            _Q = {
+                "sales":       f"SELECT month, SUM(gross_sales)          FROM amazon_transactions WHERE year=? AND tx_type='Order'            AND marketplace IN ({ph}) GROUP BY month",
+                "refunds":     f"SELECT month, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='Refund'           AND marketplace IN ({ph}) GROUP BY month",
+                "advertising": f"SELECT month, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type IN ('Amazon Fees','Service Fee') AND LOWER(product_details) LIKE '%sponsor%' AND marketplace IN ({ph}) GROUP BY month",
+                "storage":     f"SELECT month, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) NOT LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month",
+                "lt_storage":  f"SELECT month, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) LIKE '%long%'  AND marketplace IN ({ph}) GROUP BY month",
+                "vat":         f"SELECT month, SUM(ABS(withheld_tax))    FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month",
+                "net":         f"SELECT month, SUM(net_total)             FROM amazon_transactions WHERE year=? AND tx_type NOT IN ('Transfer','Debt') AND marketplace IN ({ph}) GROUP BY month",
+                "promos":      f"SELECT month, SUM(ABS(promo_rebates))   FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month",
+            }
+            rows = conn.execute(_Q[metric], p).fetchall()
+            # Convert to USD
+            _cur_map = {"CA":"CAD","US":"USD","UK":"GBP","DE":"EUR","FR":"EUR",
+                        "ES":"EUR","IT":"EUR","NL":"EUR","BE":"EUR","IE":"EUR",
+                        "PL":"PLN","SE":"SEK","AU":"AUD"}
+            # Return raw totals (already in local currency mixed) — for now return as-is
+            # since aggregation mixes currencies; caller does global _to_usd per-row
+            return {r[0]: float(r[1] or 0) for r in rows if r[0] in MONTHS}
+
+        # Query data for chart
+        _curr_vals = _monthly_metric(_amz_conn, _sel_year,     _sel_metric, _sel_mps)
+        _prev_vals = _monthly_metric(_amz_conn, _sel_year - 1, _sel_metric, _sel_mps) if _yoy else {}
+
+        _chart_months = [m for m in MONTHS if m in _curr_vals or m in _prev_vals]
+
+        if _chart_months:
+            import altair as alt
+            _chart_rows = []
+            for m in _chart_months:
+                if m in _curr_vals:
+                    _chart_rows.append({"Month": m, "Year": str(_sel_year),     "Value": _curr_vals[m]})
+                if m in _prev_vals:
+                    _chart_rows.append({"Month": m, "Year": str(_sel_year - 1), "Value": _prev_vals[m]})
+
+            _chart_df = pd.DataFrame(_chart_rows)
+            _year_domain = [str(_sel_year), str(_sel_year - 1)] if _yoy else [str(_sel_year)]
+            _year_colors = ["#0969da", "#cf222e"] if _yoy else ["#0969da"]
+
+            _chart = (
+                alt.Chart(_chart_df)
+                .mark_line(point=alt.OverlayMarkDef(size=60))
+                .encode(
+                    x=alt.X("Month:O", sort=MONTHS, title="",
+                             axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("Value:Q", title="USD",
+                             axis=alt.Axis(format="$,.0f", labelFontSize=11)),
+                    color=alt.Color("Year:N",
+                        scale=alt.Scale(domain=_year_domain, range=_year_colors),
+                        legend=alt.Legend(title="Year", orient="top-right")
+                    ),
+                    tooltip=[
+                        alt.Tooltip("Month:O"),
+                        alt.Tooltip("Year:N"),
+                        alt.Tooltip("Value:Q", format="$,.0f", title=_metric_label),
+                    ]
+                )
+                .properties(height=280)
+            )
+            st.altair_chart(_chart, use_container_width=True)
+
+        # ── Monthly summary table ─────────────────────────────────────────────────
         _active = [m for m in MONTHS if _monthly[m]["net"] != 0]
         if _active:
-            _mdf = pd.DataFrame([{
-                "Month":          m,
-                "Gross $":        round(_monthly[m]["gross"]),
-                "Refunds $":      round(_monthly[m]["refunds"]),
-                "Amazon Fees $":  round(abs(_monthly[m]["fees"])),
-                "Net $":          round(_monthly[m]["net"]),
-            } for m in _active])
-
-            st.markdown("**Monthly P&L (USD)**")
-            st.dataframe(
-                _mdf, use_container_width=True, hide_index=True,
-                column_config={
-                    "Month":         st.column_config.TextColumn(width=60),
-                    "Gross $":       st.column_config.NumberColumn(format="$%d", width=100),
-                    "Refunds $":     st.column_config.NumberColumn(format="$%d", width=90),
-                    "Amazon Fees $": st.column_config.NumberColumn(format="$%d", width=110),
-                    "Net $":         st.column_config.NumberColumn(format="$%d", width=90),
-                }
-            )
-
-            st.bar_chart(_mdf.set_index("Month")["Net $"])
+            with st.expander("📋 Monthly P&L Table", expanded=False):
+                _mdf = pd.DataFrame([{
+                    "Month":         m,
+                    "Gross $":       round(_monthly[m]["gross"]),
+                    "Refunds $":     round(_monthly[m]["refunds"]),
+                    "Amazon Fees $": round(abs(_monthly[m]["fees"])),
+                    "Net $":         round(_monthly[m]["net"]),
+                } for m in _active])
+                st.dataframe(
+                    _mdf, use_container_width=True, hide_index=True,
+                    column_config={
+                        "Month":         st.column_config.TextColumn(width=60),
+                        "Gross $":       st.column_config.NumberColumn(format="$%d", width=100),
+                        "Refunds $":     st.column_config.NumberColumn(format="$%d", width=90),
+                        "Amazon Fees $": st.column_config.NumberColumn(format="$%d", width=110),
+                        "Net $":         st.column_config.NumberColumn(format="$%d", width=90),
+                    }
+                )
 
         # ── By marketplace ────────────────────────────────────────────────────────
         _mp_rows = _amz_conn.execute(f"""
