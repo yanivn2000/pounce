@@ -513,7 +513,7 @@ DEFAULT_FX = {
 }
 
 def init_amazon_tables(conn):
-    """Create amazon_transactions and monthly_fx_rates tables if needed.
+    """Create amazon_transactions, monthly_fx_rates, and sellerboard_cogs tables if needed.
     Note: fx_rates is managed by pounce's database.py (schema: marketplace/rate/note)
     so we do NOT create or seed it here.
     """
@@ -545,8 +545,98 @@ def init_amazon_tables(conn):
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (currency, year, month)
         );
+        CREATE TABLE IF NOT EXISTS sellerboard_cogs (
+            asin        TEXT PRIMARY KEY,
+            cost_usd    REAL NOT NULL,
+            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
+    _seed_sellerboard_cogs(conn)
+
+
+# ── SellerBoard COGS per ASIN (imported 2026-06-15) ───────────────────────────
+# Source: SellerBoard Products export. cost_usd = full landed COGS per unit
+# (manufacturer + inbound shipping + FBA fees as tracked by SellerBoard).
+# When an ASIN had multiple SKU rows we take the maximum (most conservative COGS).
+_SELLERBOARD_COGS_DATA: dict[str, float] = {
+    "B0CS7VGBT3": 9.10,   # Crepe Delicious gift basket
+    "B082921XST": 4.92,   # GIFFTED_075 triple gift set
+    "B07DFGY39W": 4.51,   # GIFFTED_22 Mr&Mrs mugs w/ lids
+    "B07BDQSG42": 4.38,   # GIFFTED_16 travel mug Not A Day Over
+    "B07FQN3G8L": 4.38,   # GIFFTED_038 travel mug Not A Day Over (alt SKU)
+    "B09P8TK727": 6.00,   # WPLAY_001 ABC preschool kit (FBM cost)
+    "B07BDQSB96": 3.71,   # GIFFTED_04 Mr&Mrs coffee mugs 380ml
+    "B0DP5G2XS4": 2.64,   # GIFFTED_2504 I Love You Berry Much mug set
+    "B01JZFUD5C": 2.20,   # 8H-HQY1-D65N silicone car coasters
+    "B0CSJT5N42": 1.89,   # GIFFTED_064 Let's Have Coffee mug set
+    "B0DP5GHTZ3": 1.89,   # GIFFTED_2505 Promoted to Grandparents 13oz
+    "B0DP5GFK31": 1.89,   # GIFFTED_2506 Let's Have Coffee 13oz
+    "B0DP5G5YPD": 1.89,   # GIFFTED_2507 Mr&Mrs 13oz
+    "B0GF3868KN": 1.89,   # GIFFTED_2607 Promoted to Grandparents 13oz v2
+    "B0GDWZ3W37": 1.89,   # GIFFTED_2601 Housewarming mug set
+    "B0GF3FPWLD": 1.89,   # GIFFTED_2602 Hubby&Wifey mug set
+    "B0GF3GWDJW": 1.89,   # GIFFTED_2604 Grandparents Spanish 13oz
+    "B0GF39XJ8J": 1.89,   # GIFFTED_2603 Padrino&Madrina mug set
+    "B07BDQSB99": 1.89,   # GIFFTED_11 funny couples mugs 380ml
+    "B0GF3BVRNV": 1.89,   # GIFFTED_2608 Promoted to Mommy&Daddy 13oz
+    "B0CXPXQ8YP": 1.89,   # GIFFTED_068 funny mugs + coupons
+    "B0DP5GD1ZY": 1.89,   # GIFFTED_2508 Good Morning mug set 13oz
+    "B0GF3BX3WT": 1.68,   # GIFFTED_2609 Let's Have Coffee 13oz v2
+    "B0CSJQJDMX": 1.68,   # GIFFTED_063 Mr Right Mrs Always Right
+    "B07FQJV9RS": 1.65,   # GIFFTED_030 I'm a Grandma Superpower mug
+    "B07BDQD5HR": 1.64,   # GIFFTED_15 Boss Lady mug
+    "B07WRDV3QL": 1.63,   # GIFFTED_051 Worlds Best Husband mug v4
+    "B07WQYMHY7": 1.62,   # GIFFTED_052 Bonus Sister mug
+    "B07BDNQ8QQ": 1.45,   # GIFFTED_17 Mr&Mrs 380ml
+    "B0CQYY64QV": 1.45,   # GIFFTED_060 Spanish grandparents mugs
+    "B07FQR7TF5": 1.45,   # GIFFTED_032 Mr Right Mrs Always Right 380ml
+    "B073VN9ZZ7": 1.45,   # JZ-EOS2-0003 Worlds Best Grandparents 380ml
+    "B07FQQ3NPQ": 1.45,   # GIFFTED_031 Worlds Best Grandparents 380ml
+    "B078R7FNFT": 1.45,   # JZ-EOS2-0017 Mr Right Mrs Always Right 380ml
+    "B07FQQT4ZJ": 1.45,   # GIFFTED_043 Best Cat Mom mug
+    "B0CXPYFSGQ": 1.45,   # GIFFTED_069 Pop Art Fart gag mugs
+    "B073VNXW3B": 1.44,   # JZ-EOS1-0009 Best Big Sister mug
+    "B07Q4R6NK4": 1.44,   # GIFFTED_047 You're Going to Be Babysitter
+    "B07BDNYJPX": 1.35,   # GIFFTED_09 Worlds Best Husband 13oz
+    "B07BDPZW1W": 1.34,   # GIFFTED_13 Best Sister mug + socks
+    "B0CSJRPSZM": 1.34,   # GIFFTED_062/065 Worlds Best Wife mug + socks
+    "B073VM86Z9": 1.34,   # JZ-EOS1-0001 Best Grandma mug + socks
+    "B07FQH7YW9": 1.34,   # GIFFTED_039 Best Sister Pink mug + socks
+    "B07FQPH913": 1.31,   # GIFFTED_040 Best Uncle mug + socks
+    "B07BDPLVKF": 1.18,   # GIFFTED_10 Worlds Best Wife 13oz
+    "B073VNSQRT": 1.18,   # JZ-EOS1-0013 Worlds Best Mom mug + socks
+    "B0DP5HWDGM": 1.10,   # GIFFTED_2502 Abuelito Spanish mug 13oz
+    "B0DP5LF3B9": 1.10,   # GIFFTED_2501 Abuelita Spanish mug 13oz
+    "B0DP5HQLS4": 0.98,   # GIFFTED_2503 La Mejor Abuela 13oz
+    "B07BDPTBJW": 0.98,   # GIFFTED_12 Worlds Best Boss mug
+    "B073VMV7ZQ": 0.95,   # JZ-EOS1-0015 Simply The Best Wife mug
+    "B0GDJLVTHZ": 0.94,   # GIFFTED_2606 Promoted to Grandpa mug
+    "B0GDKB651N": 0.94,   # GIFFTED_2605 Promoted to Grandma mug
+    "B073VNC7BQ": 0.94,   # JZ-EOS1-0008 Best Crazy Sister mug
+    "B089GQ41QZ": 0.78,   # GIFFTED_054 El Mejor Abuelo Spanish mug
+    "B089GQ4MXZ": 0.78,   # GIFFTED_053 La Mejor Abuela Spanish mug
+    "B073VMY39W": 0.76,   # JZ-EOS1-0002 Worlds Best Grandpa mug
+}
+
+
+def _seed_sellerboard_cogs(conn) -> None:
+    """Insert SellerBoard COGS rows — skips ASINs already present."""
+    existing = {r[0] for r in conn.execute("SELECT asin FROM sellerboard_cogs").fetchall()}
+    rows = [(asin, cost) for asin, cost in _SELLERBOARD_COGS_DATA.items()
+            if asin not in existing]
+    if rows:
+        conn.executemany(
+            "INSERT OR IGNORE INTO sellerboard_cogs (asin, cost_usd) VALUES (?, ?)",
+            rows,
+        )
+        conn.commit()
+
+
+def get_sellerboard_cost_map(conn) -> dict[str, float]:
+    """Return {ASIN_UPPER: cost_usd} from sellerboard_cogs table."""
+    return {r[0].upper(): r[1]
+            for r in conn.execute("SELECT asin, cost_usd FROM sellerboard_cogs").fetchall()}
 
 
 def insert_transactions(conn, transactions: list) -> dict:
