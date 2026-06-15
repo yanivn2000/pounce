@@ -4882,27 +4882,27 @@ with tab_amazon:
 
         def _monthly_metric(conn, year, metric, mps):
             """Return {month: usd_value} for the given metric/year/marketplaces."""
-            # COGS: orders × product_costs (USD cost basis, from orders + product_costs tables)
+            # COGS: amazon_transactions (year/month) → orders (asin+qty) → product_costs (cost)
+            # Uses at.order_id to bridge: tx year filter stays correct regardless of order_date year
             if metric == "cogs":
-                rows = conn.execute("""
+                ph = ",".join("?" * len(mps))
+                rows = conn.execute(f"""
                     SELECT
-                        CASE strftime('%m', o.order_date)
-                            WHEN '01' THEN 'Jan' WHEN '02' THEN 'Feb' WHEN '03' THEN 'Mar'
-                            WHEN '04' THEN 'Apr' WHEN '05' THEN 'May' WHEN '06' THEN 'Jun'
-                            WHEN '07' THEN 'Jul' WHEN '08' THEN 'Aug' WHEN '09' THEN 'Sep'
-                            WHEN '10' THEN 'Oct' WHEN '11' THEN 'Nov' WHEN '12' THEN 'Dec'
-                        END AS month,
+                        at.month,
                         SUM(o.quantity * (
                             COALESCE(pc.product_cost,  0) +
                             COALESCE(pc.shipping_cost, 0) +
                             COALESCE(pc.fba_fee,       0)
                         )) AS cogs_usd
-                    FROM orders o
+                    FROM amazon_transactions at
+                    JOIN orders o ON o.order_id = at.order_id
                     LEFT JOIN product_costs pc ON pc.asin = o.asin
-                    WHERE strftime('%Y', o.order_date) = ?
+                    WHERE at.year = ?
+                      AND at.tx_type = 'Order'
+                      AND at.marketplace IN ({ph})
                       AND o.order_status NOT IN ('Cancelled', 'Pending')
-                    GROUP BY month
-                """, (str(year),)).fetchall()
+                    GROUP BY at.month
+                """, [year] + mps).fetchall()
                 return {r[0]: float(r[1] or 0) for r in rows if r[0] in MONTHS}
 
             ph = ",".join("?" * len(mps))
