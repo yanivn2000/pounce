@@ -4081,8 +4081,8 @@ with tab_ads:
                     with st.expander("🗑️ Delete a logged bid change", expanded=False):
                         _bc_only["_label"] = (
                             _bc_only["change_date"].astype(str) + "  ·  " +
-                            _bc_only["campaign_name"].str[:50] + "  ·  " +
-                            _bc_only["placement_type"] + "  ·  " +
+                            _bc_only["campaign"].str[:50] + "  ·  " +
+                            _bc_only["placement"] + "  ·  " +
                             _bc_only["bid_before"].apply(_fmt_bid) + " → " +
                             _bc_only["bid_after"].apply(_fmt_bid)
                         )
@@ -4095,8 +4095,8 @@ with tab_ads:
                         _del_row = _bc_only.loc[_del_choice]
                         if st.button("🗑️ Delete", key="del_bc_confirm", type="secondary"):
                             _n_del = delete_bid_change(
-                                campaign_name=_del_row["campaign_name"],
-                                placement_type=_del_row["placement_type"],
+                                campaign_name=_del_row["campaign"],
+                                placement_type=_del_row["placement"],
                                 marketplace=_del_row["marketplace"],
                                 report_date=_del_row["change_date"],
                             )
