@@ -3894,19 +3894,17 @@ with tab_ads:
                                 )
 
         with _history_view:
-            # ── BID HISTORY content ───────────────────────────────────────────
-            st.markdown("# 📜 Bid Change History")
+            # ── HISTORY content ───────────────────────────────────────────────
+            st.markdown("## 📊 Change Log & Impact")
             st.markdown(
-                f"<p style='color:{T['text_secondary']};font-size:0.95rem;'>"
-                "Amazon's placement reports don't include bid adjustment settings, so changes "
-                "must be logged manually. Use the form below to record bid changes you applied "
-                "in Amazon's Advertising Console — the Impact Report will compare ROAS before "
-                "and after each change.</p>",
+                f"<p style='color:{T['text_secondary']};font-size:0.9rem;margin:0 0 12px;'>"
+                "Every documented bid change and campaign note — with ROAS, spend, and orders "
+                "<b>before</b> (Period 1) and <b>after</b> (Period 2) to measure real impact.</p>",
                 unsafe_allow_html=True,
             )
 
             # ── Manual Bid Change Logger ───────────────────────────────────────
-            with st.expander("➕ Log a Bid Change", expanded=False):
+            with st.expander("➕ Log a Retroactive Bid Change", expanded=False):
                 _log_camps = get_campaigns_with_snapshots()
                 _log_markets_all = []
                 try:
@@ -3999,93 +3997,12 @@ with tab_ads:
 
             st.divider()
 
-            # ── Unified Changes table ──────────────────────────────────────────
+            # ── Marketplace filter ─────────────────────────────────────────────
             _uc_all = get_unified_changes()
             _bc_mp  = "All"
             if not _uc_all.empty:
                 _uc_markets = ["All"] + sorted(_uc_all["marketplace"].dropna().unique().tolist())
                 _bc_mp = st.selectbox("Marketplace", _uc_markets, key="history_marketplace_filter")
-
-            _uc_df = get_unified_changes(None if _bc_mp == "All" else _bc_mp)
-
-            if _uc_df.empty:
-                st.info("No changes yet. Add a note or log a bid change in the Workbench.")
-            else:
-                # Format Was% / Now%
-                def _fmt_bid(v):
-                    try:
-                        return f"{int(round(float(v)))}%"
-                    except (TypeError, ValueError):
-                        return "N/A"
-
-                _uc_display = _uc_df.copy()
-                _uc_display["Was %"] = _uc_display["bid_before"].apply(_fmt_bid)
-                _uc_display["Now %"] = _uc_display["bid_after"].apply(_fmt_bid)
-                _uc_display = _uc_display.rename(columns={
-                    "change_date":    "Date",
-                    "campaign_name":  "Campaign",
-                    "placement_type": "Placement",
-                    "marketplace":    "Marketplace",
-                    "notes":          "📝 Note",
-                })
-                _uc_cols = ["Date", "Campaign", "Placement", "Marketplace", "📝 Note", "Was %", "Now %"]
-
-                st.dataframe(
-                    _uc_display[[c for c in _uc_cols if c in _uc_display.columns]],
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Date":        st.column_config.TextColumn("Date",        width=100),
-                        "Campaign":    st.column_config.TextColumn("Campaign",    width=240),
-                        "Placement":   st.column_config.TextColumn("Placement",   width=120),
-                        "Marketplace": st.column_config.TextColumn("Marketplace", width=100),
-                        "📝 Note":     st.column_config.TextColumn("📝 Note",     width=280),
-                        "Was %":       st.column_config.TextColumn("Was %",       width=70),
-                        "Now %":       st.column_config.TextColumn("Now %",       width=70),
-                    },
-                )
-                st.caption(f"{len(_uc_display):,} changes")
-
-                # ── Delete bid-change entry ────────────────────────────────────
-                _bc_only = _uc_df[_uc_df["bid_before"].notna()].copy()
-                if not _bc_only.empty:
-                    with st.expander("🗑️ Delete a bid-change entry", expanded=False):
-                        _bc_only["_label"] = (
-                            _bc_only["change_date"] + "  ·  " +
-                            _bc_only["campaign_name"].str[:50] + "  ·  " +
-                            _bc_only["placement_type"] + "  ·  " +
-                            _bc_only["bid_before"].apply(_fmt_bid) + " → " +
-                            _bc_only["bid_after"].apply(_fmt_bid)
-                        )
-                        _del_choice = st.selectbox(
-                            "Select entry to delete",
-                            options=_bc_only.index.tolist(),
-                            format_func=lambda i: _bc_only.loc[i, "_label"],
-                            key="del_bc_choice",
-                        )
-                        _del_row = _bc_only.loc[_del_choice]
-                        if st.button("🗑️ Delete", key="del_bc_confirm", type="secondary"):
-                            _n_del = delete_bid_change(
-                                campaign_name=_del_row["campaign_name"],
-                                placement_type=_del_row["placement_type"],
-                                marketplace=_del_row["marketplace"],
-                                report_date=_del_row["change_date"],
-                            )
-                            if _n_del:
-                                st.success("✅ Deleted.")
-                                st.rerun()
-                            else:
-                                st.error("Not found — may already be deleted.")
-
-            # ── Impact Report ──────────────────────────────────────────────────
-            st.divider()
-            st.markdown("## 📊 Impact Report — Period 1 vs Period 2")
-            st.markdown(
-                f"<p style='color:{T['text_secondary']};font-size:0.88rem;margin:0 0 12px;'>"
-                "Every bid change recorded, with ROAS/spend/purchases <b>before</b> the change "
-                "(Period 1) and in the <b>first report uploaded after</b> the change (Period 2).</p>",
-                unsafe_allow_html=True,
-            )
 
             _imp_df = get_all_bid_effectiveness(None if _bc_mp == "All" else _bc_mp)
             if _imp_df.empty:
@@ -4152,6 +4069,42 @@ with tab_ads:
                     mime="text/csv",
                     key="impact_dl",
                 )
+
+                # ── Delete a logged bid-change entry ──────────────────────────
+                _bc_only = _imp_df[_imp_df["bid_before"].notna()].copy()
+                if not _bc_only.empty:
+                    def _fmt_bid(v):
+                        try:
+                            return f"{int(round(float(v)))}%"
+                        except (TypeError, ValueError):
+                            return "N/A"
+                    with st.expander("🗑️ Delete a logged bid change", expanded=False):
+                        _bc_only["_label"] = (
+                            _bc_only["change_date"].astype(str) + "  ·  " +
+                            _bc_only["campaign_name"].str[:50] + "  ·  " +
+                            _bc_only["placement_type"] + "  ·  " +
+                            _bc_only["bid_before"].apply(_fmt_bid) + " → " +
+                            _bc_only["bid_after"].apply(_fmt_bid)
+                        )
+                        _del_choice = st.selectbox(
+                            "Select entry to delete",
+                            options=_bc_only.index.tolist(),
+                            format_func=lambda i: _bc_only.loc[i, "_label"],
+                            key="del_bc_choice",
+                        )
+                        _del_row = _bc_only.loc[_del_choice]
+                        if st.button("🗑️ Delete", key="del_bc_confirm", type="secondary"):
+                            _n_del = delete_bid_change(
+                                campaign_name=_del_row["campaign_name"],
+                                placement_type=_del_row["placement_type"],
+                                marketplace=_del_row["marketplace"],
+                                report_date=_del_row["change_date"],
+                            )
+                            if _n_del:
+                                st.success("✅ Deleted.")
+                                st.rerun()
+                            else:
+                                st.error("Not found — may already be deleted.")
 
         with _alerts_view:
             # ── ALERTS content ────────────────────────────────────────────────
