@@ -4744,7 +4744,230 @@ with tab_ads:
 # TAB 5 — AMAZON TRANSACTIONS
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_amazon:
-    st.info("🛒 Amazon Transactions tab — כאן יבוא התוכן")
+    from db.amazon_module import render_amazon_upload_ui, init_amazon_tables, MONTHS
+    from db.database import get_conn as _amz_get_conn
+
+    _amz_conn = _amz_get_conn()
+    init_amazon_tables(_amz_conn)   # no-op if tables exist
+
+    st.markdown("## 💰 Amazon P&L")
+
+    # ── FX: pounce.db schema = marketplace/rate  where rate = local-per-USD ──────
+    # e.g. amazon.ca=1.36 means 1 USD = 1.36 CAD  →  to_usd = amount / rate
+    _fx_mp = {r[0]: r[1] for r in _amz_conn.execute(
+        "SELECT marketplace, rate FROM fx_rates"
+    ).fetchall()}
+    _CURRENCY_TO_MP = {
+        "USD": "amazon.com",    "CAD": "amazon.ca",
+        "GBP": "amazon.co.uk", "EUR": "amazon.de",
+        "AUD": "amazon.com.au","PLN": None, "SEK": None,
+    }
+    _FALLBACK_FX = {"PLN": 0.25, "SEK": 0.096}   # rough defaults
+
+    def _to_usd(amount, currency):
+        mp   = _CURRENCY_TO_MP.get(currency)
+        rate = _fx_mp.get(mp) if mp else None
+        if rate:
+            return amount / rate
+        return amount * _FALLBACK_FX.get(currency, 1.0)
+
+    # ── Upload section ────────────────────────────────────────────────────────────
+    with st.expander("📤 Upload Transaction View", expanded=False):
+        render_amazon_upload_ui(_amz_conn)
+
+    st.divider()
+
+    # ── Check data ────────────────────────────────────────────────────────────────
+    _tx_count = _amz_conn.execute("SELECT COUNT(*) FROM amazon_transactions").fetchone()[0]
+    if _tx_count == 0:
+        st.info("No transactions yet — upload Transaction View files above.")
+    else:
+        # ── Filters ───────────────────────────────────────────────────────────────
+        _amz_years = [r[0] for r in _amz_conn.execute(
+            "SELECT DISTINCT year FROM amazon_transactions ORDER BY year DESC"
+        ).fetchall()]
+        _amz_all_mps = [r[0] for r in _amz_conn.execute(
+            "SELECT DISTINCT marketplace FROM amazon_transactions ORDER BY marketplace"
+        ).fetchall()]
+
+        _fa1, _fa2 = st.columns([1, 3])
+        with _fa1:
+            _sel_year = st.selectbox("Year", _amz_years, key="amz_year")
+        with _fa2:
+            _sel_mps = st.multiselect(
+                "Marketplaces", _amz_all_mps, default=_amz_all_mps, key="amz_mps",
+                placeholder="All marketplaces"
+            )
+        if not _sel_mps:
+            _sel_mps = _amz_all_mps
+
+        _mp_ph = ",".join("?" * len(_sel_mps))
+        _amz_params = [_sel_year] + _sel_mps
+
+        # ── Aggregate by type/month/currency ──────────────────────────────────────
+        _rows = _amz_conn.execute(f"""
+            SELECT tx_type, month, currency,
+                   SUM(gross_sales)   AS gross,
+                   SUM(promo_rebates) AS promos,
+                   SUM(amazon_fees)   AS fees,
+                   SUM(withheld_tax)  AS withheld,
+                   SUM(net_total)     AS net,
+                   COUNT(*)           AS cnt
+            FROM amazon_transactions
+            WHERE year=?
+              AND tx_type NOT IN ('Transfer','Debt')
+              AND marketplace IN ({_mp_ph})
+            GROUP BY tx_type, month, currency
+        """, _amz_params).fetchall()
+
+        # Totals + monthly buckets
+        _gross_tot = _promos_tot = _fees_tot = _net_tot = _ref_tot = 0.0
+        _monthly = {m: {"gross": 0.0, "fees": 0.0, "refunds": 0.0, "net": 0.0}
+                    for m in MONTHS}
+
+        for r in _rows:
+            m, cur = r["month"], r["currency"]
+            if m not in MONTHS:
+                continue
+            g   = _to_usd(r["gross"]   or 0, cur)
+            f   = _to_usd(r["fees"]    or 0, cur)
+            n   = _to_usd(r["net"]     or 0, cur)
+            pr  = _to_usd(r["promos"]  or 0, cur)
+            _net_tot   += n
+            _fees_tot  += f
+            _promos_tot += pr
+            _monthly[m]["net"]  += n
+            _monthly[m]["fees"] += f
+            if r["tx_type"] == "Order":
+                _gross_tot         += g
+                _monthly[m]["gross"] += g
+            if r["tx_type"] == "Refund":
+                _ref_tot              += n
+                _monthly[m]["refunds"] += abs(n)
+
+        # ── KPI row ───────────────────────────────────────────────────────────────
+        _k1, _k2, _k3, _k4, _k5 = st.columns(5)
+        _k1.metric("💵 Gross Sales",  f"${_gross_tot:,.0f}")
+        _k2.metric("🔁 Refunds",      f"${abs(_ref_tot):,.0f}")
+        _k3.metric("💸 Amazon Fees",  f"${abs(_fees_tot):,.0f}")
+        _k4.metric("🏷️ Promos",       f"${abs(_promos_tot):,.0f}")
+        _k5.metric("✅ Net Received",  f"${_net_tot:,.0f}")
+
+        st.markdown("<div style='margin:4px 0'></div>", unsafe_allow_html=True)
+
+        # ── Monthly table ─────────────────────────────────────────────────────────
+        _active = [m for m in MONTHS if _monthly[m]["net"] != 0]
+        if _active:
+            _mdf = pd.DataFrame([{
+                "Month":          m,
+                "Gross $":        round(_monthly[m]["gross"]),
+                "Refunds $":      round(_monthly[m]["refunds"]),
+                "Amazon Fees $":  round(abs(_monthly[m]["fees"])),
+                "Net $":          round(_monthly[m]["net"]),
+            } for m in _active])
+
+            st.markdown("**Monthly P&L (USD)**")
+            st.dataframe(
+                _mdf, use_container_width=True, hide_index=True,
+                column_config={
+                    "Month":         st.column_config.TextColumn(width=60),
+                    "Gross $":       st.column_config.NumberColumn(format="$%d", width=100),
+                    "Refunds $":     st.column_config.NumberColumn(format="$%d", width=90),
+                    "Amazon Fees $": st.column_config.NumberColumn(format="$%d", width=110),
+                    "Net $":         st.column_config.NumberColumn(format="$%d", width=90),
+                }
+            )
+
+            st.bar_chart(_mdf.set_index("Month")["Net $"])
+
+        # ── By marketplace ────────────────────────────────────────────────────────
+        _mp_rows = _amz_conn.execute(f"""
+            SELECT marketplace, currency,
+                   SUM(CASE WHEN tx_type='Order' THEN gross_sales ELSE 0 END) AS gross,
+                   SUM(CASE WHEN tx_type='Refund' THEN net_total  ELSE 0 END) AS refunds,
+                   SUM(amazon_fees)  AS fees,
+                   SUM(net_total)    AS net,
+                   COUNT(*)          AS cnt
+            FROM amazon_transactions
+            WHERE year=?
+              AND tx_type NOT IN ('Transfer','Debt')
+              AND marketplace IN ({_mp_ph})
+            GROUP BY marketplace, currency
+            ORDER BY ABS(SUM(net_total)) DESC
+        """, _amz_params).fetchall()
+
+        if _mp_rows:
+            st.markdown("**By Marketplace (USD)**")
+            _mp_data = []
+            for r in _mp_rows:
+                cur = r["currency"]
+                _mp_data.append({
+                    "Marketplace":  r["marketplace"],
+                    "Cur":          cur,
+                    "Gross $":      round(_to_usd(r["gross"]   or 0, cur)),
+                    "Refunds $":    round(abs(_to_usd(r["refunds"] or 0, cur))),
+                    "Fees $":       round(abs(_to_usd(r["fees"]    or 0, cur))),
+                    "Net $":        round(_to_usd(r["net"]     or 0, cur)),
+                    "Txns":         r["cnt"],
+                })
+            st.dataframe(
+                pd.DataFrame(_mp_data), use_container_width=True, hide_index=True,
+                column_config={
+                    "Marketplace": st.column_config.TextColumn(width=80),
+                    "Cur":         st.column_config.TextColumn(width=50),
+                    "Gross $":     st.column_config.NumberColumn(format="$%d", width=90),
+                    "Refunds $":   st.column_config.NumberColumn(format="$%d", width=90),
+                    "Fees $":      st.column_config.NumberColumn(format="$%d", width=90),
+                    "Net $":       st.column_config.NumberColumn(format="$%d", width=90),
+                    "Txns":        st.column_config.NumberColumn(format="%d",  width=70),
+                }
+            )
+
+        # ── Transaction detail search ─────────────────────────────────────────────
+        with st.expander("🔍 Transaction Search", expanded=False):
+            _sq1, _sq2, _sq3 = st.columns(3)
+            with _sq1:
+                _s_type = st.selectbox("Type", ["All","Order","Refund","Amazon Fees",
+                                                 "Service Fee","Adjustment","FBA Inventory Fee"],
+                                       key="amz_s_type")
+            with _sq2:
+                _s_month = st.selectbox("Month", ["All"] + MONTHS, key="amz_s_month")
+            with _sq3:
+                _s_mp = st.selectbox("Marketplace", ["All"] + _sel_mps, key="amz_s_mp")
+
+            _s_clauses = ["year=?"]
+            _s_params  = [_sel_year]
+            if _s_type  != "All": _s_clauses.append("tx_type=?");      _s_params.append(_s_type)
+            if _s_month != "All": _s_clauses.append("month=?");        _s_params.append(_s_month)
+            if _s_mp    != "All": _s_clauses.append("marketplace=?");  _s_params.append(_s_mp)
+
+            _s_df = pd.read_sql_query(f"""
+                SELECT tx_date AS Date, tx_type AS Type, marketplace AS Mkt,
+                       currency AS Cur, product_details AS Description,
+                       gross_sales AS Gross, promo_rebates AS Promos,
+                       amazon_fees AS Fees, net_total AS Net
+                FROM amazon_transactions
+                WHERE {' AND '.join(_s_clauses)}
+                ORDER BY tx_date DESC LIMIT 500
+            """, _amz_conn, params=_s_params)
+
+            st.caption(f"{len(_s_df):,} transactions (max 500)")
+            st.dataframe(
+                _s_df, use_container_width=True, hide_index=True,
+                column_config={
+                    "Date":        st.column_config.TextColumn(width=90),
+                    "Type":        st.column_config.TextColumn(width=120),
+                    "Mkt":         st.column_config.TextColumn(width=55),
+                    "Cur":         st.column_config.TextColumn(width=45),
+                    "Description": st.column_config.TextColumn(width=260),
+                    "Gross":       st.column_config.NumberColumn(format="%.2f", width=80),
+                    "Promos":      st.column_config.NumberColumn(format="%.2f", width=75),
+                    "Fees":        st.column_config.NumberColumn(format="%.2f", width=75),
+                    "Net":         st.column_config.NumberColumn(format="%.2f", width=75),
+                }
+            )
+
+    _amz_conn.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
