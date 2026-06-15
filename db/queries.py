@@ -320,6 +320,30 @@ def get_recommendations_history(marketplace: str = None) -> pd.DataFrame:
     return df
 
 
+def get_noted_recommendations(marketplace: str = None) -> pd.DataFrame:
+    """
+    Return all recommendation rows that have a non-empty note,
+    newest first.  Used in History tab as a lightweight change-log
+    (notes = documentation that a change was made, without needing
+    a separate bid_changes entry).
+    """
+    conn = get_conn()
+    mp_filter = "AND marketplace = ?" if marketplace else ""
+    params = [marketplace] if marketplace else []
+    df = pd.read_sql_query(f"""
+        SELECT
+            date_given, campaign_name, placement_type, marketplace,
+            recommended_action, recommended_multiplier, current_multiplier,
+            reasoning, notes
+        FROM recommendations
+        WHERE notes IS NOT NULL AND TRIM(notes) != ''
+          {mp_filter}
+        ORDER BY date_given DESC, campaign_name
+    """, conn, params=params)
+    conn.close()
+    return df
+
+
 def get_change_log(asin: str = None, marketplace: str = None, days: int = 90) -> pd.DataFrame:
     conn = get_conn()
     clauses = [f"log_date >= date('now', '-{days} days')"]

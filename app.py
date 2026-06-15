@@ -46,7 +46,7 @@ from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
     get_change_log, get_marketplaces, get_order_date_range, count_orders,
     get_units_matrix, get_weekly_units_matrix, get_weekly_units_matrix_yoy,
-    search_orders_by_address,
+    search_orders_by_address, get_noted_recommendations,
 )
 from db.bundles import (
     import_bundle_csv, count_bundle_rows, get_bundle_date_range,
@@ -4085,6 +4085,54 @@ with tab_ads:
                             st.rerun()
                         else:
                             st.error("Entry not found — may have already been deleted.")
+
+            # ── Noted Changes ──────────────────────────────────────────────────
+            st.divider()
+            st.markdown("## 📝 Changes with Notes")
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.88rem;margin:0 0 12px;'>"
+                "All campaigns where you added a note — a lightweight log of decisions "
+                "made without needing a separate bid entry.</p>",
+                unsafe_allow_html=True,
+            )
+            _noted_df = get_noted_recommendations(None if _bc_mp == "All" else _bc_mp)
+            if _noted_df.empty:
+                st.info("No notes yet. Add a note in the Workbench to document a decision.")
+            else:
+                def _fmt_rec(row):
+                    action = str(row.get("recommended_action") or "").strip().lower()
+                    mult   = row.get("recommended_multiplier")
+                    try:   pct = int(round(float(mult)))
+                    except: pct = None
+                    if action == "increase" and pct is not None:   return f"+{pct}%"
+                    if action in ("decrease", "reduce to 0%") and pct is not None: return f"{pct}%"
+                    return action or "—"
+
+                _noted_display = _noted_df.copy()
+                _noted_display["rec"] = _noted_df.apply(_fmt_rec, axis=1)
+                _noted_display = _noted_display.rename(columns={
+                    "date_given":     "Date",
+                    "campaign_name":  "Campaign",
+                    "placement_type": "Placement",
+                    "marketplace":    "Marketplace",
+                    "rec":            "Recommendation",
+                    "notes":          "📝 Note",
+                })
+                _nd_cols = ["Date", "Campaign", "Placement", "Marketplace", "Recommendation", "📝 Note"]
+                st.dataframe(
+                    _noted_display[[c for c in _nd_cols if c in _noted_display.columns]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Date":           st.column_config.TextColumn("Date",           width=100),
+                        "Campaign":       st.column_config.TextColumn("Campaign",       width=240),
+                        "Placement":      st.column_config.TextColumn("Placement",      width=120),
+                        "Marketplace":    st.column_config.TextColumn("Marketplace",    width=100),
+                        "Recommendation": st.column_config.TextColumn("Rec.",           width=80),
+                        "📝 Note":        st.column_config.TextColumn("📝 Note",        width=320),
+                    },
+                )
+                st.caption(f"{len(_noted_display):,} noted decisions")
 
             # ── Impact Report ──────────────────────────────────────────────────
             st.divider()
