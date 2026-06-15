@@ -513,7 +513,10 @@ DEFAULT_FX = {
 }
 
 def init_amazon_tables(conn):
-    """Create amazon_transactions, fx_rates, monthly_fx_rates tables if needed."""
+    """Create amazon_transactions and monthly_fx_rates tables if needed.
+    Note: fx_rates is managed by pounce's database.py (schema: marketplace/rate/note)
+    so we do NOT create or seed it here.
+    """
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS amazon_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -534,11 +537,6 @@ def init_amazon_tables(conn):
             marketplace TEXT DEFAULT 'US',
             currency TEXT DEFAULT 'USD'
         );
-        CREATE TABLE IF NOT EXISTS fx_rates (
-            currency TEXT PRIMARY KEY,
-            rate_to_usd REAL NOT NULL,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
         CREATE TABLE IF NOT EXISTS monthly_fx_rates (
             currency TEXT NOT NULL,
             year INTEGER NOT NULL,
@@ -548,8 +546,6 @@ def init_amazon_tables(conn):
             PRIMARY KEY (currency, year, month)
         );
     """)
-    for cur, rate in DEFAULT_FX.items():
-        conn.execute("INSERT OR IGNORE INTO fx_rates (currency, rate_to_usd) VALUES (?,?)", (cur, rate))
     conn.commit()
 
 
