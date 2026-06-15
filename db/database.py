@@ -271,6 +271,9 @@ def init_db():
     _migrate_returns(conn)
     _migrate_orders_address_fields(conn)
     _migrate_bundle_sales(conn)
+    # Amazon transactions module
+    from db.amazon_module import init_amazon_tables
+    init_amazon_tables(conn)
     conn.close()
 
 

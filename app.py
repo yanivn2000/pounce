@@ -22,6 +22,7 @@ from products import (
     delete_product_db, migrate_csv_to_db, DB_COLUMNS,
 )
 from db.database import init_db, get_conn, flag_force_logout, check_and_clear_force_logout, list_force_logout_users
+from db.amazon_module import init_amazon_tables, parse_amazon_transactions, insert_transactions, get_amazon_report
 from db.performance import save_performance_snapshot, get_performance_alerts, get_bad_roas_campaigns, reset_snapshots, get_snapshot_count, get_snapshot_summary
 from db.bid_changes import (
     record_bid_changes, record_placement_snapshots,
@@ -387,12 +388,12 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_admin = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "⚙️ Admin"
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_admin = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "🛒 Amazon Transactions", "⚙️ Admin"
     ])
 else:
-    tab_ads, tab_sales, tab_inv, tab_profit = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products"
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "🛒 Amazon Transactions"
     ])
     tab_admin = None
 
@@ -4740,7 +4741,14 @@ with tab_ads:
                     )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — ADMIN  (admin role only)
+# TAB 5 — AMAZON TRANSACTIONS
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_amazon:
+    st.info("🛒 Amazon Transactions tab — כאן יבוא התוכן")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — ADMIN  (admin role only)
 # ══════════════════════════════════════════════════════════════════════════════
 if tab_admin is not None:
     with tab_admin:
