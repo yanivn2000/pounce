@@ -3840,6 +3840,7 @@ with tab_ads:
             })
             # Simpler: load once to get marketplaces
             _bc_df_all = _get_all_bc()
+            _bc_mp = "All"   # default; overwritten below when data exists
             if _bc_df_all.empty:
                 st.info("No bid change history yet. Upload reports to start tracking.")
             else:
