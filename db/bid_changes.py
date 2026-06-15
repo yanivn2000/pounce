@@ -496,23 +496,56 @@ def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
     """, params).fetchall()
 
     for n in noted:
+        ch_date = n["change_date"]
+        camp    = n["campaign_name"]
+        pl      = n["placement_type"]
+        mkt     = n["marketplace"]
+
+        # P1 = most recent snapshot ON OR BEFORE the note date
+        p1 = conn.execute("""
+            SELECT report_date, roas, spend, purchases
+            FROM placement_snapshots
+            WHERE campaign_name=? AND placement_type=? AND marketplace=?
+              AND report_date <= ?
+            ORDER BY report_date DESC LIMIT 1
+        """, (camp, pl, mkt, ch_date)).fetchone()
+
+        # P2 = first snapshot AFTER the note date
+        p2 = conn.execute("""
+            SELECT report_date, roas, spend, purchases
+            FROM placement_snapshots
+            WHERE campaign_name=? AND placement_type=? AND marketplace=?
+              AND report_date > ?
+            ORDER BY report_date ASC LIMIT 1
+        """, (camp, pl, mkt, ch_date)).fetchone()
+
+        roas_p1 = round(float(p1["roas"] or 0), 2) if p1 else None
+        roas_p2 = round(float(p2["roas"] or 0), 2) if p2 else None
+
+        if roas_p1 is not None and roas_p2 is not None:
+            delta_roas = round(roas_p2 - roas_p1, 2)
+            result     = "✅" if delta_roas > 0.05 else ("❌" if delta_roas < -0.05 else "➡️")
+        else:
+            delta_roas = None
+            result     = "📝"  # no snapshots available yet
+
         rows.append({
-            "change_date":   n["change_date"],
-            "campaign":      n["campaign_name"],
-            "placement":     n["placement_type"],
-            "marketplace":   n["marketplace"],
+            "change_date":   ch_date,
+            "campaign":      camp,
+            "placement":     pl,
+            "marketplace":   mkt,
             "notes":         n["notes"],
             "bid_before":    None,
             "bid_after":     None,
-            "roas_p1":       None,
-            "spend_p1":      None,
-            "purchases_p1":  None,
-            "roas_p2":       None,
-            "spend_p2":      None,
-            "purchases_p2":  None,
-            "p2_date":       None,
-            "delta_roas":    None,
-            "result":        "📝",
+            "roas_p1":       roas_p1,
+            "spend_p1":      round(float(p1["spend"] or 0), 2) if p1 else None,
+            "purchases_p1":  int(p1["purchases"] or 0) if p1 else None,
+            "roas_p2":       roas_p2,
+            "spend_p2":      round(float(p2["spend"] or 0), 2) if p2 else None,
+            "purchases_p2":  int(p2["purchases"] or 0) if p2 else None,
+            "p2_date":       p2["report_date"] if p2 else None,
+            "delta_roas":    delta_roas,
+            "result":        result,
         })
 
     conn.close()
