@@ -478,6 +478,76 @@ def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def get_unified_changes(marketplace: str = None) -> pd.DataFrame:
+    """
+    Single table combining bid_changes and noted recommendations.
+
+    Rules:
+    - Every bid_changes row appears (Was%/Now% filled).
+      Its note comes from bid_changes.notes, falling back to the
+      current recommendation note for that campaign/placement.
+    - Recommendations with a note that have NO bid_change row
+      appear once with Was%/Now% as None (shown as N/A).
+
+    Columns: change_date, campaign_name, placement_type, marketplace,
+             notes, bid_before, bid_after
+    Sorted newest first.
+    """
+    conn = get_conn()
+    mp_filter = "WHERE bc.marketplace = ?" if marketplace else ""
+    params_bc  = [marketplace] if marketplace else []
+    mp_filter_r = "AND r2.marketplace = ?" if marketplace else ""
+    params_r   = [marketplace] if marketplace else []
+
+    # Part 1: bid_changes rows (always shown), note from bid_change or recommendation
+    df_bc = pd.read_sql_query(f"""
+        SELECT
+            bc.report_date   AS change_date,
+            bc.campaign_name,
+            bc.placement_type,
+            bc.marketplace,
+            COALESCE(bc.notes, r.notes) AS notes,
+            bc.bid_before,
+            bc.bid_after
+        FROM bid_changes bc
+        LEFT JOIN recommendations r
+            ON r.campaign_name  = bc.campaign_name
+           AND r.placement_type = bc.placement_type
+           AND r.marketplace    = bc.marketplace
+        {mp_filter}
+        ORDER BY bc.report_date DESC
+    """, conn, params=params_bc)
+
+    # Part 2: recommendations with note, no bid_change row exists
+    df_noted = pd.read_sql_query(f"""
+        SELECT
+            r2.date_given    AS change_date,
+            r2.campaign_name,
+            r2.placement_type,
+            r2.marketplace,
+            r2.notes,
+            NULL             AS bid_before,
+            NULL             AS bid_after
+        FROM recommendations r2
+        WHERE r2.notes IS NOT NULL AND TRIM(r2.notes) != ''
+          {mp_filter_r}
+          AND NOT EXISTS (
+              SELECT 1 FROM bid_changes bc2
+              WHERE bc2.campaign_name  = r2.campaign_name
+                AND bc2.placement_type = r2.placement_type
+                AND bc2.marketplace    = r2.marketplace
+          )
+    """, conn, params=params_r)
+
+    conn.close()
+
+    df = pd.concat([df_bc, df_noted], ignore_index=True)
+    if df.empty:
+        return df
+    df = df.sort_values("change_date", ascending=False).reset_index(drop=True)
+    return df
+
+
 def get_untreated_losing(marketplace: str = None) -> set:
     """
     Returns a set of (campaign_name, placement_type, marketplace) tuples

@@ -28,6 +28,7 @@ from db.bid_changes import (
     get_bid_history, get_bid_effectiveness, get_last_effectiveness_bulk,
     get_all_bid_changes, get_untreated_losing, save_recommendation_note, save_campaign_note,
     log_manual_bid_change, get_campaigns_with_snapshots, delete_bid_change,
+    get_unified_changes,
     get_all_bid_effectiveness,
 )
 from db.settings import get_alert_thresholds, save_setting
@@ -3688,13 +3689,18 @@ with tab_ads:
                             key=f"note_{_sel_id}",
                             height=68,
                         )
+                        _apply_all = st.checkbox(
+                            "Note → all placements of this campaign",
+                            value=True,
+                            key=f"note_all_{_sel_id}",
+                        )
 
                     with _panel_right:
-                        st.markdown(
-                            f"**✅ Applied in Amazon?** "
-                            f"<span style='font-size:0.8rem;font-weight:normal;"
-                            f"color:{T['text_secondary']};'>rec: {_fmt_change(_sel_data)}</span>",
-                            unsafe_allow_html=True,
+                        _did_apply = st.checkbox(
+                            f"✅ Applied in Amazon?  "
+                            f"*(rec: {_fmt_change(_sel_data)})*",
+                            value=False,
+                            key=f"did_apply_{_sel_id}",
                         )
                         _ab1, _ab2 = st.columns(2)
                         with _ab1:
@@ -3702,42 +3708,35 @@ with tab_ads:
                                 "Was %", min_value=0, max_value=900,
                                 value=_rec_before, step=10,
                                 key=f"applied_before_{_sel_id}",
+                                disabled=not _did_apply,
                             )
                         with _ab2:
                             _applied_after = st.number_input(
                                 "Now %", min_value=0, max_value=900,
                                 value=_rec_after, step=10,
                                 key=f"applied_after_{_sel_id}",
+                                disabled=not _did_apply,
                             )
 
-                    # ── Single action row ──────────────────────────────────────
-                    _ba1, _ba2, _ba3 = st.columns([2, 2, 3])
-                    with _ba1:
-                        _apply_all = st.checkbox(
-                            "Note → all placements",
-                            value=True,
-                            key=f"note_all_{_sel_id}",
-                            help="Save note to all placements of this campaign",
-                        )
-                    with _ba2:
-                        if st.button("💾 Save Note only", key=f"save_note_{_sel_id}", use_container_width=True):
+                    # ── Single Save button ─────────────────────────────────────
+                    if st.button("💾 Save", key=f"save_btn_{_sel_id}",
+                                 type="primary", use_container_width=True):
+                        _note_saved = False
+                        _bid_saved  = False
+                        _msg_parts  = []
+
+                        # Save note if not empty
+                        if _note_val.strip():
                             if _apply_all:
                                 _n = save_campaign_note(_sel_camp, _sel_mkt, _note_val)
-                                st.success(f"✅ Note saved to {_n} placements.")
+                                _msg_parts.append(f"note saved to {_n} placements")
                             else:
                                 save_recommendation_note(_sel_id, _note_val)
-                                st.success("✅ Note saved.")
-                            st.rerun()
-                    with _ba3:
-                        if st.button("✅ Applied — Log + Save Note", key=f"applied_btn_{_sel_id}",
-                                     type="primary", use_container_width=True):
-                            # 1. Save note to recommendation
-                            if _note_val.strip():
-                                if _apply_all:
-                                    save_campaign_note(_sel_camp, _sel_mkt, _note_val)
-                                else:
-                                    save_recommendation_note(_sel_id, _note_val)
-                            # 2. Log bid change (with note attached)
+                                _msg_parts.append("note saved")
+                            _note_saved = True
+
+                        # Log bid change only if checkbox ticked
+                        if _did_apply:
                             _applied_status = log_manual_bid_change(
                                 campaign_name=_sel_camp,
                                 placement_type=_sel_place,
@@ -3745,16 +3744,21 @@ with tab_ads:
                                 change_date=str(date.today()),
                                 bid_before=int(_applied_before),
                                 bid_after=int(_applied_after),
-                                notes=_note_val if _note_val.strip() else None,
+                                notes=_note_val.strip() or None,
                             )
                             if _applied_status == "saved":
-                                st.success(f"✅ {_applied_before}% → {_applied_after}% logged" +
-                                           (" + note saved." if _note_val.strip() else "."))
-                                st.rerun()
+                                _msg_parts.append(f"{_applied_before}% → {_applied_after}% logged")
+                                _bid_saved = True
                             elif _applied_status == "duplicate":
-                                st.warning("Bid change already logged for today.")
+                                _msg_parts.append("bid change already logged for today")
                             else:
                                 st.error(_applied_status)
+
+                        if _note_saved or _bid_saved:
+                            st.success("✅ " + " · ".join(_msg_parts))
+                            st.rerun()
+                        elif not _note_val.strip() and not _did_apply:
+                            st.warning("Nothing to save — add a note or tick 'Applied in Amazon?'")
 
                     # ── Bid history + effectiveness timeline ───────────────────
                     with st.container():
@@ -3983,50 +3987,39 @@ with tab_ads:
 
             st.divider()
 
-            from db.bid_changes import get_all_bid_changes as _get_all_bc
+            # ── Unified Changes table ──────────────────────────────────────────
+            _uc_all = get_unified_changes()
+            _bc_mp  = "All"
+            if not _uc_all.empty:
+                _uc_markets = ["All"] + sorted(_uc_all["marketplace"].dropna().unique().tolist())
+                _bc_mp = st.selectbox("Marketplace", _uc_markets, key="history_marketplace_filter")
 
-            # Marketplace filter
-            _bc_markets = ["All"] + sorted({
-                str(r) for r in (
-                    get_all_bid_changes().get("marketplace", pd.Series(dtype=str)).dropna().unique()
-                    if False else []
-                )
-            })
-            # Simpler: load once to get marketplaces
-            _bc_df_all = _get_all_bc()
-            _bc_mp = "All"   # default; overwritten below when data exists
-            if _bc_df_all.empty:
-                st.info("No bid change history yet. Upload reports to start tracking.")
+            _uc_df = get_unified_changes(None if _bc_mp == "All" else _bc_mp)
+
+            if _uc_df.empty:
+                st.info("No changes yet. Add a note or log a bid change in the Workbench.")
             else:
-                _bc_markets = ["All"] + sorted(_bc_df_all["marketplace"].dropna().unique().tolist())
-                _bc_mp = st.selectbox(
-                    "Marketplace",
-                    _bc_markets,
-                    key="history_marketplace_filter",
-                )
+                # Format Was% / Now%
+                def _fmt_bid(v):
+                    try:
+                        return f"{int(round(float(v)))}%"
+                    except (TypeError, ValueError):
+                        return "N/A"
 
-                _bc_df = _get_all_bc(None if _bc_mp == "All" else _bc_mp)
-
-                # Rename and format for display
-                _bc_display = _bc_df.copy()
-                _bc_display = _bc_display.rename(columns={
-                    "report_date":    "Date",
+                _uc_display = _uc_df.copy()
+                _uc_display["Was %"] = _uc_display["bid_before"].apply(_fmt_bid)
+                _uc_display["Now %"] = _uc_display["bid_after"].apply(_fmt_bid)
+                _uc_display = _uc_display.rename(columns={
+                    "change_date":    "Date",
                     "campaign_name":  "Campaign",
                     "placement_type": "Placement",
                     "marketplace":    "Marketplace",
-                    "bid_before":     "Before %",
-                    "bid_after":      "After %",
-                    "roas":           "ROAS",
-                    "spend":          "Spend",
-                    "purchases":      "Purchases",
-                    "profit":         "Profit",
                     "notes":          "📝 Note",
                 })
-
-                _cur = "£" if (_bc_mp not in ("All", "amazon.com")) else "$"
+                _uc_cols = ["Date", "Campaign", "Placement", "Marketplace", "📝 Note", "Was %", "Now %"]
 
                 st.dataframe(
-                    _bc_display,
+                    _uc_display[[c for c in _uc_cols if c in _uc_display.columns]],
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -4034,105 +4027,43 @@ with tab_ads:
                         "Campaign":    st.column_config.TextColumn("Campaign",    width=240),
                         "Placement":   st.column_config.TextColumn("Placement",   width=120),
                         "Marketplace": st.column_config.TextColumn("Marketplace", width=100),
-                        "Before %":    st.column_config.NumberColumn("Before %",  format="%d%%", width=75),
-                        "After %":     st.column_config.NumberColumn("After %",   format="%d%%", width=75),
-                        "ROAS":        st.column_config.NumberColumn("ROAS",      format="%.2f", width=70),
-                        "Spend":       st.column_config.NumberColumn("Spend",     format=f"{_cur}%.2f", width=85),
-                        "Purchases":   st.column_config.NumberColumn("Purchases", format="%d",   width=85),
-                        "Profit":      st.column_config.NumberColumn("Profit",    format=f"{_cur}%.2f", width=85),
-                        "📝 Note":     st.column_config.TextColumn("📝 Note",     width=200),
+                        "📝 Note":     st.column_config.TextColumn("📝 Note",     width=280),
+                        "Was %":       st.column_config.TextColumn("Was %",       width=70),
+                        "Now %":       st.column_config.TextColumn("Now %",       width=70),
                     },
                 )
+                st.caption(f"{len(_uc_display):,} changes")
 
-                st.caption(f"{len(_bc_display):,} bid change records")
-
-                # ── Delete entry ───────────────────────────────────────────────
-                with st.expander("🗑️ Delete an entry", expanded=False):
-                    _del_rows = _bc_df.copy()
-                    # Build a readable label per row for the selectbox
-                    _del_rows["_label"] = (
-                        _del_rows["report_date"] + "  ·  " +
-                        _del_rows["campaign_name"].str[:50] + "  ·  " +
-                        _del_rows["placement_type"] + "  ·  " +
-                        _del_rows["bid_before"].astype(int).astype(str) + "%" +
-                        " → " +
-                        _del_rows["bid_after"].astype(int).astype(str) + "%"
-                    )
-                    _del_choice = st.selectbox(
-                        "Select entry to delete",
-                        options=_del_rows.index.tolist(),
-                        format_func=lambda i: _del_rows.loc[i, "_label"],
-                        key="del_bc_choice",
-                    )
-                    _del_row = _del_rows.loc[_del_choice]
-                    st.markdown(
-                        f"<p style='font-size:0.82rem;color:{T['text_secondary']};'>"
-                        f"📅 {_del_row['report_date']} &nbsp;·&nbsp; "
-                        f"{_del_row['campaign_name']} &nbsp;·&nbsp; "
-                        f"{_del_row['placement_type']} &nbsp;·&nbsp; "
-                        f"{int(_del_row['bid_before'])}% → {int(_del_row['bid_after'])}%</p>",
-                        unsafe_allow_html=True,
-                    )
-                    if st.button("🗑️ Delete this entry", key="del_bc_confirm", type="secondary"):
-                        _n_del = delete_bid_change(
-                            campaign_name=_del_row["campaign_name"],
-                            placement_type=_del_row["placement_type"],
-                            marketplace=_del_row["marketplace"],
-                            report_date=_del_row["report_date"],
+                # ── Delete bid-change entry ────────────────────────────────────
+                _bc_only = _uc_df[_uc_df["bid_before"].notna()].copy()
+                if not _bc_only.empty:
+                    with st.expander("🗑️ Delete a bid-change entry", expanded=False):
+                        _bc_only["_label"] = (
+                            _bc_only["change_date"] + "  ·  " +
+                            _bc_only["campaign_name"].str[:50] + "  ·  " +
+                            _bc_only["placement_type"] + "  ·  " +
+                            _bc_only["bid_before"].apply(_fmt_bid) + " → " +
+                            _bc_only["bid_after"].apply(_fmt_bid)
                         )
-                        if _n_del:
-                            st.success("✅ Entry deleted.")
-                            st.rerun()
-                        else:
-                            st.error("Entry not found — may have already been deleted.")
-
-            # ── Noted Changes ──────────────────────────────────────────────────
-            st.divider()
-            st.markdown("## 📝 Changes with Notes")
-            st.markdown(
-                f"<p style='color:{T['text_secondary']};font-size:0.88rem;margin:0 0 12px;'>"
-                "All campaigns where you added a note — a lightweight log of decisions "
-                "made without needing a separate bid entry.</p>",
-                unsafe_allow_html=True,
-            )
-            _noted_df = get_noted_recommendations(None if _bc_mp == "All" else _bc_mp)
-            if _noted_df.empty:
-                st.info("No notes yet. Add a note in the Workbench to document a decision.")
-            else:
-                def _fmt_rec(row):
-                    action = str(row.get("recommended_action") or "").strip().lower()
-                    mult   = row.get("recommended_multiplier")
-                    try:   pct = int(round(float(mult)))
-                    except: pct = None
-                    if action == "increase" and pct is not None:   return f"+{pct}%"
-                    if action in ("decrease", "reduce to 0%") and pct is not None: return f"{pct}%"
-                    return action or "—"
-
-                _noted_display = _noted_df.copy()
-                _noted_display["rec"] = _noted_df.apply(_fmt_rec, axis=1)
-                _noted_display = _noted_display.rename(columns={
-                    "date_given":     "Date",
-                    "campaign_name":  "Campaign",
-                    "placement_type": "Placement",
-                    "marketplace":    "Marketplace",
-                    "rec":            "Recommendation",
-                    "notes":          "📝 Note",
-                })
-                _nd_cols = ["Date", "Campaign", "Placement", "Marketplace", "Recommendation", "📝 Note"]
-                st.dataframe(
-                    _noted_display[[c for c in _nd_cols if c in _noted_display.columns]],
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Date":           st.column_config.TextColumn("Date",           width=100),
-                        "Campaign":       st.column_config.TextColumn("Campaign",       width=240),
-                        "Placement":      st.column_config.TextColumn("Placement",      width=120),
-                        "Marketplace":    st.column_config.TextColumn("Marketplace",    width=100),
-                        "Recommendation": st.column_config.TextColumn("Rec.",           width=80),
-                        "📝 Note":        st.column_config.TextColumn("📝 Note",        width=320),
-                    },
-                )
-                st.caption(f"{len(_noted_display):,} noted decisions")
+                        _del_choice = st.selectbox(
+                            "Select entry to delete",
+                            options=_bc_only.index.tolist(),
+                            format_func=lambda i: _bc_only.loc[i, "_label"],
+                            key="del_bc_choice",
+                        )
+                        _del_row = _bc_only.loc[_del_choice]
+                        if st.button("🗑️ Delete", key="del_bc_confirm", type="secondary"):
+                            _n_del = delete_bid_change(
+                                campaign_name=_del_row["campaign_name"],
+                                placement_type=_del_row["placement_type"],
+                                marketplace=_del_row["marketplace"],
+                                report_date=_del_row["change_date"],
+                            )
+                            if _n_del:
+                                st.success("✅ Deleted.")
+                                st.rerun()
+                            else:
+                                st.error("Not found — may already be deleted.")
 
             # ── Impact Report ──────────────────────────────────────────────────
             st.divider()
