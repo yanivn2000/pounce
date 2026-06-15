@@ -3670,20 +3670,23 @@ with tab_ads:
                         unsafe_allow_html=True,
                     )
 
-                    _panel_note, _panel_hist = st.columns([1, 2])
+                    # ── Note + Applied — side by side, compact ─────────────────
+                    _raw_note = _sel_data.get("notes")
+                    _existing_note = "" if (_raw_note is None or (isinstance(_raw_note, float) and pd.isna(_raw_note))) else str(_raw_note)
+                    _rec_after  = int(round(float(_sel_data.get("recommended_multiplier") or 0)))
+                    _rec_before = int(round(float(_sel_data.get("current_multiplier")     or 0)))
 
-                    # ── Notes field ────────────────────────────────────────────
+                    _panel_note, _panel_applied = st.columns(2)
+
                     with _panel_note:
                         st.markdown("**📝 Note**")
-                        _raw_note = _sel_data.get("notes")
-                        _existing_note = "" if (_raw_note is None or (isinstance(_raw_note, float) and pd.isna(_raw_note))) else str(_raw_note)
                         _note_val = st.text_area(
                             "Note",
                             value=_existing_note,
                             placeholder="e.g. Seasonal spike, competitor left market…",
                             label_visibility="collapsed",
                             key=f"note_{_sel_id}",
-                            height=80,
+                            height=68,
                         )
                         _nc1, _nc2 = st.columns([3, 2])
                         with _nc1:
@@ -3703,52 +3706,45 @@ with tab_ads:
                                     st.success("✅ Saved.")
                                 st.rerun()
 
-                        # ── Applied button (compact) ───────────────────────────
+                    with _panel_applied:
                         st.markdown(
-                            f"<p style='font-size:0.8rem;font-weight:600;"
-                            f"color:{T['text_secondary']};margin:10px 0 4px;'>"
-                            f"✅ Applied in Amazon? &nbsp;"
-                            f"<span style='font-weight:normal;'>({_fmt_change(_sel_data)})</span></p>",
+                            f"**✅ Applied in Amazon?** "
+                            f"<span style='font-size:0.8rem;font-weight:normal;"
+                            f"color:{T['text_secondary']};'>rec: {_fmt_change(_sel_data)}</span>",
                             unsafe_allow_html=True,
                         )
-                        _rec_after  = int(round(float(_sel_data.get("recommended_multiplier") or 0)))
-                        _rec_before = int(round(float(_sel_data.get("current_multiplier")     or 0)))
-                        _ab1, _ab2, _ab3 = st.columns([2, 2, 3])
+                        _ab1, _ab2 = st.columns(2)
                         with _ab1:
                             _applied_before = st.number_input(
                                 "Was %", min_value=0, max_value=900,
                                 value=_rec_before, step=10,
                                 key=f"applied_before_{_sel_id}",
-                                help="Bid % before the change",
                             )
                         with _ab2:
                             _applied_after = st.number_input(
                                 "Now %", min_value=0, max_value=900,
                                 value=_rec_after, step=10,
                                 key=f"applied_after_{_sel_id}",
-                                help="Bid % you set in Amazon",
                             )
-                        with _ab3:
-                            st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
-                            if st.button("✅ Log it", key=f"applied_btn_{_sel_id}", type="primary", use_container_width=True):
-                                _applied_status = log_manual_bid_change(
-                                    campaign_name=_sel_camp,
-                                    placement_type=_sel_place,
-                                    marketplace=_sel_mkt,
-                                    change_date=str(date.today()),
-                                    bid_before=int(_applied_before),
-                                    bid_after=int(_applied_after),
-                                )
-                                if _applied_status == "saved":
-                                    st.success(f"✅ {_applied_before}%→{_applied_after}% logged.")
-                                    st.rerun()
-                                elif _applied_status == "duplicate":
-                                    st.warning("Already logged for today.")
-                                else:
-                                    st.error(_applied_status)
+                        if st.button("✅ Log it", key=f"applied_btn_{_sel_id}", type="primary", use_container_width=True):
+                            _applied_status = log_manual_bid_change(
+                                campaign_name=_sel_camp,
+                                placement_type=_sel_place,
+                                marketplace=_sel_mkt,
+                                change_date=str(date.today()),
+                                bid_before=int(_applied_before),
+                                bid_after=int(_applied_after),
+                            )
+                            if _applied_status == "saved":
+                                st.success(f"✅ {_applied_before}% → {_applied_after}% logged.")
+                                st.rerun()
+                            elif _applied_status == "duplicate":
+                                st.warning("Already logged for today.")
+                            else:
+                                st.error(_applied_status)
 
                     # ── Bid history + effectiveness timeline ───────────────────
-                    with _panel_hist:
+                    with st.container():
                         st.markdown("**📈 Bid History & Effectiveness**")
                         _bid_eff = get_bid_effectiveness(_sel_camp, _sel_place, _sel_mkt)
                         if not _bid_eff:
