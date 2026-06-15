@@ -9,6 +9,10 @@ Together they power:
   • Bid history timeline per campaign/placement
   • "Did the change work?" — ROAS before the change vs ROAS at the next upload
   • Untreated filter — losing placements with no bid action in the last 30 days
+
+NOTE: Amazon's placement performance reports do NOT include bid adjustment settings.
+`record_bid_changes()` therefore never writes rows (bid_pct is always 0).
+Use `log_manual_bid_change()` to record changes that were applied in Amazon's UI.
 """
 from .database import get_conn
 import pandas as pd
@@ -136,6 +140,84 @@ def record_bid_changes(results: list, report_date: str, marketplace: str):
                 pass
 
     conn.close()
+
+
+# ── Manual entry ───────────────────────────────────────────────────────────────
+
+def log_manual_bid_change(
+    campaign_name: str,
+    placement_type: str,
+    marketplace: str,
+    change_date: str,
+    bid_before: int,
+    bid_after: int,
+) -> str:
+    """
+    Manually record a bid adjustment change that was applied in Amazon's UI.
+
+    Automatically looks up the most recent placement_snapshot on or before
+    change_date to populate roas / spend / purchases in the bid_changes row.
+    That data is used by the Impact Report as Period 1 baseline.
+
+    Returns a status string: "saved", "duplicate", or "error: <msg>".
+    """
+    if bid_before == bid_after:
+        return "error: bid_before and bid_after are the same — no change to record."
+
+    conn = get_conn()
+
+    # Look up nearest snapshot ≤ change_date for P1 baseline
+    snap = conn.execute("""
+        SELECT roas, spend, purchases
+        FROM placement_snapshots
+        WHERE campaign_name = ? AND placement_type = ? AND marketplace = ?
+          AND report_date <= ?
+        ORDER BY report_date DESC
+        LIMIT 1
+    """, (campaign_name, placement_type, marketplace, change_date)).fetchone()
+
+    roas      = round(float(snap["roas"]      or 0), 3) if snap else 0.0
+    spend     = round(float(snap["spend"]     or 0), 2) if snap else 0.0
+    purchases = int(snap["purchases"] or 0)            if snap else 0
+    profit    = 0.0
+
+    try:
+        with conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO bid_changes
+                    (campaign_name, placement_type, marketplace, report_date,
+                     bid_before, bid_after, roas, spend, purchases, profit)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (
+                campaign_name, placement_type, marketplace, change_date,
+                bid_before, bid_after, roas, spend, purchases, profit,
+            ))
+        affected = conn.execute("""
+            SELECT COUNT(*) FROM bid_changes
+            WHERE campaign_name=? AND placement_type=? AND marketplace=?
+              AND report_date=? AND bid_before=? AND bid_after=?
+        """, (campaign_name, placement_type, marketplace, change_date,
+              bid_before, bid_after)).fetchone()[0]
+        conn.close()
+        return "saved" if affected else "duplicate"
+    except Exception as e:
+        conn.close()
+        return f"error: {e}"
+
+
+def get_campaigns_with_snapshots(marketplace: str = None) -> list[str]:
+    """Return distinct campaign names that have placement_snapshots (for autocomplete)."""
+    conn = get_conn()
+    mp_filter = "WHERE marketplace=?" if marketplace else ""
+    params = [marketplace] if marketplace else []
+    rows = conn.execute(f"""
+        SELECT DISTINCT campaign_name
+        FROM placement_snapshots
+        {mp_filter}
+        ORDER BY campaign_name
+    """, params).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 
 # ── Read ──────────────────────────────────────────────────────────────────────

@@ -27,6 +27,7 @@ from db.bid_changes import (
     record_bid_changes, record_placement_snapshots,
     get_bid_history, get_bid_effectiveness, get_last_effectiveness_bulk,
     get_all_bid_changes, get_untreated_losing, save_recommendation_note, save_campaign_note,
+    log_manual_bid_change, get_campaigns_with_snapshots,
     get_all_bid_effectiveness,
 )
 from db.settings import get_alert_thresholds, save_setting
@@ -3697,6 +3698,60 @@ with tab_ads:
                                 st.success("✅ Note saved.")
                             st.rerun()
 
+                        # ── Applied button ─────────────────────────────────────
+                        st.divider()
+                        st.markdown("**✅ Applied in Amazon?**")
+                        _rec_after  = int(round(float(_sel_data.get("recommended_multiplier") or 0)))
+                        _rec_before = int(round(float(_sel_data.get("current_multiplier")     or 0)))
+                        _rec_change_label = _fmt_change(_sel_data)
+
+                        st.markdown(
+                            f"<p style='font-size:0.82rem;color:{T['text_secondary']};margin:2px 0 6px;'>"
+                            f"Recommendation: <b>{_rec_change_label}</b><br>"
+                            f"Click to log this change and start tracking ROAS impact.</p>",
+                            unsafe_allow_html=True,
+                        )
+                        _ab1, _ab2 = st.columns(2)
+                        with _ab1:
+                            _applied_before = st.number_input(
+                                "Was %", min_value=0, max_value=900,
+                                value=_rec_before, step=10,
+                                key=f"applied_before_{_sel_id}",
+                                help="Bid % before the change (0 = no adjustment)",
+                            )
+                        with _ab2:
+                            _applied_after = st.number_input(
+                                "Now %", min_value=0, max_value=900,
+                                value=_rec_after, step=10,
+                                key=f"applied_after_{_sel_id}",
+                                help="Bid % you set in Amazon",
+                            )
+
+                        if st.button(
+                            "✅ I Applied This",
+                            key=f"applied_btn_{_sel_id}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            _applied_status = log_manual_bid_change(
+                                campaign_name=_sel_camp,
+                                placement_type=_sel_place,
+                                marketplace=_sel_mkt,
+                                change_date=str(date.today()),
+                                bid_before=int(_applied_before),
+                                bid_after=int(_applied_after),
+                            )
+                            if _applied_status == "saved":
+                                st.success(
+                                    f"✅ Logged: {_sel_place} {_applied_before}% → {_applied_after}% today. "
+                                    "Upload the next report to see Period 2 ROAS."
+                                )
+                                st.rerun()
+                            elif _applied_status == "duplicate":
+                                st.warning("Already logged for today.")
+                            else:
+                                st.error(_applied_status)
+
                     # ── Bid history + effectiveness timeline ───────────────────
                     with _panel_hist:
                         st.markdown("**📈 Bid History & Effectiveness**")
@@ -3823,10 +3878,105 @@ with tab_ads:
             st.markdown("# 📜 Bid Change History")
             st.markdown(
                 f"<p style='color:{T['text_secondary']};font-size:0.95rem;'>"
-                "Auto-detected bid adjustments — recorded whenever a placement's "
-                "bid changes between report uploads.</p>",
+                "Amazon's placement reports don't include bid adjustment settings, so changes "
+                "must be logged manually. Use the form below to record bid changes you applied "
+                "in Amazon's Advertising Console — the Impact Report will compare ROAS before "
+                "and after each change.</p>",
                 unsafe_allow_html=True,
             )
+
+            # ── Manual Bid Change Logger ───────────────────────────────────────
+            with st.expander("➕ Log a Bid Change", expanded=False):
+                _log_camps = get_campaigns_with_snapshots()
+                _log_markets_all = []
+                try:
+                    _lm_conn = __import__("db.database", fromlist=["get_conn"]).get_conn()
+                    _log_markets_all = sorted(
+                        r[0] for r in _lm_conn.execute(
+                            "SELECT DISTINCT marketplace FROM placement_snapshots ORDER BY marketplace"
+                        ).fetchall()
+                    )
+                    _lm_conn.close()
+                except Exception:
+                    pass
+
+                _lc1, _lc2 = st.columns(2)
+                with _lc1:
+                    _log_mkt = st.selectbox(
+                        "Marketplace",
+                        _log_markets_all or ["amazon.com"],
+                        key="log_bc_marketplace",
+                    )
+                    _log_date = st.date_input(
+                        "Date of change",
+                        value=None,
+                        key="log_bc_date",
+                        help="The date you applied the change in Amazon's Advertising Console.",
+                    )
+                    _log_pl = st.selectbox(
+                        "Placement",
+                        ["Top of Search", "Rest of Search", "Product Pages"],
+                        key="log_bc_placement",
+                    )
+
+                with _lc2:
+                    # If we have campaign names from snapshots, show a selectbox with free-text option
+                    _log_camp_input = st.selectbox(
+                        "Campaign",
+                        [""] + get_campaigns_with_snapshots(_log_mkt),
+                        key="log_bc_campaign",
+                        help="Pick from campaigns that already have uploaded report data.",
+                    )
+                    _lb3, _lb4 = st.columns(2)
+                    with _lb3:
+                        _log_bid_before = st.number_input(
+                            "Bid % Before",
+                            min_value=0, max_value=900, value=0, step=10,
+                            key="log_bc_before",
+                            help="e.g. 0 = no adjustment, 100 = +100%",
+                        )
+                    with _lb4:
+                        _log_bid_after = st.number_input(
+                            "Bid % After",
+                            min_value=0, max_value=900, value=0, step=10,
+                            key="log_bc_after",
+                            help="e.g. 50 = +50%, 0 = removed adjustment",
+                        )
+
+                st.markdown(
+                    f"<p style='color:{T['text_secondary']};font-size:0.82rem;'>"
+                    "💡 The ROAS and spend shown in the Impact Report (Period 1) will be pulled "
+                    "automatically from the most recent uploaded report on or before the change date.</p>",
+                    unsafe_allow_html=True,
+                )
+
+                if st.button("💾 Save Bid Change", key="log_bc_save", type="primary"):
+                    if not _log_camp_input:
+                        st.error("Please select a campaign.")
+                    elif _log_date is None:
+                        st.error("Please pick a date.")
+                    elif _log_bid_before == _log_bid_after:
+                        st.error("Before and After bid % are the same — nothing to record.")
+                    else:
+                        _log_status = log_manual_bid_change(
+                            campaign_name=_log_camp_input,
+                            placement_type=_log_pl,
+                            marketplace=_log_mkt,
+                            change_date=str(_log_date),
+                            bid_before=int(_log_bid_before),
+                            bid_after=int(_log_bid_after),
+                        )
+                        if _log_status == "saved":
+                            st.success(
+                                f"✅ Logged: **{_log_camp_input}** / {_log_pl} — "
+                                f"{_log_bid_before}% → {_log_bid_after}% on {_log_date}"
+                            )
+                            st.rerun()
+                        elif _log_status == "duplicate":
+                            st.warning("⚠️ This exact change was already recorded.")
+                        else:
+                            st.error(_log_status)
+
             st.divider()
 
             from db.bid_changes import get_all_bid_changes as _get_all_bc
