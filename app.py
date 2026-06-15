@@ -27,7 +27,7 @@ from db.bid_changes import (
     record_bid_changes, record_placement_snapshots,
     get_bid_history, get_bid_effectiveness, get_last_effectiveness_bulk,
     get_all_bid_changes, get_untreated_losing, save_recommendation_note, save_campaign_note,
-    log_manual_bid_change, get_campaigns_with_snapshots,
+    log_manual_bid_change, get_campaigns_with_snapshots, delete_bid_change,
     get_all_bid_effectiveness,
 )
 from db.settings import get_alert_thresholds, save_setting
@@ -4030,6 +4030,46 @@ with tab_ads:
                 )
 
                 st.caption(f"{len(_bc_display):,} bid change records")
+
+                # ── Delete entry ───────────────────────────────────────────────
+                with st.expander("🗑️ Delete an entry", expanded=False):
+                    _del_rows = _bc_df.copy()
+                    # Build a readable label per row for the selectbox
+                    _del_rows["_label"] = (
+                        _del_rows["report_date"] + "  ·  " +
+                        _del_rows["campaign_name"].str[:50] + "  ·  " +
+                        _del_rows["placement_type"] + "  ·  " +
+                        _del_rows["bid_before"].astype(int).astype(str) + "%" +
+                        " → " +
+                        _del_rows["bid_after"].astype(int).astype(str) + "%"
+                    )
+                    _del_choice = st.selectbox(
+                        "Select entry to delete",
+                        options=_del_rows.index.tolist(),
+                        format_func=lambda i: _del_rows.loc[i, "_label"],
+                        key="del_bc_choice",
+                    )
+                    _del_row = _del_rows.loc[_del_choice]
+                    st.markdown(
+                        f"<p style='font-size:0.82rem;color:{T['text_secondary']};'>"
+                        f"📅 {_del_row['report_date']} &nbsp;·&nbsp; "
+                        f"{_del_row['campaign_name']} &nbsp;·&nbsp; "
+                        f"{_del_row['placement_type']} &nbsp;·&nbsp; "
+                        f"{int(_del_row['bid_before'])}% → {int(_del_row['bid_after'])}%</p>",
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("🗑️ Delete this entry", key="del_bc_confirm", type="secondary"):
+                        _n_del = delete_bid_change(
+                            campaign_name=_del_row["campaign_name"],
+                            placement_type=_del_row["placement_type"],
+                            marketplace=_del_row["marketplace"],
+                            report_date=_del_row["report_date"],
+                        )
+                        if _n_del:
+                            st.success("✅ Entry deleted.")
+                            st.rerun()
+                        else:
+                            st.error("Entry not found — may have already been deleted.")
 
             # ── Impact Report ──────────────────────────────────────────────────
             st.divider()

@@ -205,6 +205,23 @@ def log_manual_bid_change(
         return f"error: {e}"
 
 
+def delete_bid_change(campaign_name: str, placement_type: str,
+                      marketplace: str, report_date: str) -> int:
+    """
+    Delete a specific bid change row.
+    Returns number of rows deleted (0 = not found, 1 = deleted).
+    """
+    conn = get_conn()
+    with conn:
+        cur = conn.execute("""
+            DELETE FROM bid_changes
+            WHERE campaign_name=? AND placement_type=? AND marketplace=? AND report_date=?
+        """, (campaign_name, placement_type, marketplace, report_date))
+        deleted = cur.rowcount
+    conn.close()
+    return deleted
+
+
 def get_campaigns_with_snapshots(marketplace: str = None) -> list[str]:
     """Return distinct campaign names that have placement_snapshots (for autocomplete)."""
     conn = get_conn()
