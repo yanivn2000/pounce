@@ -85,6 +85,7 @@ def get_performance_alerts(marketplace: str, thresholds: dict = None) -> list:
             SELECT snapshot_date, roas, spend, sales, purchases, total_profit
             FROM campaign_performance
             WHERE campaign_name = ? AND marketplace = ? AND placement_type = ?
+              AND spend >= 5.0
             ORDER BY snapshot_date DESC
             LIMIT 2
         """, (camp, marketplace, placement)).fetchall()
@@ -99,6 +100,13 @@ def get_performance_alerts(marketplace: str, thresholds: dict = None) -> list:
         after_roas    = after["roas"]          or 0
         before_profit = before["total_profit"] or 0
         after_profit  = after["total_profit"]  or 0
+        before_spend  = before["spend"]        or 0
+        after_spend   = after["spend"]         or 0
+
+        # Skip if either snapshot has negligible spend — avoids false alerts
+        # from statistically insignificant periods (e.g. 1 click, $0.94 spend)
+        if before_spend < 5.0 or after_spend < 5.0:
+            continue
 
         if before_roas <= 0 or after_roas <= 0:
             continue
@@ -188,12 +196,16 @@ def get_bad_roas_campaigns(marketplace: str, min_spend: float = 5.0) -> list[dic
         after  = snaps[0]   # most recent
         before = snaps[1]   # previous
 
-        after_roas  = after["roas"]  or 0.0
-        before_roas = before["roas"] or 0.0
-        spend       = after["spend"] or 0.0
+        after_roas   = after["roas"]   or 0.0
+        before_roas  = before["roas"]  or 0.0
+        spend        = after["spend"]  or 0.0
+        before_spend = before["spend"] or 0.0
 
-        # Skip low-activity placements or placements with no ROAS
-        if spend < min_spend or after_roas <= 0 or before_roas <= 0:
+        # Skip if EITHER snapshot has negligible spend — prevents false signals
+        # from statistically insignificant periods (1 click, <$5 spend)
+        if spend < min_spend or before_spend < min_spend:
+            continue
+        if after_roas <= 0 or before_roas <= 0:
             continue
 
         # Use stored breakeven_roas; fall back to 1.0 (at least break even on spend)
