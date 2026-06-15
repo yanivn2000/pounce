@@ -399,36 +399,46 @@ def get_last_effectiveness_bulk(marketplace: str = None) -> dict:
 
 def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
     """
-    Impact Report — every bid change ever recorded, with Period 1 (at change)
-    and Period 2 (first snapshot after change) side-by-side.
+    Impact Report — every documented change, with Period 1 and Period 2 ROAS.
+
+    Includes:
+      • bid_changes rows  — full P1/P2 data, bid % shown
+      • note-only rows    — recommendation with note but no bid_change;
+                            bid % shown as None, ROAS columns None
 
     Columns returned:
         change_date, campaign, placement, marketplace,
-        bid_before, bid_after,
+        notes, bid_before, bid_after,
         roas_p1, spend_p1, purchases_p1,
         roas_p2, spend_p2, purchases_p2,
         delta_roas, result
-    Sorted newest change first.
+    Sorted newest first.
     """
     conn = get_conn()
-    mp_filter = "WHERE marketplace=?" if marketplace else ""
+    mp_filter = "WHERE bc.marketplace=?" if marketplace else ""
+    mp_filter_r = "AND r.marketplace=?" if marketplace else ""
     params    = [marketplace] if marketplace else []
 
+    # ── Part 1: bid_changes rows ──────────────────────────────────────────────
     changes = conn.execute(f"""
-        SELECT id, report_date, campaign_name, placement_type, marketplace,
-               bid_before, bid_after,
-               roas    AS roas_p1,
-               spend   AS spend_p1,
-               purchases AS purchases_p1,
-               profit  AS profit_p1
-        FROM bid_changes
+        SELECT bc.report_date AS change_date,
+               bc.campaign_name, bc.placement_type, bc.marketplace,
+               COALESCE(bc.notes, r.notes) AS notes,
+               bc.bid_before, bc.bid_after,
+               bc.roas    AS roas_p1,
+               bc.spend   AS spend_p1,
+               bc.purchases AS purchases_p1
+        FROM bid_changes bc
+        LEFT JOIN recommendations r
+            ON r.campaign_name  = bc.campaign_name
+           AND r.placement_type = bc.placement_type
+           AND r.marketplace    = bc.marketplace
         {mp_filter}
-        ORDER BY report_date DESC, campaign_name
+        ORDER BY bc.report_date DESC, bc.campaign_name
     """, params).fetchall()
 
     rows = []
     for ch in changes:
-        # Period 2 = first placement_snapshot AFTER this change date
         nxt = conn.execute("""
             SELECT report_date, roas, spend, purchases
             FROM placement_snapshots
@@ -436,31 +446,26 @@ def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
               AND report_date > ?
             ORDER BY report_date ASC LIMIT 1
         """, (ch["campaign_name"], ch["placement_type"],
-              ch["marketplace"], ch["report_date"])).fetchone()
+              ch["marketplace"], ch["change_date"])).fetchone()
 
         roas_p1 = float(ch["roas_p1"] or 0)
         if nxt and nxt["roas"] is not None:
             roas_p2    = round(float(nxt["roas"]), 2)
             delta_roas = round(roas_p2 - roas_p1, 2)
-            if delta_roas > 0.05:
-                result = "✅"
-            elif delta_roas < -0.05:
-                result = "❌"
-            else:
-                result = "➡️"
-            p2_date      = nxt["report_date"]
-            spend_p2     = nxt["spend"]
-            purchases_p2 = nxt["purchases"]
+            result     = "✅" if delta_roas > 0.05 else ("❌" if delta_roas < -0.05 else "➡️")
+            p2_date    = nxt["report_date"]
+            spend_p2   = nxt["spend"]
+            purch_p2   = nxt["purchases"]
         else:
-            roas_p2 = delta_roas = None
+            roas_p2 = delta_roas = p2_date = spend_p2 = purch_p2 = None
             result  = "⏳"
-            p2_date = spend_p2 = purchases_p2 = None
 
         rows.append({
-            "change_date":   ch["report_date"],
+            "change_date":   ch["change_date"],
             "campaign":      ch["campaign_name"],
             "placement":     ch["placement_type"],
             "marketplace":   ch["marketplace"],
+            "notes":         ch["notes"],
             "bid_before":    int(ch["bid_before"] or 0),
             "bid_after":     int(ch["bid_after"]  or 0),
             "roas_p1":       round(roas_p1, 2),
@@ -468,14 +473,53 @@ def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
             "purchases_p1":  int(ch["purchases_p1"] or 0),
             "roas_p2":       roas_p2,
             "spend_p2":      round(float(spend_p2 or 0), 2) if spend_p2 else None,
-            "purchases_p2":  int(purchases_p2 or 0) if purchases_p2 is not None else None,
+            "purchases_p2":  int(purch_p2 or 0) if purch_p2 is not None else None,
             "p2_date":       p2_date,
             "delta_roas":    delta_roas,
             "result":        result,
         })
 
+    # ── Part 2: note-only (no bid_change row) ─────────────────────────────────
+    noted = conn.execute(f"""
+        SELECT r.date_given AS change_date,
+               r.campaign_name, r.placement_type, r.marketplace,
+               r.notes
+        FROM recommendations r
+        WHERE r.notes IS NOT NULL AND TRIM(r.notes) != ''
+          {mp_filter_r}
+          AND NOT EXISTS (
+              SELECT 1 FROM bid_changes bc2
+              WHERE bc2.campaign_name  = r.campaign_name
+                AND bc2.placement_type = r.placement_type
+                AND bc2.marketplace    = r.marketplace
+          )
+    """, params).fetchall()
+
+    for n in noted:
+        rows.append({
+            "change_date":   n["change_date"],
+            "campaign":      n["campaign_name"],
+            "placement":     n["placement_type"],
+            "marketplace":   n["marketplace"],
+            "notes":         n["notes"],
+            "bid_before":    None,
+            "bid_after":     None,
+            "roas_p1":       None,
+            "spend_p1":      None,
+            "purchases_p1":  None,
+            "roas_p2":       None,
+            "spend_p2":      None,
+            "purchases_p2":  None,
+            "p2_date":       None,
+            "delta_roas":    None,
+            "result":        "📝",
+        })
+
     conn.close()
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("change_date", ascending=False).reset_index(drop=True)
+    return df
 
 
 def get_unified_changes(marketplace: str = None) -> pd.DataFrame:

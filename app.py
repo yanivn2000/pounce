@@ -4085,20 +4085,22 @@ with tab_ads:
                 _n_worsened = (_imp_df["result"] == "❌").sum()
                 _n_flat     = (_imp_df["result"] == "➡️").sum()
                 _n_pending  = (_imp_df["result"] == "⏳").sum()
+                _n_noted    = (_imp_df["result"] == "📝").sum()
 
-                _ik1, _ik2, _ik3, _ik4, _ik5 = st.columns(5)
-                _ik1.metric("Total Changes", _n_total)
-                _ik2.metric("✅ Improved",   _n_improved)
-                _ik3.metric("❌ Worsened",   _n_worsened)
-                _ik4.metric("➡️ Flat",       _n_flat)
-                _ik5.metric("⏳ Pending",    _n_pending)
+                _ik1, _ik2, _ik3, _ik4, _ik5, _ik6 = st.columns(6)
+                _ik1.metric("Total",        _n_total)
+                _ik2.metric("✅ Improved",  _n_improved)
+                _ik3.metric("❌ Worsened",  _n_worsened)
+                _ik4.metric("➡️ Flat",      _n_flat)
+                _ik5.metric("⏳ Pending",   _n_pending)
+                _ik6.metric("📝 Note only", _n_noted)
 
                 st.markdown("<div style='margin:8px 0;'></div>", unsafe_allow_html=True)
 
                 # Result filter
                 _imp_filter = st.multiselect(
                     "Filter by result",
-                    ["✅", "❌", "➡️", "⏳"],
+                    ["✅", "❌", "➡️", "⏳", "📝"],
                     default=[],
                     key="impact_filter",
                     placeholder="All results",
@@ -4112,21 +4114,22 @@ with tab_ads:
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "change_date":   st.column_config.TextColumn("Change Date",  width=100),
-                        "campaign":      st.column_config.TextColumn("Campaign",     width=250),
+                        "change_date":   st.column_config.TextColumn("Date",         width=100),
+                        "campaign":      st.column_config.TextColumn("Campaign",     width=230),
                         "placement":     st.column_config.TextColumn("Placement",    width=110),
-                        "marketplace":   st.column_config.TextColumn("Marketplace",  width=110),
-                        "bid_before":    st.column_config.NumberColumn("Bid P1 %",   format="%d%%", width=75),
-                        "bid_after":     st.column_config.NumberColumn("Bid P2 %",   format="%d%%", width=75),
-                        "roas_p1":       st.column_config.NumberColumn("ROAS P1",    format="%.2fx", width=85),
-                        "spend_p1":      st.column_config.NumberColumn("Spend P1",   format=f"{_cur_sym}%.2f", width=90),
-                        "purchases_p1":  st.column_config.NumberColumn("Orders P1",  format="%d",   width=80),
-                        "p2_date":       st.column_config.TextColumn("P2 Date",      width=95),
-                        "roas_p2":       st.column_config.NumberColumn("ROAS P2",    format="%.2fx", width=85),
-                        "spend_p2":      st.column_config.NumberColumn("Spend P2",   format=f"{_cur_sym}%.2f", width=90),
-                        "purchases_p2":  st.column_config.NumberColumn("Orders P2",  format="%d",   width=80),
-                        "delta_roas":    st.column_config.NumberColumn("Δ ROAS",     format="%+.2fx", width=85),
-                        "result":        st.column_config.TextColumn("Result",       width=60),
+                        "marketplace":   st.column_config.TextColumn("Marketplace",  width=100),
+                        "notes":         st.column_config.TextColumn("📝 Note",      width=180),
+                        "bid_before":    st.column_config.NumberColumn("Was %",      format="%d%%", width=65),
+                        "bid_after":     st.column_config.NumberColumn("Now %",      format="%d%%", width=65),
+                        "roas_p1":       st.column_config.NumberColumn("ROAS P1",   format="%.2fx", width=82),
+                        "spend_p1":      st.column_config.NumberColumn("Spend P1",  format=f"{_cur_sym}%.2f", width=85),
+                        "purchases_p1":  st.column_config.NumberColumn("Orders P1", format="%d",   width=78),
+                        "p2_date":       st.column_config.TextColumn("P2 Date",     width=95),
+                        "roas_p2":       st.column_config.NumberColumn("ROAS P2",   format="%.2fx", width=82),
+                        "spend_p2":      st.column_config.NumberColumn("Spend P2",  format=f"{_cur_sym}%.2f", width=85),
+                        "purchases_p2":  st.column_config.NumberColumn("Orders P2", format="%d",   width=78),
+                        "delta_roas":    st.column_config.NumberColumn("Δ ROAS",    format="%+.2fx", width=82),
+                        "result":        st.column_config.TextColumn("Result",      width=60),
                     },
                 )
 
