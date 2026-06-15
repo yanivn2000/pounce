@@ -296,6 +296,87 @@ def get_last_effectiveness_bulk(marketplace: str = None) -> dict:
     return result
 
 
+def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
+    """
+    Impact Report — every bid change ever recorded, with Period 1 (at change)
+    and Period 2 (first snapshot after change) side-by-side.
+
+    Columns returned:
+        change_date, campaign, placement, marketplace,
+        bid_before, bid_after,
+        roas_p1, spend_p1, purchases_p1,
+        roas_p2, spend_p2, purchases_p2,
+        delta_roas, result
+    Sorted newest change first.
+    """
+    conn = get_conn()
+    mp_filter = "WHERE marketplace=?" if marketplace else ""
+    params    = [marketplace] if marketplace else []
+
+    changes = conn.execute(f"""
+        SELECT id, report_date, campaign_name, placement_type, marketplace,
+               bid_before, bid_after,
+               roas    AS roas_p1,
+               spend   AS spend_p1,
+               purchases AS purchases_p1,
+               profit  AS profit_p1
+        FROM bid_changes
+        {mp_filter}
+        ORDER BY report_date DESC, campaign_name
+    """, params).fetchall()
+
+    rows = []
+    for ch in changes:
+        # Period 2 = first placement_snapshot AFTER this change date
+        nxt = conn.execute("""
+            SELECT report_date, roas, spend, purchases
+            FROM placement_snapshots
+            WHERE campaign_name=? AND placement_type=? AND marketplace=?
+              AND report_date > ?
+            ORDER BY report_date ASC LIMIT 1
+        """, (ch["campaign_name"], ch["placement_type"],
+              ch["marketplace"], ch["report_date"])).fetchone()
+
+        roas_p1 = float(ch["roas_p1"] or 0)
+        if nxt and nxt["roas"] is not None:
+            roas_p2    = round(float(nxt["roas"]), 2)
+            delta_roas = round(roas_p2 - roas_p1, 2)
+            if delta_roas > 0.05:
+                result = "✅"
+            elif delta_roas < -0.05:
+                result = "❌"
+            else:
+                result = "➡️"
+            p2_date      = nxt["report_date"]
+            spend_p2     = nxt["spend"]
+            purchases_p2 = nxt["purchases"]
+        else:
+            roas_p2 = delta_roas = None
+            result  = "⏳"
+            p2_date = spend_p2 = purchases_p2 = None
+
+        rows.append({
+            "change_date":   ch["report_date"],
+            "campaign":      ch["campaign_name"],
+            "placement":     ch["placement_type"],
+            "marketplace":   ch["marketplace"],
+            "bid_before":    int(ch["bid_before"] or 0),
+            "bid_after":     int(ch["bid_after"]  or 0),
+            "roas_p1":       round(roas_p1, 2),
+            "spend_p1":      round(float(ch["spend_p1"] or 0), 2),
+            "purchases_p1":  int(ch["purchases_p1"] or 0),
+            "roas_p2":       roas_p2,
+            "spend_p2":      round(float(spend_p2 or 0), 2) if spend_p2 else None,
+            "purchases_p2":  int(purchases_p2 or 0) if purchases_p2 is not None else None,
+            "p2_date":       p2_date,
+            "delta_roas":    delta_roas,
+            "result":        result,
+        })
+
+    conn.close()
+    return pd.DataFrame(rows)
+
+
 def get_untreated_losing(marketplace: str = None) -> set:
     """
     Returns a set of (campaign_name, placement_type, marketplace) tuples

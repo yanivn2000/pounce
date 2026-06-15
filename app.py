@@ -27,6 +27,7 @@ from db.bid_changes import (
     record_bid_changes, record_placement_snapshots,
     get_bid_history, get_bid_effectiveness, get_last_effectiveness_bulk,
     get_all_bid_changes, get_untreated_losing, save_recommendation_note, save_campaign_note,
+    get_all_bid_effectiveness,
 )
 from db.settings import get_alert_thresholds, save_setting
 from db.inventory import (
@@ -3887,6 +3888,79 @@ with tab_ads:
                 )
 
                 st.caption(f"{len(_bc_display):,} bid change records")
+
+            # ── Impact Report ──────────────────────────────────────────────────
+            st.divider()
+            st.markdown("## 📊 Impact Report — Period 1 vs Period 2")
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.88rem;margin:0 0 12px;'>"
+                "Every bid change recorded, with ROAS/spend/purchases <b>before</b> the change "
+                "(Period 1) and in the <b>first report uploaded after</b> the change (Period 2).</p>",
+                unsafe_allow_html=True,
+            )
+
+            _imp_df = get_all_bid_effectiveness(None if _bc_mp == "All" else _bc_mp)
+            if _imp_df.empty:
+                st.info("No bid changes to show impact for yet.")
+            else:
+                # Summary KPIs
+                _n_total    = len(_imp_df)
+                _n_improved = (_imp_df["result"] == "✅").sum()
+                _n_worsened = (_imp_df["result"] == "❌").sum()
+                _n_flat     = (_imp_df["result"] == "➡️").sum()
+                _n_pending  = (_imp_df["result"] == "⏳").sum()
+
+                _ik1, _ik2, _ik3, _ik4, _ik5 = st.columns(5)
+                _ik1.metric("Total Changes", _n_total)
+                _ik2.metric("✅ Improved",   _n_improved)
+                _ik3.metric("❌ Worsened",   _n_worsened)
+                _ik4.metric("➡️ Flat",       _n_flat)
+                _ik5.metric("⏳ Pending",    _n_pending)
+
+                st.markdown("<div style='margin:8px 0;'></div>", unsafe_allow_html=True)
+
+                # Result filter
+                _imp_filter = st.multiselect(
+                    "Filter by result",
+                    ["✅", "❌", "➡️", "⏳"],
+                    default=[],
+                    key="impact_filter",
+                    placeholder="All results",
+                )
+                _imp_show = _imp_df[_imp_df["result"].isin(_imp_filter)] if _imp_filter else _imp_df
+
+                _cur_sym = "£" if (_bc_mp not in ("All", "amazon.com", None)) else "$"
+
+                st.dataframe(
+                    _imp_show,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "change_date":   st.column_config.TextColumn("Change Date",  width=100),
+                        "campaign":      st.column_config.TextColumn("Campaign",     width=250),
+                        "placement":     st.column_config.TextColumn("Placement",    width=110),
+                        "marketplace":   st.column_config.TextColumn("Marketplace",  width=110),
+                        "bid_before":    st.column_config.NumberColumn("Bid P1 %",   format="%d%%", width=75),
+                        "bid_after":     st.column_config.NumberColumn("Bid P2 %",   format="%d%%", width=75),
+                        "roas_p1":       st.column_config.NumberColumn("ROAS P1",    format="%.2fx", width=85),
+                        "spend_p1":      st.column_config.NumberColumn("Spend P1",   format=f"{_cur_sym}%.2f", width=90),
+                        "purchases_p1":  st.column_config.NumberColumn("Orders P1",  format="%d",   width=80),
+                        "p2_date":       st.column_config.TextColumn("P2 Date",      width=95),
+                        "roas_p2":       st.column_config.NumberColumn("ROAS P2",    format="%.2fx", width=85),
+                        "spend_p2":      st.column_config.NumberColumn("Spend P2",   format=f"{_cur_sym}%.2f", width=90),
+                        "purchases_p2":  st.column_config.NumberColumn("Orders P2",  format="%d",   width=80),
+                        "delta_roas":    st.column_config.NumberColumn("Δ ROAS",     format="%+.2fx", width=85),
+                        "result":        st.column_config.TextColumn("Result",       width=60),
+                    },
+                )
+
+                st.download_button(
+                    "⬇️ Download Impact Report",
+                    data=_imp_show.to_csv(index=False).encode(),
+                    file_name="bid_impact_report.csv",
+                    mime="text/csv",
+                    key="impact_dl",
+                )
 
         with _alerts_view:
             # ── ALERTS content ────────────────────────────────────────────────
