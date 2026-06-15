@@ -3675,49 +3675,51 @@ with tab_ads:
                     # ── Notes field ────────────────────────────────────────────
                     with _panel_note:
                         st.markdown("**📝 Note**")
-                        _existing_note = str(_sel_data.get("notes") or "")
+                        _raw_note = _sel_data.get("notes")
+                        _existing_note = "" if (_raw_note is None or (isinstance(_raw_note, float) and pd.isna(_raw_note))) else str(_raw_note)
                         _note_val = st.text_area(
                             "Note",
                             value=_existing_note,
                             placeholder="e.g. Seasonal spike, competitor left market…",
                             label_visibility="collapsed",
                             key=f"note_{_sel_id}",
-                            height=100,
+                            height=80,
                         )
-                        _apply_all = st.checkbox(
-                            "Apply to all placements of this campaign",
-                            value=True,
-                            key=f"note_all_{_sel_id}",
-                        )
-                        if st.button("💾 Save Note", key=f"save_note_{_sel_id}"):
-                            if _apply_all:
-                                _n = save_campaign_note(_sel_camp, _sel_mkt, _note_val)
-                                st.success(f"✅ Note saved to all {_n} placements of this campaign.")
-                            else:
-                                save_recommendation_note(_sel_id, _note_val)
-                                st.success("✅ Note saved.")
-                            st.rerun()
+                        _nc1, _nc2 = st.columns([3, 2])
+                        with _nc1:
+                            _apply_all = st.checkbox(
+                                "All placements",
+                                value=True,
+                                key=f"note_all_{_sel_id}",
+                                help="Apply note to all placements of this campaign",
+                            )
+                        with _nc2:
+                            if st.button("💾 Save", key=f"save_note_{_sel_id}", use_container_width=True):
+                                if _apply_all:
+                                    _n = save_campaign_note(_sel_camp, _sel_mkt, _note_val)
+                                    st.success(f"✅ Saved to {_n} placements.")
+                                else:
+                                    save_recommendation_note(_sel_id, _note_val)
+                                    st.success("✅ Saved.")
+                                st.rerun()
 
-                        # ── Applied button ─────────────────────────────────────
-                        st.divider()
-                        st.markdown("**✅ Applied in Amazon?**")
-                        _rec_after  = int(round(float(_sel_data.get("recommended_multiplier") or 0)))
-                        _rec_before = int(round(float(_sel_data.get("current_multiplier")     or 0)))
-                        _rec_change_label = _fmt_change(_sel_data)
-
+                        # ── Applied button (compact) ───────────────────────────
                         st.markdown(
-                            f"<p style='font-size:0.82rem;color:{T['text_secondary']};margin:2px 0 6px;'>"
-                            f"Recommendation: <b>{_rec_change_label}</b><br>"
-                            f"Click to log this change and start tracking ROAS impact.</p>",
+                            f"<p style='font-size:0.8rem;font-weight:600;"
+                            f"color:{T['text_secondary']};margin:10px 0 4px;'>"
+                            f"✅ Applied in Amazon? &nbsp;"
+                            f"<span style='font-weight:normal;'>({_fmt_change(_sel_data)})</span></p>",
                             unsafe_allow_html=True,
                         )
-                        _ab1, _ab2 = st.columns(2)
+                        _rec_after  = int(round(float(_sel_data.get("recommended_multiplier") or 0)))
+                        _rec_before = int(round(float(_sel_data.get("current_multiplier")     or 0)))
+                        _ab1, _ab2, _ab3 = st.columns([2, 2, 3])
                         with _ab1:
                             _applied_before = st.number_input(
                                 "Was %", min_value=0, max_value=900,
                                 value=_rec_before, step=10,
                                 key=f"applied_before_{_sel_id}",
-                                help="Bid % before the change (0 = no adjustment)",
+                                help="Bid % before the change",
                             )
                         with _ab2:
                             _applied_after = st.number_input(
@@ -3726,31 +3728,24 @@ with tab_ads:
                                 key=f"applied_after_{_sel_id}",
                                 help="Bid % you set in Amazon",
                             )
-
-                        if st.button(
-                            "✅ I Applied This",
-                            key=f"applied_btn_{_sel_id}",
-                            type="primary",
-                            use_container_width=True,
-                        ):
-                            _applied_status = log_manual_bid_change(
-                                campaign_name=_sel_camp,
-                                placement_type=_sel_place,
-                                marketplace=_sel_mkt,
-                                change_date=str(date.today()),
-                                bid_before=int(_applied_before),
-                                bid_after=int(_applied_after),
-                            )
-                            if _applied_status == "saved":
-                                st.success(
-                                    f"✅ Logged: {_sel_place} {_applied_before}% → {_applied_after}% today. "
-                                    "Upload the next report to see Period 2 ROAS."
+                        with _ab3:
+                            st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+                            if st.button("✅ Log it", key=f"applied_btn_{_sel_id}", type="primary", use_container_width=True):
+                                _applied_status = log_manual_bid_change(
+                                    campaign_name=_sel_camp,
+                                    placement_type=_sel_place,
+                                    marketplace=_sel_mkt,
+                                    change_date=str(date.today()),
+                                    bid_before=int(_applied_before),
+                                    bid_after=int(_applied_after),
                                 )
-                                st.rerun()
-                            elif _applied_status == "duplicate":
-                                st.warning("Already logged for today.")
-                            else:
-                                st.error(_applied_status)
+                                if _applied_status == "saved":
+                                    st.success(f"✅ {_applied_before}%→{_applied_after}% logged.")
+                                    st.rerun()
+                                elif _applied_status == "duplicate":
+                                    st.warning("Already logged for today.")
+                                else:
+                                    st.error(_applied_status)
 
                     # ── Bid history + effectiveness timeline ───────────────────
                     with _panel_hist:
