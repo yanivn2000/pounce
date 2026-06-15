@@ -4859,9 +4859,10 @@ with tab_amazon:
         _METRIC_LABELS = {
             "💵 Sales":             "sales",
             "🔁 Refunds":           "refunds",
+            "🏭 COGS":              "cogs",
             "📢 Advertising":       "advertising",
             "📦 Storage":           "storage",
-            "🏭 Long-term Storage": "lt_storage",
+            "📦 Long-term Storage": "lt_storage",
             "🧾 VAT / Tax":         "vat",
             "✅ Net Revenue":       "net",
             "🏷️ Promos":            "promos",
@@ -4881,6 +4882,29 @@ with tab_amazon:
 
         def _monthly_metric(conn, year, metric, mps):
             """Return {month: usd_value} for the given metric/year/marketplaces."""
+            # COGS: orders × product_costs (USD cost basis, from orders + product_costs tables)
+            if metric == "cogs":
+                rows = conn.execute("""
+                    SELECT
+                        CASE strftime('%m', o.order_date)
+                            WHEN '01' THEN 'Jan' WHEN '02' THEN 'Feb' WHEN '03' THEN 'Mar'
+                            WHEN '04' THEN 'Apr' WHEN '05' THEN 'May' WHEN '06' THEN 'Jun'
+                            WHEN '07' THEN 'Jul' WHEN '08' THEN 'Aug' WHEN '09' THEN 'Sep'
+                            WHEN '10' THEN 'Oct' WHEN '11' THEN 'Nov' WHEN '12' THEN 'Dec'
+                        END AS month,
+                        SUM(o.quantity * (
+                            COALESCE(pc.product_cost,  0) +
+                            COALESCE(pc.shipping_cost, 0) +
+                            COALESCE(pc.fba_fee,       0)
+                        )) AS cogs_usd
+                    FROM orders o
+                    LEFT JOIN product_costs pc ON pc.asin = o.asin
+                    WHERE strftime('%Y', o.order_date) = ?
+                      AND o.order_status NOT IN ('Cancelled', 'Pending')
+                    GROUP BY month
+                """, (str(year),)).fetchall()
+                return {r[0]: float(r[1] or 0) for r in rows if r[0] in MONTHS}
+
             ph = ",".join("?" * len(mps))
             p  = [year] + mps
             _Q = {
@@ -4894,12 +4918,6 @@ with tab_amazon:
                 "promos":      f"SELECT month, SUM(ABS(promo_rebates))   FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month",
             }
             rows = conn.execute(_Q[metric], p).fetchall()
-            # Convert to USD
-            _cur_map = {"CA":"CAD","US":"USD","UK":"GBP","DE":"EUR","FR":"EUR",
-                        "ES":"EUR","IT":"EUR","NL":"EUR","BE":"EUR","IE":"EUR",
-                        "PL":"PLN","SE":"SEK","AU":"AUD"}
-            # Return raw totals (already in local currency mixed) — for now return as-is
-            # since aggregation mixes currencies; caller does global _to_usd per-row
             return {r[0]: float(r[1] or 0) for r in rows if r[0] in MONTHS}
 
         # Query data for chart
