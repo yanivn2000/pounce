@@ -290,12 +290,19 @@ def _migrate_bid_changes(conn: sqlite3.Connection):
                 spend          REAL,
                 purchases      INTEGER,
                 profit         REAL,
+                notes          TEXT,
                 created_at     TEXT DEFAULT (datetime('now')),
                 UNIQUE(campaign_name, placement_type, marketplace, report_date)
             );
             CREATE INDEX IF NOT EXISTS idx_bid_changes_camp
                 ON bid_changes(campaign_name, marketplace, report_date);
         """)
+    except Exception:
+        pass
+    # Add notes column to existing installations
+    try:
+        conn.execute("ALTER TABLE bid_changes ADD COLUMN notes TEXT")
+        conn.commit()
     except Exception:
         pass
 

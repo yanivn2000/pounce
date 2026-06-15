@@ -151,6 +151,7 @@ def log_manual_bid_change(
     change_date: str,
     bid_before: int,
     bid_after: int,
+    notes: str = None,
 ) -> str:
     """
     Manually record a bid adjustment change that was applied in Amazon's UI.
@@ -181,16 +182,17 @@ def log_manual_bid_change(
     purchases = int(snap["purchases"] or 0)            if snap else 0
     profit    = 0.0
 
+    note_val = notes.strip() if notes and notes.strip() else None
     try:
         with conn:
             conn.execute("""
                 INSERT OR IGNORE INTO bid_changes
                     (campaign_name, placement_type, marketplace, report_date,
-                     bid_before, bid_after, roas, spend, purchases, profit)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                     bid_before, bid_after, roas, spend, purchases, profit, notes)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 campaign_name, placement_type, marketplace, change_date,
-                bid_before, bid_after, roas, spend, purchases, profit,
+                bid_before, bid_after, roas, spend, purchases, profit, note_val,
             ))
         affected = conn.execute("""
             SELECT COUNT(*) FROM bid_changes
@@ -259,7 +261,7 @@ def get_all_bid_changes(marketplace: str = None) -> pd.DataFrame:
     if marketplace:
         df = pd.read_sql_query("""
             SELECT report_date, campaign_name, placement_type, marketplace,
-                   bid_before, bid_after, roas, spend, purchases, profit
+                   bid_before, bid_after, roas, spend, purchases, profit, notes
             FROM bid_changes
             WHERE marketplace=?
             ORDER BY report_date DESC, campaign_name
@@ -267,7 +269,7 @@ def get_all_bid_changes(marketplace: str = None) -> pd.DataFrame:
     else:
         df = pd.read_sql_query("""
             SELECT report_date, campaign_name, placement_type, marketplace,
-                   bid_before, bid_after, roas, spend, purchases, profit
+                   bid_before, bid_after, roas, spend, purchases, profit, notes
             FROM bid_changes
             ORDER BY report_date DESC, campaign_name
         """, conn)

@@ -3670,43 +3670,26 @@ with tab_ads:
                         unsafe_allow_html=True,
                     )
 
-                    # ── Note + Applied — side by side, compact ─────────────────
+                    # ── Unified: Note + Applied in one action ──────────────────
                     _raw_note = _sel_data.get("notes")
                     _existing_note = "" if (_raw_note is None or (isinstance(_raw_note, float) and pd.isna(_raw_note))) else str(_raw_note)
                     _rec_after  = int(round(float(_sel_data.get("recommended_multiplier") or 0)))
                     _rec_before = int(round(float(_sel_data.get("current_multiplier")     or 0)))
 
-                    _panel_note, _panel_applied = st.columns(2)
+                    _panel_left, _panel_right = st.columns([3, 2])
 
-                    with _panel_note:
+                    with _panel_left:
                         st.markdown("**📝 Note**")
                         _note_val = st.text_area(
                             "Note",
                             value=_existing_note,
-                            placeholder="e.g. Seasonal spike, competitor left market…",
+                            placeholder="e.g. Seasonal campaign, competitor left…",
                             label_visibility="collapsed",
                             key=f"note_{_sel_id}",
                             height=68,
                         )
-                        _nc1, _nc2 = st.columns([3, 2])
-                        with _nc1:
-                            _apply_all = st.checkbox(
-                                "All placements",
-                                value=True,
-                                key=f"note_all_{_sel_id}",
-                                help="Apply note to all placements of this campaign",
-                            )
-                        with _nc2:
-                            if st.button("💾 Save", key=f"save_note_{_sel_id}", use_container_width=True):
-                                if _apply_all:
-                                    _n = save_campaign_note(_sel_camp, _sel_mkt, _note_val)
-                                    st.success(f"✅ Saved to {_n} placements.")
-                                else:
-                                    save_recommendation_note(_sel_id, _note_val)
-                                    st.success("✅ Saved.")
-                                st.rerun()
 
-                    with _panel_applied:
+                    with _panel_right:
                         st.markdown(
                             f"**✅ Applied in Amazon?** "
                             f"<span style='font-size:0.8rem;font-weight:normal;"
@@ -3726,7 +3709,35 @@ with tab_ads:
                                 value=_rec_after, step=10,
                                 key=f"applied_after_{_sel_id}",
                             )
-                        if st.button("✅ Log it", key=f"applied_btn_{_sel_id}", type="primary", use_container_width=True):
+
+                    # ── Single action row ──────────────────────────────────────
+                    _ba1, _ba2, _ba3 = st.columns([2, 2, 3])
+                    with _ba1:
+                        _apply_all = st.checkbox(
+                            "Note → all placements",
+                            value=True,
+                            key=f"note_all_{_sel_id}",
+                            help="Save note to all placements of this campaign",
+                        )
+                    with _ba2:
+                        if st.button("💾 Save Note only", key=f"save_note_{_sel_id}", use_container_width=True):
+                            if _apply_all:
+                                _n = save_campaign_note(_sel_camp, _sel_mkt, _note_val)
+                                st.success(f"✅ Note saved to {_n} placements.")
+                            else:
+                                save_recommendation_note(_sel_id, _note_val)
+                                st.success("✅ Note saved.")
+                            st.rerun()
+                    with _ba3:
+                        if st.button("✅ Applied — Log + Save Note", key=f"applied_btn_{_sel_id}",
+                                     type="primary", use_container_width=True):
+                            # 1. Save note to recommendation
+                            if _note_val.strip():
+                                if _apply_all:
+                                    save_campaign_note(_sel_camp, _sel_mkt, _note_val)
+                                else:
+                                    save_recommendation_note(_sel_id, _note_val)
+                            # 2. Log bid change (with note attached)
                             _applied_status = log_manual_bid_change(
                                 campaign_name=_sel_camp,
                                 placement_type=_sel_place,
@@ -3734,12 +3745,14 @@ with tab_ads:
                                 change_date=str(date.today()),
                                 bid_before=int(_applied_before),
                                 bid_after=int(_applied_after),
+                                notes=_note_val if _note_val.strip() else None,
                             )
                             if _applied_status == "saved":
-                                st.success(f"✅ {_applied_before}% → {_applied_after}% logged.")
+                                st.success(f"✅ {_applied_before}% → {_applied_after}% logged" +
+                                           (" + note saved." if _note_val.strip() else "."))
                                 st.rerun()
                             elif _applied_status == "duplicate":
-                                st.warning("Already logged for today.")
+                                st.warning("Bid change already logged for today.")
                             else:
                                 st.error(_applied_status)
 
@@ -4007,6 +4020,7 @@ with tab_ads:
                     "spend":          "Spend",
                     "purchases":      "Purchases",
                     "profit":         "Profit",
+                    "notes":          "📝 Note",
                 })
 
                 _cur = "£" if (_bc_mp not in ("All", "amazon.com")) else "$"
@@ -4017,15 +4031,16 @@ with tab_ads:
                     hide_index=True,
                     column_config={
                         "Date":        st.column_config.TextColumn("Date",        width=100),
-                        "Campaign":    st.column_config.TextColumn("Campaign",    width=260),
-                        "Placement":   st.column_config.TextColumn("Placement",   width=130),
-                        "Marketplace": st.column_config.TextColumn("Marketplace", width=110),
-                        "Before %":    st.column_config.NumberColumn("Before %",  format="%d%%", width=80),
-                        "After %":     st.column_config.NumberColumn("After %",   format="%d%%", width=80),
+                        "Campaign":    st.column_config.TextColumn("Campaign",    width=240),
+                        "Placement":   st.column_config.TextColumn("Placement",   width=120),
+                        "Marketplace": st.column_config.TextColumn("Marketplace", width=100),
+                        "Before %":    st.column_config.NumberColumn("Before %",  format="%d%%", width=75),
+                        "After %":     st.column_config.NumberColumn("After %",   format="%d%%", width=75),
                         "ROAS":        st.column_config.NumberColumn("ROAS",      format="%.2f", width=70),
-                        "Spend":       st.column_config.NumberColumn("Spend",     format=f"{_cur}%.2f", width=90),
-                        "Purchases":   st.column_config.NumberColumn("Purchases", format="%d",   width=90),
-                        "Profit":      st.column_config.NumberColumn("Profit",    format=f"{_cur}%.2f", width=90),
+                        "Spend":       st.column_config.NumberColumn("Spend",     format=f"{_cur}%.2f", width=85),
+                        "Purchases":   st.column_config.NumberColumn("Purchases", format="%d",   width=85),
+                        "Profit":      st.column_config.NumberColumn("Profit",    format=f"{_cur}%.2f", width=85),
+                        "📝 Note":     st.column_config.TextColumn("📝 Note",     width=200),
                     },
                 )
 
