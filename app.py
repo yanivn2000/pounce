@@ -4992,7 +4992,7 @@ with tab_amazon:
             )
             st.caption(f"📅 Comparing **{_period_label}**")
 
-            _alerts = _build_alerts(_amz_conn, _alert_thr, _amz_all_mps, _ya, _ma, _yb, _mb)
+            _alerts = _build_alerts(_amz_conn, _alert_thr, _sel_mps, _ya, _ma, _yb, _mb)
             if not _alerts:
                 st.success(f"✅ No significant changes above {int(_alert_thr*100)}% threshold.")
             else:
