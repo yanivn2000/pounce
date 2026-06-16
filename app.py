@@ -4912,16 +4912,46 @@ with tab_amazon:
 
             ph = ",".join("?" * len(mps))
             p  = [year] + mps
-            # All queries now group by month + currency so we can apply FX → USD
+            # Storage tx_type variants across all Amazon marketplaces
+            _STORAGE_TYPES = "','".join([
+                "FBA Inventory Fee",                               # EN
+                "Versand durch Amazon Lagergebühr",                # DE
+                "Tarifas de inventario de Logística de Amazon",    # ES
+                "Frais de stock Expédié par Amazon",               # FR
+                "Costo di stoccaggio Logistica di Amazon",         # IT
+                "FBA Inventory Fee - Correction",
+                "FBA Inventory Fee - Reversal",
+            ])
+            # Transfer/Debt equivalents to exclude from net
+            _TRANSFER_TYPES = "','".join([
+                "Transfer","Debt",
+                "Übertrag","Verbindlichkeit",    # DE
+                "Transfert","Solde négatif",      # FR
+                "Transferir","Saldo descubierto", # ES
+                "Overboeking","Schuld",           # NL
+                "Saldo negativo",                  # IT
+            ])
+            # All queries group by month + currency so we can apply FX → USD
             _Q = {
-                "sales":       f"SELECT month, currency, SUM(gross_sales)          FROM amazon_transactions WHERE year=? AND tx_type='Order'            AND marketplace IN ({ph}) GROUP BY month, currency",
-                "refunds":     f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='Refund'           AND marketplace IN ({ph}) GROUP BY month, currency",
-                "advertising": f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='Service Fee' AND LOWER(product_details) LIKE '%advertis%' AND marketplace IN ({ph}) GROUP BY month, currency",
-                "storage":     f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) NOT LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
-                "lt_storage":  f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) LIKE '%long%'  AND marketplace IN ({ph}) GROUP BY month, currency",
-                "vat":         f"SELECT month, currency, SUM(ABS(withheld_tax))    FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
-                "net":         f"SELECT month, currency, SUM(net_total)             FROM amazon_transactions WHERE year=? AND tx_type NOT IN ('Transfer','Debt') AND marketplace IN ({ph}) GROUP BY month, currency",
-                "promos":      f"SELECT month, currency, SUM(ABS(promo_rebates))   FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
+                "sales":       f"SELECT month, currency, SUM(gross_sales)    FROM amazon_transactions WHERE year=? AND tx_type='Order' AND marketplace IN ({ph}) GROUP BY month, currency",
+                "refunds":     f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND tx_type='Refund' AND marketplace IN ({ph}) GROUP BY month, currency",
+                "advertising": f"""SELECT month, currency, SUM(ABS(net_total))
+                    FROM amazon_transactions
+                    WHERE year=? AND tx_type='Service Fee'
+                      AND (
+                        LOWER(product_details) LIKE '%advertis%'
+                        OR product_details = 'Werbekosten'
+                        OR product_details LIKE '%publicité%'
+                        OR product_details LIKE '%pubblicità%'
+                        OR product_details = 'Koszt reklamy'
+                      )
+                      AND marketplace IN ({ph})
+                    GROUP BY month, currency""",
+                "storage":    f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND tx_type IN ('{_STORAGE_TYPES}') AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
+                "lt_storage": f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND tx_type IN ('{_STORAGE_TYPES}') AND LOWER(COALESCE(product_details,'')) LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
+                "vat":        f"SELECT month, currency, SUM(ABS(withheld_tax)) FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
+                "net":        f"SELECT month, currency, SUM(net_total) FROM amazon_transactions WHERE year=? AND tx_type NOT IN ('{_TRANSFER_TYPES}') AND marketplace IN ({ph}) GROUP BY month, currency",
+                "promos":     f"SELECT month, currency, SUM(ABS(promo_rebates)) FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
             }
             rows = conn.execute(_Q[metric], p).fetchall()
             _out: dict = {}
