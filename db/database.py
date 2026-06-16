@@ -271,6 +271,7 @@ def init_db():
     _migrate_returns(conn)
     _migrate_orders_address_fields(conn)
     _migrate_bundle_sales(conn)
+    _migrate_bid_changes_unique_constraint(conn)
     # Amazon transactions module
     from db.amazon_module import init_amazon_tables
     init_amazon_tables(conn)
@@ -305,6 +306,59 @@ def _migrate_bid_changes(conn: sqlite3.Connection):
     # Add notes column to existing installations
     try:
         conn.execute("ALTER TABLE bid_changes ADD COLUMN notes TEXT")
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_bid_changes_unique_constraint(conn: sqlite3.Connection):
+    """
+    Fix bid_changes UNIQUE constraint to include bid_before + bid_after.
+    Old: UNIQUE(campaign_name, placement_type, marketplace, report_date)
+    New: UNIQUE(campaign_name, placement_type, marketplace, report_date, bid_before, bid_after)
+    This allows multiple bid changes per campaign on the same day (e.g. 15→35 and 35→50).
+    SQLite doesn't support DROP CONSTRAINT so we recreate the table.
+    """
+    try:
+        # Check if old constraint exists (no bid_before/after in unique index)
+        idx = conn.execute("""
+            SELECT sql FROM sqlite_master
+            WHERE type='table' AND name='bid_changes'
+        """).fetchone()
+        if idx and "bid_before" not in (idx[0] or "").split("UNIQUE")[1] if "UNIQUE" in (idx[0] or "") else False:
+            return  # Already migrated
+        # Check if already has the new constraint
+        tbl_sql = (idx[0] or "") if idx else ""
+        if "bid_before" in tbl_sql and "bid_after" in tbl_sql:
+            return  # Already correct
+        conn.executescript("""
+            PRAGMA foreign_keys=OFF;
+            CREATE TABLE IF NOT EXISTS bid_changes_new (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_name  TEXT NOT NULL,
+                placement_type TEXT NOT NULL,
+                marketplace    TEXT NOT NULL,
+                report_date    TEXT NOT NULL,
+                bid_before     REAL NOT NULL,
+                bid_after      REAL NOT NULL,
+                roas           REAL,
+                spend          REAL,
+                purchases      INTEGER,
+                profit         REAL,
+                notes          TEXT,
+                created_at     TEXT DEFAULT (datetime('now')),
+                UNIQUE(campaign_name, placement_type, marketplace, report_date, bid_before, bid_after)
+            );
+            INSERT OR IGNORE INTO bid_changes_new
+                SELECT id, campaign_name, placement_type, marketplace, report_date,
+                       bid_before, bid_after, roas, spend, purchases, profit, notes, created_at
+                FROM bid_changes;
+            DROP TABLE bid_changes;
+            ALTER TABLE bid_changes_new RENAME TO bid_changes;
+            CREATE INDEX IF NOT EXISTS idx_bid_changes_camp
+                ON bid_changes(campaign_name, marketplace, report_date);
+            PRAGMA foreign_keys=ON;
+        """)
         conn.commit()
     except Exception:
         pass
