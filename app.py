@@ -4856,65 +4856,18 @@ with tab_amazon:
         st.markdown("<div style='margin:4px 0'></div>", unsafe_allow_html=True)
 
         # ── MoM Alerts ───────────────────────────────────────────────────────────
-        def _get_metric_val(conn, year, month, mp, metric, storage_types, adv_keywords):
-            """Return USD value for one metric/month/marketplace."""
-            cur_rows = conn.execute(
-                "SELECT currency, SUM(gross_sales) FROM amazon_transactions "
-                "WHERE year=? AND month=? AND tx_type='Order' AND marketplace=? GROUP BY currency",
-                [year, month, mp]
-            ).fetchall() if metric == "sales" else []
-            if metric == "sales":
-                return sum(_to_usd(float(r[1] or 0), r[0]) for r in cur_rows)
-            if metric == "refunds":
-                rows = conn.execute(
-                    "SELECT currency, SUM(ABS(net_total)) FROM amazon_transactions "
-                    "WHERE year=? AND month=? AND tx_type='Refund' AND marketplace=? GROUP BY currency",
-                    [year, month, mp]).fetchall()
-                return sum(_to_usd(float(r[1] or 0), r[0]) for r in rows)
-            if metric == "advertising":
-                rows = conn.execute(
-                    f"SELECT currency, SUM(ABS(net_total)) FROM amazon_transactions "
-                    f"WHERE year=? AND month=? AND tx_type='Service Fee' AND ({adv_keywords}) "
-                    f"AND marketplace=? GROUP BY currency", [year, month, mp]).fetchall()
-                return sum(_to_usd(float(r[1] or 0), r[0]) for r in rows)
-            if metric == "amazon_fees":
-                rows = conn.execute(
-                    "SELECT currency, SUM(ABS(amazon_fees)) FROM amazon_transactions "
-                    "WHERE year=? AND month=? AND tx_type='Order' AND marketplace=? GROUP BY currency",
-                    [year, month, mp]).fetchall()
-                return sum(_to_usd(float(r[1] or 0), r[0]) for r in rows)
-            if metric == "storage":
-                rows = conn.execute(
-                    f"SELECT currency, SUM(ABS(net_total)) FROM amazon_transactions "
-                    f"WHERE year=? AND month=? AND tx_type IN ('{storage_types}') "
-                    f"AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%' "
-                    f"AND marketplace=? GROUP BY currency", [year, month, mp]).fetchall()
-                return sum(_to_usd(float(r[1] or 0), r[0]) for r in rows)
-            if metric == "lt_storage":
-                rows = conn.execute(
-                    f"SELECT currency, SUM(ABS(net_total)) FROM amazon_transactions "
-                    f"WHERE year=? AND month=? AND tx_type IN ('{storage_types}') "
-                    f"AND LOWER(COALESCE(product_details,'')) LIKE '%long%' "
-                    f"AND marketplace=? GROUP BY currency", [year, month, mp]).fetchall()
-                return sum(_to_usd(float(r[1] or 0), r[0]) for r in rows)
-            return 0.0
-
         def _build_alerts(conn, threshold, all_mps):
             from datetime import date
             today   = date.today()
             cy, cm  = today.year, today.month
-            cd      = today.day   # day of month
 
             def prev_ym(y, m):
                 return (y-1, 12) if m == 1 else (y, m-1)
 
-            # Period pairs: (label, (A_year, A_month_idx), (B_year, B_month_idx))
-            # A = more recent, B = older (baseline)
-            py, pm   = prev_ym(cy, cm)                  # last full month
-            p2y, p2m = prev_ym(py, pm)                  # month before that
-            pm_name  = MONTHS[pm - 1]
+            py, pm   = prev_ym(cy, cm)      # last full month
+            p2y, p2m = prev_ym(py, pm)      # month before that
+            pm_name  = MONTHS[pm  - 1]
             p2m_name = MONTHS[p2m - 1]
-            cm_name  = MONTHS[cm - 1]
 
             _ST = "','".join([
                 "FBA Inventory Fee","Versand durch Amazon Lagergebühr",
@@ -4925,43 +4878,84 @@ with tab_amazon:
                    "OR product_details LIKE '%publicité%' OR product_details LIKE '%pubblicità%' "
                    "OR product_details='Koszt reklamy'")
 
-            # Metric metadata: (key, label, is_cost)
-            _METRICS = [
-                ("sales",       "💵 Sales",        False),
-                ("refunds",     "🔁 Refunds",       True),
-                ("advertising", "📢 Advertising",   True),
-                ("amazon_fees", "🏦 Amazon Fees",   True),
-                ("storage",     "📦 Storage",       True),
-                ("lt_storage",  "📦 LT Storage",    True),
-            ]
+            def _usd_sum(rows):
+                return sum(_to_usd(float(r[1] or 0), r[0]) for r in rows)
+
+            def _q(sql, p):
+                return conn.execute(sql, p).fetchall()
+
+            def _vals(y, m_name, mp):
+                """Return dict of raw USD values for one month/marketplace."""
+                p = [y, m_name, mp]
+                sales = _usd_sum(_q(
+                    "SELECT currency,SUM(gross_sales) FROM amazon_transactions "
+                    "WHERE year=? AND month=? AND tx_type='Order' AND marketplace=? GROUP BY currency", p))
+                fees = _usd_sum(_q(
+                    "SELECT currency,SUM(ABS(amazon_fees)) FROM amazon_transactions "
+                    "WHERE year=? AND month=? AND tx_type='Order' AND marketplace=? GROUP BY currency", p))
+                refunds = _usd_sum(_q(
+                    "SELECT currency,SUM(ABS(net_total)) FROM amazon_transactions "
+                    "WHERE year=? AND month=? AND tx_type='Refund' AND marketplace=? GROUP BY currency", p))
+                adv = _usd_sum(_q(
+                    f"SELECT currency,SUM(ABS(net_total)) FROM amazon_transactions "
+                    f"WHERE year=? AND month=? AND tx_type='Service Fee' AND ({_AV}) "
+                    f"AND marketplace=? GROUP BY currency", p))
+                storage = _usd_sum(_q(
+                    f"SELECT currency,SUM(ABS(net_total)) FROM amazon_transactions "
+                    f"WHERE year=? AND month=? AND tx_type IN ('{_ST}') "
+                    f"AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%' "
+                    f"AND marketplace=? GROUP BY currency", p))
+                lt_storage = _usd_sum(_q(
+                    f"SELECT currency,SUM(ABS(net_total)) FROM amazon_transactions "
+                    f"WHERE year=? AND month=? AND tx_type IN ('{_ST}') "
+                    f"AND LOWER(COALESCE(product_details,'')) LIKE '%long%' "
+                    f"AND marketplace=? GROUP BY currency", p))
+                coupons = _usd_sum(_q(
+                    "SELECT currency,SUM(ABS(net_total)) FROM amazon_transactions "
+                    "WHERE year=? AND month=? AND tx_type='Service Fee' "
+                    "AND LOWER(product_details) LIKE '%coupon%' "
+                    "AND marketplace=? GROUP BY currency", p))
+                return {
+                    "sales": sales, "fees": fees, "refunds": refunds,
+                    "adv": adv, "storage": storage, "lt_storage": lt_storage,
+                    "coupons": coupons,
+                }
 
             alerts = []
             for mp in all_mps:
-                for mkey, mlabel, is_cost in _METRICS:
-                    # Comparison 1: last full month vs month before
-                    va = _get_metric_val(conn, py, pm_name,  mp, mkey, _ST, _AV)
-                    vb = _get_metric_val(conn, p2y, p2m_name, mp, mkey, _ST, _AV)
-                    if vb > 5:   # ignore tiny base values
-                        pct = (va - vb) / vb
-                        if abs(pct) >= threshold:
-                            bad = (pct > 0) == is_cost   # cost up OR revenue down = bad
-                            alerts.append({
-                                "mp": mp, "metric": mlabel,
-                                "period": f"{p2m_name}→{pm_name}",
-                                "val_a": va, "val_b": vb, "pct": pct, "bad": bad,
-                            })
-                    # Comparison 2: current month (partial) vs same days last month
-                    if cd >= 5:   # only if at least 5 days elapsed
-                        vc = conn.execute(
-                            f"SELECT SUM(ABS(net_total)) FROM amazon_transactions "
-                            f"WHERE tx_date LIKE ? AND marketplace=?",
-                            [f"{cy}-{cm:02d}-%", mp]).fetchone()[0] or 0
-                        vp = conn.execute(
-                            f"SELECT SUM(ABS(net_total)) FROM amazon_transactions "
-                            f"WHERE tx_date LIKE ? AND CAST(SUBSTR(tx_date,9,2) AS INTEGER) <= ? "
-                            f"AND marketplace=?",
-                            [f"{py}-{pm:02d}-%", cd, mp]).fetchone()[0] or 0
-                        # (skip per-metric breakdown for partial month — use net_total overall)
+                va = _vals(py,  pm_name,  mp)
+                vb = _vals(p2y, p2m_name, mp)
+
+                # Rate-based metrics (scale-independent)
+                rate_metrics = []
+                if vb["sales"] > 10 and va["sales"] > 10:
+                    rate_metrics += [
+                        ("fee_rate",    "🏦 Fee Rate",     va["fees"]/va["sales"],    vb["fees"]/vb["sales"],    True),
+                        ("refund_rate", "🔁 Refund Rate",  va["refunds"]/va["sales"], vb["refunds"]/vb["sales"], True),
+                    ]
+
+                # Absolute metrics (not driven purely by sales volume)
+                abs_metrics = [
+                    ("sales",      "💵 Sales",       va["sales"],      vb["sales"],      False),
+                    ("adv",        "📢 Advertising", va["adv"],        vb["adv"],        True),
+                    ("storage",    "📦 Storage",     va["storage"],    vb["storage"],    True),
+                    ("lt_storage", "📦 LT Storage",  va["lt_storage"], vb["lt_storage"], True),
+                    ("coupons",    "🏷️ Coupons",     va["coupons"],    vb["coupons"],    True),
+                ]
+
+                for mkey, mlabel, v_new, v_old, is_cost in rate_metrics + abs_metrics:
+                    if v_old < 5:
+                        continue
+                    pct = (v_new - v_old) / v_old
+                    if abs(pct) < threshold:
+                        continue
+                    bad = (pct > 0) == is_cost
+                    is_rate = mkey in ("fee_rate", "refund_rate")
+                    alerts.append({
+                        "mp": mp, "metric": mlabel, "is_rate": is_rate,
+                        "period": f"{p2m_name}→{pm_name}",
+                        "val_a": v_new, "val_b": v_old, "pct": pct, "bad": bad,
+                    })
 
             return sorted(alerts, key=lambda x: abs(x["pct"]), reverse=True)
 
@@ -4969,7 +4963,7 @@ with tab_amazon:
             _al_col, _thr_col = st.columns([4, 1])
             with _thr_col:
                 _alert_thr = st.number_input(
-                    "Threshold %", min_value=5, max_value=200, value=30,
+                    "Threshold %", min_value=5, max_value=200, value=50,
                     step=5, key="alert_threshold",
                     help="Alert when change exceeds this %"
                 ) / 100.0
@@ -4984,12 +4978,16 @@ with tab_amazon:
                         arrow   = "↑" if al['pct'] > 0 else "↓"
                         color   = "#ffd7d7" if al['bad'] else "#d4edda"
                         icon    = "🔴" if al['bad'] else "🟢"
+                        if al.get("is_rate"):
+                            val_fmt = (f"{al['val_b']*100:.1f}% → {al['val_a']*100:.1f}%")
+                        else:
+                            val_fmt = f"${al['val_b']:,.0f} → ${al['val_a']:,.0f}"
                         _alert_cols[i % 3].markdown(
                             f"<div style='background:{color};padding:8px 10px;border-radius:6px;"
                             f"margin-bottom:6px;font-size:0.82rem'>"
                             f"{icon} <b>{al['mp']} · {al['metric']}</b><br>"
                             f"{arrow} {pct_str} &nbsp;·&nbsp; {al['period']}<br>"
-                            f"<span style='color:#555'>${al['val_b']:,.0f} → ${al['val_a']:,.0f}</span>"
+                            f"<span style='color:#555'>{val_fmt}</span>"
                             f"</div>", unsafe_allow_html=True
                         )
 
