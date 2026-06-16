@@ -64,6 +64,14 @@ MARKETPLACE_MAP = {
     "A1VC38T7YXB528": ("JP", "JPY"),
 }
 
+_MP_CODE_TO_CURRENCY = {
+    "US": "USD", "CA": "CAD", "UK": "GBP",
+    "DE": "EUR", "FR": "EUR", "ES": "EUR", "IT": "EUR",
+    "NL": "EUR", "BE": "EUR", "IE": "EUR", "PL": "PLN",
+    "SE": "SEK", "AU": "AUD", "MX": "MXN", "BR": "BRL",
+}
+
+
 def _normalize_marketplace(raw):
     raw = (raw or "").strip()
     if raw in MARKETPLACE_MAP:
@@ -72,7 +80,8 @@ def _normalize_marketplace(raw):
     for domain, result in _DOMAIN_MP_MAP:
         if domain in lower:
             return result
-    return (raw.upper()[:8] or "US", "USD")
+    code = raw.upper()[:8] or "US"
+    return (code, _MP_CODE_TO_CURRENCY.get(code, "USD"))
 
 
 # ── Month name maps ────────────────────────────────────────────────────────────
@@ -467,11 +476,17 @@ def parse_amazon_transactions(filepath: str) -> list:
         mp_pairs = df[col_marketplace].apply(_normalize_marketplace)
         df["_marketplace"] = mp_pairs.apply(lambda x: x[0])
         df["_currency"]    = mp_pairs.apply(lambda x: x[1])
+        # Rows with empty marketplace (e.g. Service Fee / advertising) inherit the
+        # most common marketplace in this file so CA/UK advertising isn't misattributed to US.
+        unknown_mask = (df[col_marketplace].str.strip() == "")
+        mp_mode = df.loc[~unknown_mask, "_marketplace"].mode()
+        if len(mp_mode):
+            df.loc[unknown_mask, "_marketplace"] = mp_mode[0]
+            # Re-derive currency from the filled marketplace
+            df.loc[unknown_mask, "_currency"] = df.loc[unknown_mask, "_marketplace"].apply(
+                lambda m: _normalize_marketplace(m)[1]
+            )
         if is_eu_file:
-            unknown_mask = df["_marketplace"].isin(["", "US"]) & (df[col_marketplace].str.strip() == "")
-            mp_mode = df.loc[df[col_marketplace].str.strip() != "", "_marketplace"].mode()
-            if len(mp_mode):
-                df.loc[unknown_mask, "_marketplace"] = mp_mode[0]
             df.loc[df["_currency"] == "USD", "_currency"] = eu_currency
     else:
         df["_marketplace"] = "US"
