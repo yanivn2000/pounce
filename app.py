@@ -5287,7 +5287,7 @@ with tab_cashflow:
     from db.cashflow_module import (
         init_cashflow_tables, get_accounts, update_account_balance,
         get_items, add_item, delete_item, add_account,
-        build_forecast, _CATEGORIES, MONTHS as CF_MONTHS,
+        build_forecast, _CATEGORIES, MONTHS as CF_MONTHS, COMPANY_LABELS,
     )
     import sqlite3 as _cf_sqlite
 
@@ -5507,9 +5507,9 @@ with tab_cashflow:
     # ════════════════════════════════════════════════════════════════════════
     with _cf_tab_items:
         _cf_items = get_items(_cf_conn)
-        _cf_accs2 = get_accounts(_cf_conn)
-        _acc_map  = {a[0]: a[1] for a in _cf_accs2}  # id -> name
-        _acc_opts = {a[1]: a[0] for a in _cf_accs2}  # name -> id
+
+        # Company options: internal key → display label
+        _co_opts = {"LLC": "EOS ONLINE LLC", "IL": "EOS TRADE LTD"}
 
         # ── Existing items ────────────────────────────────────────────────
         if _cf_items:
@@ -5517,7 +5517,7 @@ with tab_cashflow:
             _item_rows = []
             for item in _cf_items:
                 iid, name, direction, category, amount, currency, frequency, \
-                    account_id, start_ym, end_ym, notes = item
+                    company, start_ym, end_ym, notes = item
                 sym = "$" if currency == "USD" else "₪"
                 _item_rows.append({
                     "ID": iid,
@@ -5525,8 +5525,8 @@ with tab_cashflow:
                     "Name": name,
                     "Category": category,
                     "Amount": f"{sym}{amount:,.0f}",
-                    "Frequency": frequency,
-                    "Account": _acc_map.get(account_id, "—"),
+                    "Freq": frequency.capitalize(),
+                    "Company": _co_opts.get(company, company),
                     "From": start_ym,
                     "Until": end_ym or "∞",
                 })
@@ -5549,28 +5549,29 @@ with tab_cashflow:
         _today_ym = __import__("datetime").date.today().strftime("%Y-%m")
         with st.form("cf_add_item"):
             _i1, _i2, _i3 = st.columns([3,1,1])
-            _iname    = _i1.text_input("Name *", placeholder="e.g. Yaniv Salary")
-            _idir     = _i2.selectbox("Direction", ["out","in"], format_func=lambda x: "↓ Expense" if x=="out" else "↑ Income")
-            _icat     = _i3.selectbox("Category", _CATEGORIES)
+            _iname = _i1.text_input("Name *", placeholder="e.g. Yaniv Salary")
+            _idir  = _i2.selectbox("Direction", ["out","in"],
+                                    format_func=lambda x: "↓ Expense" if x=="out" else "↑ Income")
+            _icat  = _i3.selectbox("Category", _CATEGORIES)
 
             _i4, _i5, _i6, _i7 = st.columns([1,1,1,2])
-            _iamount  = _i4.number_input("Amount *", min_value=0.0, step=100.0, format="%.0f")
-            _icur     = _i5.selectbox("Currency", ["USD","ILS"])
-            _ifreq    = _i6.selectbox("Frequency", ["monthly","quarterly","annual","once"],
-                                       format_func=lambda x: x.capitalize())
-            _iacc_name= _i7.selectbox("Account", list(_acc_opts.keys()))
+            _iamount = _i4.number_input("Amount *", min_value=0.0, step=100.0, format="%.0f")
+            _icur    = _i5.selectbox("Currency", ["USD","ILS"])
+            _ifreq   = _i6.selectbox("Frequency", ["monthly","quarterly","annual","once"],
+                                      format_func=lambda x: x.capitalize())
+            _ico_label = _i7.selectbox("Company", list(_co_opts.values()))
+            _ico = next(k for k, v in _co_opts.items() if v == _ico_label)
 
             _i8, _i9, _i10 = st.columns([1,1,2])
-            _istart   = _i8.text_input("Start (YYYY-MM) *", value=_today_ym)
-            _iend     = _i9.text_input("End (YYYY-MM)", placeholder="leave blank = forever")
-            _inotes   = _i10.text_input("Notes", placeholder="optional")
+            _istart = _i8.text_input("Start (YYYY-MM) *", value=_today_ym)
+            _iend   = _i9.text_input("End (YYYY-MM)", placeholder="leave blank = forever")
+            _inotes = _i10.text_input("Notes", placeholder="optional")
 
             if st.form_submit_button("➕ Add Item"):
                 if _iname and _iamount > 0 and _istart:
                     add_item(
                         _cf_conn, _iname, _idir, _icat, _iamount, _icur,
-                        _ifreq, _acc_opts.get(_iacc_name), _istart,
-                        _iend or None, _inotes or None
+                        _ifreq, _ico, _istart, _iend or None, _inotes or None
                     )
                     st.success(f"✅ '{_iname}' added.")
                     st.rerun()
