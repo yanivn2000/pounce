@@ -388,12 +388,14 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_admin = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "🛒 Amazon Transactions", "⚙️ Admin"
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_admin = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
+        "🛒 Amazon Transactions", "💰 Cash Forecast", "⚙️ Admin"
     ])
 else:
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products", "🛒 Amazon Transactions"
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow = st.tabs([
+        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
+        "🛒 Amazon Transactions", "💰 Cash Forecast"
     ])
     tab_admin = None
 
@@ -5279,7 +5281,306 @@ with tab_amazon:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — ADMIN  (admin role only)
+# TAB 6 — CASH FORECAST
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_cashflow:
+    from db.cashflow_module import (
+        init_cashflow_tables, get_accounts, update_account_balance,
+        get_items, add_item, delete_item, add_account,
+        build_forecast, _CATEGORIES, MONTHS as CF_MONTHS,
+    )
+    import sqlite3 as _cf_sqlite
+
+    _cf_conn = _cf_sqlite.connect(
+        __import__("db.database", fromlist=["DB_PATH"]).DB_PATH,
+        check_same_thread=False
+    )
+    init_cashflow_tables(_cf_conn)
+
+    st.markdown("## 💰 Cash Forecast")
+
+    # ── Settings bar ─────────────────────────────────────────────────────────
+    _s1, _s2, _s3, _s4 = st.columns([1, 1, 1, 1])
+    with _s1:
+        _cf_usd_nis = st.number_input(
+            "USD / NIS rate", min_value=2.0, max_value=6.0,
+            value=3.62, step=0.01, key="cf_usd_nis",
+            help="Used to convert ILS ↔ USD in the merged total view"
+        )
+    with _s2:
+        _cf_growth = st.number_input(
+            "Amazon growth %", min_value=-50, max_value=200,
+            value=25, step=5, key="cf_growth",
+            help="Applied to last year's Amazon payout as forecast base"
+        ) / 100.0
+    with _s3:
+        _cf_months = st.selectbox(
+            "Forecast horizon", [6, 9, 12, 18, 24],
+            index=2, key="cf_months"
+        )
+    with _s4:
+        _cf_warn_usd = st.number_input(
+            "⚠️ Low cash threshold (USD)", min_value=0,
+            value=50000, step=5000, key="cf_warn",
+            help="Highlight months where total USD equivalent drops below this"
+        )
+
+    st.divider()
+
+    # ── Sub-tabs ──────────────────────────────────────────────────────────────
+    _cf_tab_forecast, _cf_tab_accounts, _cf_tab_items = st.tabs([
+        "📊 Forecast", "🏦 Accounts & Balances", "📋 Scheduled Items"
+    ])
+
+    # ════════════════════════════════════════════════════════════════════════
+    # FORECAST VIEW
+    # ════════════════════════════════════════════════════════════════════════
+    with _cf_tab_forecast:
+        _cf_accounts, _cf_result = build_forecast(
+            _cf_conn, _cf_months, _cf_usd_nis, _cf_growth
+        )
+
+        if not _cf_result:
+            st.info("No forecast data yet. Add accounts and scheduled items first.")
+        else:
+            # Build display table
+            import pandas as _cf_pd
+
+            _col_labels = [f"{CF_MONTHS[r['month']-1]} {r['year']}" for r in _cf_result]
+
+            # ── Per-account rows ──────────────────────────────────────────
+            _rows = []
+            for acc in _cf_accounts:
+                aid, aname, acompany, acur, *_ = acc
+                sym = "$" if acur == "USD" else "₪"
+                row = {"Account": f"{aname} ({acur})"}
+                for r in _cf_result:
+                    bal = r["balances"].get(aid, 0.0)
+                    row[f"{CF_MONTHS[r['month']-1]} {r['year']}"] = bal
+                _rows.append(row)
+
+            # ── Total USD equivalent row ──────────────────────────────────
+            total_row = {"Account": "🌐 TOTAL (USD equiv.)"}
+            _warn_months = []
+            for r in _cf_result:
+                col = f"{CF_MONTHS[r['month']-1]} {r['year']}"
+                total_usd = 0.0
+                for acc in _cf_accounts:
+                    aid, aname, acompany, acur, *_ = acc
+                    bal = r["balances"].get(aid, 0.0)
+                    if acur == "USD":
+                        total_usd += bal
+                    elif acur == "ILS":
+                        total_usd += bal / _cf_usd_nis if _cf_usd_nis else 0
+                total_row[col] = total_usd
+                if total_usd < _cf_warn_usd:
+                    _warn_months.append(col)
+
+            _rows.append(total_row)
+            _df_forecast = _cf_pd.DataFrame(_rows).set_index("Account")
+
+            # ── Colour-format the dataframe ───────────────────────────────
+            def _cf_fmt(val, col, row_label, warn_months):
+                if not isinstance(val, (int, float)):
+                    return val
+                sym = "₪" if "ILS" in row_label else "$"
+                if abs(val) >= 1_000_000:
+                    return f"{sym}{val/1_000_000:.1f}M"
+                if abs(val) >= 1_000:
+                    return f"{sym}{val:,.0f}"
+                return f"{sym}{val:.0f}"
+
+            # Display with background colours
+            def _highlight(df):
+                styles = _cf_pd.DataFrame("", index=df.index, columns=df.columns)
+                for col in df.columns:
+                    if col in _warn_months:
+                        styles.loc["🌐 TOTAL (USD equiv.)", col] = "background-color:#ffd7d7;font-weight:bold"
+                    else:
+                        styles.loc["🌐 TOTAL (USD equiv.)", col] = "background-color:#d4edda;font-weight:bold"
+                # Negative individual accounts
+                for idx in df.index:
+                    if idx == "🌐 TOTAL (USD equiv.)":
+                        continue
+                    for col in df.columns:
+                        v = df.loc[idx, col]
+                        if isinstance(v, (int, float)) and v < 0:
+                            styles.loc[idx, col] = "background-color:#fff3cd"
+                return styles
+
+            # Format numbers
+            _df_display = _df_forecast.copy()
+            for col in _df_display.columns:
+                _df_display[col] = _df_display.apply(
+                    lambda row: _cf_fmt(row[col], col, row.name, _warn_months),
+                    axis=1
+                )
+
+            st.dataframe(
+                _df_forecast.style.apply(_highlight, axis=None)
+                .format(lambda v: f"${v:,.0f}" if v >= 0 else f"(${abs(v):,.0f})"
+                        if isinstance(v, float) else v),
+                use_container_width=True, height=min(60 + 35 * len(_rows), 600)
+            )
+
+            if _warn_months:
+                st.warning(f"⚠️ Low cash alert in: **{', '.join(_warn_months)}** — total drops below ${_cf_warn_usd:,}")
+
+            # ── Chart: total USD over time ────────────────────────────────
+            st.markdown("#### Total Liquidity (USD equivalent)")
+            _chart_data = {
+                "Month": _col_labels,
+                "Total USD": [_df_forecast.loc["🌐 TOTAL (USD equiv.)", c] for c in _col_labels],
+            }
+            _chart_df = _cf_pd.DataFrame(_chart_data).set_index("Month")
+            st.line_chart(_chart_df, use_container_width=True)
+
+            # ── Monthly flow detail (expandable) ─────────────────────────
+            with st.expander("📋 Monthly cash flow detail"):
+                for r in _cf_result:
+                    col_label = f"{CF_MONTHS[r['month']-1]} {r['year']}"
+                    infl  = [f for f in r["flows"] if f["direction"] == "in"]
+                    outfl = [f for f in r["flows"] if f["direction"] == "out"]
+                    st.markdown(f"**{col_label}** — In: ${r['total_in']:,.0f} · Out: ${r['total_out']:,.0f}")
+                    if infl or outfl:
+                        _fd_rows = []
+                        for f in infl:
+                            sym = "₪" if f["currency"] == "ILS" else "$"
+                            _fd_rows.append({"↕": "↑ In", "Name": f["name"], "Amount": f"{sym}{f['amount']:,.0f}"})
+                        for f in outfl:
+                            sym = "₪" if f["currency"] == "ILS" else "$"
+                            _fd_rows.append({"↕": "↓ Out", "Name": f["name"], "Amount": f"{sym}{f['amount']:,.0f}"})
+                        st.dataframe(_cf_pd.DataFrame(_fd_rows), use_container_width=True, hide_index=True)
+                    st.divider()
+
+    # ════════════════════════════════════════════════════════════════════════
+    # ACCOUNTS & BALANCES
+    # ════════════════════════════════════════════════════════════════════════
+    with _cf_tab_accounts:
+        _cf_accs = get_accounts(_cf_conn)
+
+        st.markdown("### Current Balances")
+        st.caption("Update whenever you check your accounts (weekly recommended).")
+
+        # Show accounts with editable balance
+        for acc in _cf_accs:
+            aid, aname, acompany, acur, abal, alimit, asort, aupdated = acc
+            sym = "$" if acur == "USD" else "₪"
+            col_name, col_bal, col_btn = st.columns([3, 2, 1])
+            col_name.markdown(
+                f"**{aname}** &nbsp; <span style='color:#888;font-size:0.8rem'>"
+                f"{acompany} · {acur}"
+                + (f" · limit {sym}{alimit:,.0f}" if alimit else "")
+                + f" · updated {aupdated[:10]}</span>",
+                unsafe_allow_html=True
+            )
+            new_bal = col_bal.number_input(
+                f"Balance {aname}", value=float(abal),
+                step=100.0, label_visibility="collapsed",
+                key=f"cf_bal_{aid}", format="%.0f"
+            )
+            if col_btn.button("Save", key=f"cf_save_{aid}"):
+                update_account_balance(_cf_conn, aid, new_bal)
+                st.success(f"✅ {aname} updated to {sym}{new_bal:,.0f}")
+                st.rerun()
+
+            if alimit and abal < -alimit:
+                st.warning(f"⚠️ {aname} is below credit limit! {sym}{abal:,.0f} (limit {sym}{alimit:,.0f})")
+
+        st.divider()
+        st.markdown("### Add Account")
+        with st.form("cf_add_account"):
+            _ac1, _ac2, _ac3, _ac4, _ac5 = st.columns([2,1,1,1,1])
+            _new_aname  = _ac1.text_input("Name", placeholder="e.g. Mercury")
+            _new_acomp  = _ac2.selectbox("Company", ["LLC","IL"])
+            _new_acur   = _ac3.selectbox("Currency", ["USD","ILS"])
+            _new_abal   = _ac4.number_input("Balance", value=0.0, step=100.0, format="%.0f")
+            _new_alimit = _ac5.number_input("Credit limit", value=0.0, step=1000.0, format="%.0f")
+            if st.form_submit_button("➕ Add Account"):
+                if _new_aname:
+                    add_account(_cf_conn, _new_aname, _new_acomp, _new_acur, _new_abal, _new_alimit)
+                    st.success(f"✅ Account '{_new_aname}' added.")
+                    st.rerun()
+
+    # ════════════════════════════════════════════════════════════════════════
+    # SCHEDULED ITEMS
+    # ════════════════════════════════════════════════════════════════════════
+    with _cf_tab_items:
+        _cf_items = get_items(_cf_conn)
+        _cf_accs2 = get_accounts(_cf_conn)
+        _acc_map  = {a[0]: a[1] for a in _cf_accs2}  # id -> name
+        _acc_opts = {a[1]: a[0] for a in _cf_accs2}  # name -> id
+
+        # ── Existing items ────────────────────────────────────────────────
+        if _cf_items:
+            import pandas as _cf_pd2
+            _item_rows = []
+            for item in _cf_items:
+                iid, name, direction, category, amount, currency, frequency, \
+                    account_id, start_ym, end_ym, notes = item
+                sym = "$" if currency == "USD" else "₪"
+                _item_rows.append({
+                    "ID": iid,
+                    "↕": "↑ In" if direction == "in" else "↓ Out",
+                    "Name": name,
+                    "Category": category,
+                    "Amount": f"{sym}{amount:,.0f}",
+                    "Frequency": frequency,
+                    "Account": _acc_map.get(account_id, "—"),
+                    "From": start_ym,
+                    "Until": end_ym or "∞",
+                })
+            _items_df = _cf_pd2.DataFrame(_item_rows)
+            st.dataframe(_items_df.drop(columns=["ID"]), use_container_width=True, hide_index=True)
+
+            # Delete
+            _del_id = st.selectbox(
+                "Delete item", [None] + [f"{r['ID']} – {r['Name']}" for r in _item_rows],
+                key="cf_del_item"
+            )
+            if _del_id and st.button("🗑️ Delete selected", key="cf_del_btn"):
+                delete_item(_cf_conn, int(_del_id.split(" – ")[0]))
+                st.success("Deleted.")
+                st.rerun()
+
+        st.divider()
+        st.markdown("### Add Scheduled Item")
+
+        _today_ym = __import__("datetime").date.today().strftime("%Y-%m")
+        with st.form("cf_add_item"):
+            _i1, _i2, _i3 = st.columns([3,1,1])
+            _iname    = _i1.text_input("Name *", placeholder="e.g. Yaniv Salary")
+            _idir     = _i2.selectbox("Direction", ["out","in"], format_func=lambda x: "↓ Expense" if x=="out" else "↑ Income")
+            _icat     = _i3.selectbox("Category", _CATEGORIES)
+
+            _i4, _i5, _i6, _i7 = st.columns([1,1,1,2])
+            _iamount  = _i4.number_input("Amount *", min_value=0.0, step=100.0, format="%.0f")
+            _icur     = _i5.selectbox("Currency", ["USD","ILS"])
+            _ifreq    = _i6.selectbox("Frequency", ["monthly","quarterly","annual","once"],
+                                       format_func=lambda x: x.capitalize())
+            _iacc_name= _i7.selectbox("Account", list(_acc_opts.keys()))
+
+            _i8, _i9, _i10 = st.columns([1,1,2])
+            _istart   = _i8.text_input("Start (YYYY-MM) *", value=_today_ym)
+            _iend     = _i9.text_input("End (YYYY-MM)", placeholder="leave blank = forever")
+            _inotes   = _i10.text_input("Notes", placeholder="optional")
+
+            if st.form_submit_button("➕ Add Item"):
+                if _iname and _iamount > 0 and _istart:
+                    add_item(
+                        _cf_conn, _iname, _idir, _icat, _iamount, _icur,
+                        _ifreq, _acc_opts.get(_iacc_name), _istart,
+                        _iend or None, _inotes or None
+                    )
+                    st.success(f"✅ '{_iname}' added.")
+                    st.rerun()
+                else:
+                    st.error("Name, Amount and Start date are required.")
+
+    _cf_conn.close()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 7 — ADMIN  (admin role only)
 # ══════════════════════════════════════════════════════════════════════════════
 if tab_admin is not None:
     with tab_admin:
