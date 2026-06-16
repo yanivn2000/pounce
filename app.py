@@ -5347,122 +5347,119 @@ with tab_cashflow:
     # FORECAST VIEW
     # ════════════════════════════════════════════════════════════════════════
     with _cf_tab_forecast:
+        import pandas as _cf_pd
+
         _cf_accounts, _cf_result = build_forecast(
             _cf_conn, _cf_months, _cf_usd_nis, _cf_growth
         )
 
-        if not _cf_result:
-            st.info("No forecast data yet. Add accounts and scheduled items first.")
-        else:
-            # Build display table
-            import pandas as _cf_pd
+        # ── Single opening balance = all accounts converted to USD ────────
+        def _to_usd_display(amount, currency, rate):
+            if currency == "USD":  return amount
+            if currency == "ILS":  return amount / rate if rate else 0.0
+            return amount
 
+        _opening_usd = sum(
+            _to_usd_display(a[4], a[3], _cf_usd_nis) for a in _cf_accounts
+        )
+
+        if not _cf_result:
+            st.info("No forecast data yet.")
+        else:
             _col_labels = [f"{CF_MONTHS[r['month']-1]} {r['year']}" for r in _cf_result]
 
-            # ── Per-account rows ──────────────────────────────────────────
-            _rows = []
-            for acc in _cf_accounts:
-                aid, aname, acompany, acur, *_ = acc
-                sym = "$" if acur == "USD" else "₪"
-                row = {"Account": f"{aname} ({acur})"}
-                for r in _cf_result:
-                    bal = r["balances"].get(aid, 0.0)
-                    row[f"{CF_MONTHS[r['month']-1]} {r['year']}"] = bal
-                _rows.append(row)
-
-            # ── Total USD equivalent row ──────────────────────────────────
-            total_row = {"Account": "🌐 TOTAL (USD equiv.)"}
-            _warn_months = []
+            # ── Collect all unique income / expense item names ─────────────
+            _income_names  = []
+            _expense_names = []
             for r in _cf_result:
-                col = f"{CF_MONTHS[r['month']-1]} {r['year']}"
-                total_usd = 0.0
-                for acc in _cf_accounts:
-                    aid, aname, acompany, acur, *_ = acc
-                    bal = r["balances"].get(aid, 0.0)
-                    if acur == "USD":
-                        total_usd += bal
-                    elif acur == "ILS":
-                        total_usd += bal / _cf_usd_nis if _cf_usd_nis else 0
-                total_row[col] = total_usd
-                if total_usd < _cf_warn_usd:
-                    _warn_months.append(col)
+                for f in r["flows"]:
+                    if f["direction"] == "in"  and f["name"] not in _income_names:
+                        _income_names.append(f["name"])
+                    if f["direction"] == "out" and f["name"] not in _expense_names:
+                        _expense_names.append(f["name"])
 
-            _rows.append(total_row)
-            _df_forecast = _cf_pd.DataFrame(_rows).set_index("Account")
+            # ── Build cash-flow statement table ───────────────────────────
+            # Rows: Opening | income items | Total Income | expense items | Total Expenses | Closing
+            _cf_row_labels = (
+                ["📊 Opening Balance"]
+                + [f"  ↑ {n}" for n in _income_names]
+                + ["= Total Income"]
+                + [f"  ↓ {n}" for n in _expense_names]
+                + ["= Total Expenses"]
+                + ["💰 Closing Balance"]
+            )
+            _cf_data   = {lbl: [] for lbl in _cf_row_labels}
+            _closings  = []
+            _warn_cols = []
+            opening    = _opening_usd
 
-            # ── Colour-format the dataframe ───────────────────────────────
-            def _cf_fmt(val, col, row_label, warn_months):
-                if not isinstance(val, (int, float)):
-                    return val
-                sym = "₪" if "ILS" in row_label else "$"
-                if abs(val) >= 1_000_000:
-                    return f"{sym}{val/1_000_000:.1f}M"
-                if abs(val) >= 1_000:
-                    return f"{sym}{val:,.0f}"
-                return f"{sym}{val:.0f}"
+            for r in _cf_result:
+                # Map flows to USD amounts by name+direction
+                flow_usd: dict[tuple, float] = {}
+                for f in r["flows"]:
+                    key = (f["direction"], f["name"])
+                    amt = _to_usd_display(f["amount"], f["currency"], _cf_usd_nis)
+                    flow_usd[key] = flow_usd.get(key, 0.0) + amt
 
-            # Display with background colours
-            def _highlight(df):
-                styles = _cf_pd.DataFrame("", index=df.index, columns=df.columns)
+                total_in  = sum(v for (d,_), v in flow_usd.items() if d == "in")
+                total_out = sum(v for (d,_), v in flow_usd.items() if d == "out")
+                closing   = opening + total_in - total_out
+                _closings.append(closing)
+                if closing < _cf_warn_usd:
+                    _warn_cols.append(r["ym"])
+
+                _cf_data["📊 Opening Balance"].append(opening)
+                for n in _income_names:
+                    _cf_data[f"  ↑ {n}"].append(flow_usd.get(("in", n), 0.0))
+                _cf_data["= Total Income"].append(total_in)
+                for n in _expense_names:
+                    _cf_data[f"  ↓ {n}"].append(flow_usd.get(("out", n), 0.0))
+                _cf_data["= Total Expenses"].append(total_out)
+                _cf_data["💰 Closing Balance"].append(closing)
+                opening = closing
+
+            _df_cf = _cf_pd.DataFrame(_cf_data, index=_col_labels).T
+
+            # ── Style ─────────────────────────────────────────────────────
+            def _fmt_usd(v):
+                if not isinstance(v, (int, float)):  return v
+                if v == 0:  return "—"
+                return f"${v:,.0f}" if v >= 0 else f"(${abs(v):,.0f})"
+
+            def _style_cf(df):
+                s = _cf_pd.DataFrame("", index=df.index, columns=df.columns)
                 for col in df.columns:
-                    if col in _warn_months:
-                        styles.loc["🌐 TOTAL (USD equiv.)", col] = "background-color:#ffd7d7;font-weight:bold"
-                    else:
-                        styles.loc["🌐 TOTAL (USD equiv.)", col] = "background-color:#d4edda;font-weight:bold"
-                # Negative individual accounts
-                for idx in df.index:
-                    if idx == "🌐 TOTAL (USD equiv.)":
-                        continue
-                    for col in df.columns:
-                        v = df.loc[idx, col]
-                        if isinstance(v, (int, float)) and v < 0:
-                            styles.loc[idx, col] = "background-color:#fff3cd"
-                return styles
-
-            # Format numbers
-            _df_display = _df_forecast.copy()
-            for col in _df_display.columns:
-                _df_display[col] = _df_display.apply(
-                    lambda row: _cf_fmt(row[col], col, row.name, _warn_months),
-                    axis=1
-                )
+                    # Opening / closing rows — bold
+                    s.loc["📊 Opening Balance", col] = "font-weight:bold;background:#f0f4ff"
+                    # Closing: green or red
+                    closing_val = df.loc["💰 Closing Balance", col]
+                    if isinstance(closing_val, (int, float)):
+                        if closing_val < _cf_warn_usd:
+                            s.loc["💰 Closing Balance", col] = "font-weight:bold;background:#ffd7d7"
+                        else:
+                            s.loc["💰 Closing Balance", col] = "font-weight:bold;background:#d4edda"
+                    # Totals — slightly shaded
+                    s.loc["= Total Income",    col] = "font-weight:bold;background:#f8fff8"
+                    s.loc["= Total Expenses",  col] = "font-weight:bold;background:#fff8f8"
+                return s
 
             st.dataframe(
-                _df_forecast.style.apply(_highlight, axis=None)
-                .format(lambda v: f"${v:,.0f}" if v >= 0 else f"(${abs(v):,.0f})"
-                        if isinstance(v, float) else v),
-                use_container_width=True, height=min(60 + 35 * len(_rows), 600)
+                _df_cf.style.apply(_style_cf, axis=None).format(_fmt_usd),
+                use_container_width=True,
+                height=min(80 + 35 * len(_cf_row_labels), 700)
             )
 
-            if _warn_months:
-                st.warning(f"⚠️ Low cash alert in: **{', '.join(_warn_months)}** — total drops below ${_cf_warn_usd:,}")
+            # ── Warnings ──────────────────────────────────────────────────
+            if _warn_cols:
+                _warn_labels = [f"{CF_MONTHS[int(c[5:7])-1]} {c[:4]}" for c in _warn_cols]
+                st.warning(f"⚠️ Closing balance drops below ${_cf_warn_usd:,} in: **{', '.join(_warn_labels)}**")
 
-            # ── Chart: total USD over time ────────────────────────────────
-            st.markdown("#### Total Liquidity (USD equivalent)")
-            _chart_data = {
-                "Month": _col_labels,
-                "Total USD": [_df_forecast.loc["🌐 TOTAL (USD equiv.)", c] for c in _col_labels],
-            }
-            _chart_df = _cf_pd.DataFrame(_chart_data).set_index("Month")
+            # ── Chart ─────────────────────────────────────────────────────
+            st.markdown("#### 💰 Projected Closing Balance (USD)")
+            _chart_df = _cf_pd.DataFrame(
+                {"Closing Balance": _closings}, index=_col_labels
+            )
             st.line_chart(_chart_df, use_container_width=True)
-
-            # ── Monthly flow detail (expandable) ─────────────────────────
-            with st.expander("📋 Monthly cash flow detail"):
-                for r in _cf_result:
-                    col_label = f"{CF_MONTHS[r['month']-1]} {r['year']}"
-                    infl  = [f for f in r["flows"] if f["direction"] == "in"]
-                    outfl = [f for f in r["flows"] if f["direction"] == "out"]
-                    st.markdown(f"**{col_label}** — In: ${r['total_in']:,.0f} · Out: ${r['total_out']:,.0f}")
-                    if infl or outfl:
-                        _fd_rows = []
-                        for f in infl:
-                            sym = "₪" if f["currency"] == "ILS" else "$"
-                            _fd_rows.append({"↕": "↑ In", "Name": f["name"], "Amount": f"{sym}{f['amount']:,.0f}"})
-                        for f in outfl:
-                            sym = "₪" if f["currency"] == "ILS" else "$"
-                            _fd_rows.append({"↕": "↓ Out", "Name": f["name"], "Amount": f"{sym}{f['amount']:,.0f}"})
-                        st.dataframe(_cf_pd.DataFrame(_fd_rows), use_container_width=True, hide_index=True)
-                    st.divider()
 
     # ════════════════════════════════════════════════════════════════════════
     # ACCOUNTS & BALANCES
