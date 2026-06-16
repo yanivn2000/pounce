@@ -204,7 +204,7 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
     for _ in range(months_ahead):
         forecast_months.append((fy, fm))
         fm += 1
-        if fm > 13:
+        if fm > 12:
             fm = 1; fy += 1
 
     # Running balances per account
