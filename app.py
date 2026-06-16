@@ -4873,7 +4873,7 @@ with tab_amazon:
             _metric_label = st.radio(
                 "Show", list(_METRIC_LABELS.keys()),
                 horizontal=True, key="amz_metric",
-                index=list(_METRIC_LABELS.keys()).index("✅ Net Revenue"),
+                index=0,
             )
         with _gc2:
             _yoy = st.checkbox("Compare to last year", value=False, key="amz_yoy")
