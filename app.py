@@ -4912,18 +4912,25 @@ with tab_amazon:
 
             ph = ",".join("?" * len(mps))
             p  = [year] + mps
+            # All queries now group by month + currency so we can apply FX → USD
             _Q = {
-                "sales":       f"SELECT month, SUM(gross_sales)          FROM amazon_transactions WHERE year=? AND tx_type='Order'            AND marketplace IN ({ph}) GROUP BY month",
-                "refunds":     f"SELECT month, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='Refund'           AND marketplace IN ({ph}) GROUP BY month",
-                "advertising": f"SELECT month, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type IN ('Amazon Fees','Service Fee') AND LOWER(product_details) LIKE '%sponsor%' AND marketplace IN ({ph}) GROUP BY month",
-                "storage":     f"SELECT month, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) NOT LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month",
-                "lt_storage":  f"SELECT month, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) LIKE '%long%'  AND marketplace IN ({ph}) GROUP BY month",
-                "vat":         f"SELECT month, SUM(ABS(withheld_tax))    FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month",
-                "net":         f"SELECT month, SUM(net_total)             FROM amazon_transactions WHERE year=? AND tx_type NOT IN ('Transfer','Debt') AND marketplace IN ({ph}) GROUP BY month",
-                "promos":      f"SELECT month, SUM(ABS(promo_rebates))   FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month",
+                "sales":       f"SELECT month, currency, SUM(gross_sales)          FROM amazon_transactions WHERE year=? AND tx_type='Order'            AND marketplace IN ({ph}) GROUP BY month, currency",
+                "refunds":     f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='Refund'           AND marketplace IN ({ph}) GROUP BY month, currency",
+                "advertising": f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type IN ('Amazon Fees','Service Fee') AND LOWER(product_details) LIKE '%sponsor%' AND marketplace IN ({ph}) GROUP BY month, currency",
+                "storage":     f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) NOT LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
+                "lt_storage":  f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) LIKE '%long%'  AND marketplace IN ({ph}) GROUP BY month, currency",
+                "vat":         f"SELECT month, currency, SUM(ABS(withheld_tax))    FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
+                "net":         f"SELECT month, currency, SUM(net_total)             FROM amazon_transactions WHERE year=? AND tx_type NOT IN ('Transfer','Debt') AND marketplace IN ({ph}) GROUP BY month, currency",
+                "promos":      f"SELECT month, currency, SUM(ABS(promo_rebates))   FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
             }
             rows = conn.execute(_Q[metric], p).fetchall()
-            return {r[0]: float(r[1] or 0) for r in rows if r[0] in MONTHS}
+            _out: dict = {}
+            for r in rows:
+                _m, _cur, _val = r[0], r[1], float(r[2] or 0)
+                if _m not in MONTHS:
+                    continue
+                _out[_m] = _out.get(_m, 0.0) + _to_usd(_val, _cur or "USD")
+            return _out
 
         # Query data for chart
         _curr_vals = _monthly_metric(_amz_conn, _sel_year,     _sel_metric, _sel_mps)
