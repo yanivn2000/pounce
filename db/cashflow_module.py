@@ -162,6 +162,46 @@ def delete_item(conn, item_id: int):
     conn.commit()
 
 
+def update_item(conn, item_id: int, name, direction, category, amount,
+                currency, frequency, company, start_ym, end_ym, notes):
+    conn.execute(
+        "UPDATE cashflow_items SET name=?,direction=?,category=?,amount=?,"
+        "currency=?,frequency=?,company=?,start_ym=?,end_ym=?,notes=? WHERE id=?",
+        [name, direction, category, amount, currency, frequency,
+         company, start_ym, end_ym or None, notes or None, item_id]
+    )
+    conn.commit()
+
+
+def change_from_month(conn, item_id: int, from_ym: str, new_amount: float):
+    """End current item at from_ym-1, create clone starting from_ym with new_amount."""
+    item = conn.execute(
+        "SELECT name,direction,category,currency,frequency,company,start_ym,notes "
+        "FROM cashflow_items WHERE id=?", [item_id]
+    ).fetchone()
+    if not item:
+        return
+    name, direction, category, currency, frequency, company, start_ym, notes = item
+
+    # Compute end_ym = one month before from_ym
+    y, m = int(from_ym[:4]), int(from_ym[5:7])
+    m -= 1
+    if m == 0:
+        m = 12; y -= 1
+    end_ym = f"{y}-{m:02d}"
+
+    # Close existing item
+    conn.execute("UPDATE cashflow_items SET end_ym=? WHERE id=?", [end_ym, item_id])
+    # Create new item from from_ym with new_amount
+    conn.execute(
+        "INSERT INTO cashflow_items(name,direction,category,amount,currency,frequency,"
+        "company,start_ym,end_ym,notes) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        [name, direction, category, new_amount, currency, frequency,
+         company, from_ym, None, notes]
+    )
+    conn.commit()
+
+
 def add_account(conn, name, company, currency, balance, credit_limit):
     conn.execute(
         "INSERT INTO cashflow_accounts(name,company,currency,current_balance,credit_limit) VALUES(?,?,?,?,?)",

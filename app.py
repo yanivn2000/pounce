@@ -5286,7 +5286,7 @@ with tab_amazon:
 with tab_cashflow:
     from db.cashflow_module import (
         init_cashflow_tables, get_accounts, update_account_balance,
-        get_items, add_item, delete_item, add_account,
+        get_items, add_item, update_item, delete_item, change_from_month, add_account,
         build_forecast, _CATEGORIES, MONTHS as CF_MONTHS, COMPANY_LABELS,
         get_setting, set_setting,
     )
@@ -5515,11 +5515,10 @@ with tab_cashflow:
     # ════════════════════════════════════════════════════════════════════════
     with _cf_tab_items:
         _cf_items = get_items(_cf_conn)
+        _co_opts  = {"LLC": "EOS ONLINE LLC", "IL": "EOS TRADE LTD"}
+        _today_ym = __import__("datetime").date.today().strftime("%Y-%m")
 
-        # Company options: internal key → display label
-        _co_opts = {"LLC": "EOS ONLINE LLC", "IL": "EOS TRADE LTD"}
-
-        # ── Existing items ────────────────────────────────────────────────
+        # ── Items table ───────────────────────────────────────────────────
         if _cf_items:
             import pandas as _cf_pd2
             _item_rows = []
@@ -5529,7 +5528,7 @@ with tab_cashflow:
                 sym = "$" if currency == "USD" else "₪"
                 _item_rows.append({
                     "ID": iid,
-                    "↕": "↑ In" if direction == "in" else "↓ Out",
+                    "↕": "↑" if direction == "in" else "↓",
                     "Name": name,
                     "Category": category,
                     "Amount": f"{sym}{amount:,.0f}",
@@ -5537,24 +5536,114 @@ with tab_cashflow:
                     "Company": _co_opts.get(company, company),
                     "From": start_ym,
                     "Until": end_ym or "∞",
+                    "Notes": notes or "",
                 })
-            _items_df = _cf_pd2.DataFrame(_item_rows)
-            st.dataframe(_items_df.drop(columns=["ID"]), use_container_width=True, hide_index=True)
-
-            # Delete
-            _del_id = st.selectbox(
-                "Delete item", [None] + [f"{r['ID']} – {r['Name']}" for r in _item_rows],
-                key="cf_del_item"
+            st.dataframe(
+                _cf_pd2.DataFrame(_item_rows).drop(columns=["ID"]),
+                use_container_width=True, hide_index=True
             )
-            if _del_id and st.button("🗑️ Delete selected", key="cf_del_btn"):
-                delete_item(_cf_conn, int(_del_id.split(" – ")[0]))
-                st.success("Deleted.")
-                st.rerun()
+
+            # ── Select item to act on ─────────────────────────────────────
+            _sel_label = st.selectbox(
+                "Select item to Edit / Change / Delete",
+                [None] + [f"{r['ID']} – {r['↕']} {r['Name']}  ({r['From']} → {r['Until']})"
+                          for r in _item_rows],
+                key="cf_sel_item"
+            )
+
+            if _sel_label:
+                _sel_id   = int(_sel_label.split(" – ")[0])
+                _sel_item = next(i for i in _cf_items if i[0] == _sel_id)
+                (_, _sname, _sdir, _scat, _samt, _scur,
+                 _sfreq, _sco, _sstart, _send, _snotes) = _sel_item
+
+                _act_tab_edit, _act_tab_change, _act_tab_delete = st.tabs(
+                    ["✏️ Edit", "📅 Change from month", "🗑️ Delete"]
+                )
+
+                # ── EDIT ──────────────────────────────────────────────────
+                with _act_tab_edit:
+                    with st.form("cf_edit_item"):
+                        _e1, _e2, _e3 = st.columns([3,1,1])
+                        _ename = _e1.text_input("Name", value=_sname)
+                        _edir  = _e2.selectbox("Direction", ["out","in"],
+                            index=0 if _sdir=="out" else 1,
+                            format_func=lambda x: "↓ Expense" if x=="out" else "↑ Income")
+                        _ecat  = _e3.selectbox("Category", _CATEGORIES,
+                            index=_CATEGORIES.index(_scat) if _scat in _CATEGORIES else 0)
+
+                        _e4, _e5, _e6, _e7 = st.columns([1,1,1,2])
+                        _eamt  = _e4.number_input("Amount", value=float(_samt),
+                                                   min_value=0.0, step=100.0, format="%.0f")
+                        _ecur  = _e5.selectbox("Currency", ["USD","ILS"],
+                                               index=0 if _scur=="USD" else 1)
+                        _efreq = _e6.selectbox("Frequency",
+                            ["monthly","quarterly","annual","once"],
+                            index=["monthly","quarterly","annual","once"].index(_sfreq),
+                            format_func=lambda x: x.capitalize())
+                        _eco_label = _e7.selectbox("Company", list(_co_opts.values()),
+                            index=list(_co_opts.keys()).index(_sco) if _sco in _co_opts else 0)
+                        _eco = next(k for k, v in _co_opts.items() if v == _eco_label)
+
+                        _e8, _e9, _e10 = st.columns([1,1,2])
+                        _estart = _e8.text_input("Start (YYYY-MM)", value=_sstart or "")
+                        _eend   = _e9.text_input("End (YYYY-MM)", value=_send or "",
+                                                  placeholder="blank = forever")
+                        _enotes = _e10.text_input("Notes", value=_snotes or "")
+
+                        if st.form_submit_button("💾 Save changes"):
+                            update_item(_cf_conn, _sel_id, _ename, _edir, _ecat,
+                                        _eamt, _ecur, _efreq, _eco,
+                                        _estart, _eend or None, _enotes or None)
+                            st.success("✅ Item updated.")
+                            st.rerun()
+
+                # ── CHANGE FROM MONTH ─────────────────────────────────────
+                with _act_tab_change:
+                    st.caption(
+                        f"Closes **{_sname}** at the month before, then creates a new "
+                        f"entry with the updated amount from the chosen month onwards."
+                    )
+                    with st.form("cf_change_from"):
+                        _cf1, _cf2 = st.columns([1,1])
+                        _chg_from = _cf1.text_input(
+                            "Change from (YYYY-MM) *",
+                            value=_today_ym,
+                            help="New amount starts this month; old amount ends the month before"
+                        )
+                        _chg_amt = _cf2.number_input(
+                            "New amount *",
+                            value=float(_samt), min_value=0.0,
+                            step=100.0, format="%.0f"
+                        )
+                        sym = "$" if _scur == "USD" else "₪"
+                        st.caption(
+                            f"Result: **{_sname}** {sym}{_samt:,.0f} until "
+                            f"{_chg_from[:4]}-{int(_chg_from[5:7])-1 if len(_chg_from)==7 else '?':02d} "
+                            f"→ {sym}{_chg_amt:,.0f} from {_chg_from} onwards"
+                        )
+                        if st.form_submit_button("✂️ Apply change"):
+                            if _chg_from and _chg_amt > 0:
+                                change_from_month(_cf_conn, _sel_id, _chg_from, _chg_amt)
+                                st.success(f"✅ Done — {_sname} split at {_chg_from}.")
+                                st.rerun()
+                            else:
+                                st.error("Month and new amount are required.")
+
+                # ── DELETE ────────────────────────────────────────────────
+                with _act_tab_delete:
+                    st.warning(
+                        f"Delete **{_sname}** ({_sstart} → {_send or '∞'})? "
+                        f"This cannot be undone."
+                    )
+                    if st.button("🗑️ Confirm Delete", key="cf_confirm_del"):
+                        delete_item(_cf_conn, _sel_id)
+                        st.success("Deleted.")
+                        st.rerun()
 
         st.divider()
-        st.markdown("### Add Scheduled Item")
+        st.markdown("### ➕ Add Scheduled Item")
 
-        _today_ym = __import__("datetime").date.today().strftime("%Y-%m")
         with st.form("cf_add_item"):
             _i1, _i2, _i3 = st.columns([3,1,1])
             _iname = _i1.text_input("Name *", placeholder="e.g. Yaniv Salary")
@@ -5563,24 +5652,22 @@ with tab_cashflow:
             _icat  = _i3.selectbox("Category", _CATEGORIES)
 
             _i4, _i5, _i6, _i7 = st.columns([1,1,1,2])
-            _iamount = _i4.number_input("Amount *", min_value=0.0, step=100.0, format="%.0f")
-            _icur    = _i5.selectbox("Currency", ["USD","ILS"])
-            _ifreq   = _i6.selectbox("Frequency", ["monthly","quarterly","annual","once"],
-                                      format_func=lambda x: x.capitalize())
+            _iamount   = _i4.number_input("Amount *", min_value=0.0, step=100.0, format="%.0f")
+            _icur      = _i5.selectbox("Currency", ["USD","ILS"])
+            _ifreq     = _i6.selectbox("Frequency", ["monthly","quarterly","annual","once"],
+                                        format_func=lambda x: x.capitalize())
             _ico_label = _i7.selectbox("Company", list(_co_opts.values()))
             _ico = next(k for k, v in _co_opts.items() if v == _ico_label)
 
             _i8, _i9, _i10 = st.columns([1,1,2])
             _istart = _i8.text_input("Start (YYYY-MM) *", value=_today_ym)
-            _iend   = _i9.text_input("End (YYYY-MM)", placeholder="leave blank = forever")
+            _iend   = _i9.text_input("End (YYYY-MM)", placeholder="blank = forever")
             _inotes = _i10.text_input("Notes", placeholder="optional")
 
             if st.form_submit_button("➕ Add Item"):
                 if _iname and _iamount > 0 and _istart:
-                    add_item(
-                        _cf_conn, _iname, _idir, _icat, _iamount, _icur,
-                        _ifreq, _ico, _istart, _iend or None, _inotes or None
-                    )
+                    add_item(_cf_conn, _iname, _idir, _icat, _iamount, _icur,
+                             _ifreq, _ico, _istart, _iend or None, _inotes or None)
                     st.success(f"✅ '{_iname}' added.")
                     st.rerun()
                 else:
