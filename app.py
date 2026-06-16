@@ -4856,19 +4856,8 @@ with tab_amazon:
         st.markdown("<div style='margin:4px 0'></div>", unsafe_allow_html=True)
 
         # ── MoM Alerts ───────────────────────────────────────────────────────────
-        def _build_alerts(conn, threshold, all_mps):
-            from datetime import date
-            today   = date.today()
-            cy, cm  = today.year, today.month
-
-            def prev_ym(y, m):
-                return (y-1, 12) if m == 1 else (y, m-1)
-
-            py, pm   = prev_ym(cy, cm)      # last full month
-            p2y, p2m = prev_ym(py, pm)      # month before that
-            pm_name  = MONTHS[pm  - 1]
-            p2m_name = MONTHS[p2m - 1]
-
+        def _build_alerts(conn, threshold, all_mps, ya, ma, yb, mb):
+            """Compare month (ya,ma) [newer] vs (yb,mb) [baseline]."""
             _ST = "','".join([
                 "FBA Inventory Fee","Versand durch Amazon Lagergebühr",
                 "Tarifas de inventario de Logística de Amazon",
@@ -4885,7 +4874,6 @@ with tab_amazon:
                 return conn.execute(sql, p).fetchall()
 
             def _vals(y, m_name, mp):
-                """Return dict of raw USD values for one month/marketplace."""
                 p = [y, m_name, mp]
                 sales = _usd_sum(_q(
                     "SELECT currency,SUM(gross_sales) FROM amazon_transactions "
@@ -4921,20 +4909,20 @@ with tab_amazon:
                     "coupons": coupons,
                 }
 
+            ma_name = MONTHS[ma - 1]
+            mb_name = MONTHS[mb - 1]
             alerts = []
             for mp in all_mps:
-                va = _vals(py,  pm_name,  mp)
-                vb = _vals(p2y, p2m_name, mp)
+                va = _vals(ya, ma_name, mp)
+                vb = _vals(yb, mb_name, mp)
 
-                # Rate-based metrics (scale-independent)
                 rate_metrics = []
                 if vb["sales"] > 10 and va["sales"] > 10:
                     rate_metrics += [
-                        ("fee_rate",    "🏦 Fee Rate",     va["fees"]/va["sales"],    vb["fees"]/vb["sales"],    True),
-                        ("refund_rate", "🔁 Refund Rate",  va["refunds"]/va["sales"], vb["refunds"]/vb["sales"], True),
+                        ("fee_rate",    "🏦 Fee Rate",    va["fees"]/va["sales"],    vb["fees"]/vb["sales"],    True),
+                        ("refund_rate", "🔁 Refund Rate", va["refunds"]/va["sales"], vb["refunds"]/vb["sales"], True),
                     ]
 
-                # Absolute metrics (not driven purely by sales volume)
                 abs_metrics = [
                     ("sales",      "💵 Sales",       va["sales"],      vb["sales"],      False),
                     ("adv",        "📢 Advertising", va["adv"],        vb["adv"],        True),
@@ -4953,50 +4941,79 @@ with tab_amazon:
                     is_rate = mkey in ("fee_rate", "refund_rate")
                     alerts.append({
                         "mp": mp, "metric": mlabel, "is_rate": is_rate,
-                        "period": f"{p2m_name}→{pm_name}",
                         "val_a": v_new, "val_b": v_old, "pct": pct, "bad": bad,
                     })
 
             return sorted(alerts, key=lambda x: abs(x["pct"]), reverse=True)
 
         with st.expander("🔔 Month-over-Month Alerts", expanded=True):
-            _al_col, _thr_col = st.columns([4, 1])
+            from datetime import date as _date
+            _today = _date.today()
+            _cy, _cm = _today.year, _today.month
+
+            def _prev_ym(y, m):
+                return (y-1, 12) if m == 1 else (y, m-1)
+
+            _py, _pm   = _prev_ym(_cy, _cm)   # last full month
+            _p2y, _p2m = _prev_ym(_py, _pm)   # month before that
+
+            _cmp_options = [
+                "Last month vs previous month",
+                "Last month vs same month last year",
+                "Current month vs last month",
+            ]
+            _ctrl_col, _thr_col = st.columns([4, 1])
+            with _ctrl_col:
+                _cmp_mode = st.radio(
+                    "Compare", _cmp_options, index=0,
+                    horizontal=True, key="alert_cmp_mode",
+                    label_visibility="collapsed",
+                )
             with _thr_col:
                 _alert_thr = st.number_input(
                     "Threshold %", min_value=5, max_value=200, value=50,
                     step=5, key="alert_threshold",
                     help="Alert when change exceeds this %"
                 ) / 100.0
-            _alerts = _build_alerts(_amz_conn, _alert_thr, _amz_all_mps)
-            with _al_col:
-                # derive period label once from the logic in _build_alerts
-                from datetime import date as _date
-                _today = _date.today()
-                _py, _pm = (_today.year - 1, 12) if _today.month == 1 else (_today.year, _today.month - 1)
-                _p2y, _p2m = (_py - 1, 12) if _pm == 1 else (_py, _pm - 1)
-                _period_label = f"{MONTHS[_p2m-1]} {_p2y} → {MONTHS[_pm-1]} {_py}"
-                st.caption(f"📅 Comparing **{_period_label}**")
-                if not _alerts:
-                    st.success(f"✅ No significant changes above {int(_alert_thr*100)}% threshold.")
-                else:
-                    _alert_cols = st.columns(min(len(_alerts), 3))
-                    for i, al in enumerate(_alerts):
-                        pct_str = f"+{al['pct']*100:.0f}%" if al['pct'] > 0 else f"{al['pct']*100:.0f}%"
-                        arrow   = "↑" if al['pct'] > 0 else "↓"
-                        color   = "#ffd7d7" if al['bad'] else "#d4edda"
-                        icon    = "🔴" if al['bad'] else "🟢"
-                        if al.get("is_rate"):
-                            val_fmt = (f"{al['val_b']*100:.1f}% → {al['val_a']*100:.1f}%")
-                        else:
-                            val_fmt = f"${al['val_b']:,.0f} → ${al['val_a']:,.0f}"
-                        _alert_cols[i % 3].markdown(
-                            f"<div style='background:{color};padding:8px 10px;border-radius:6px;"
-                            f"margin-bottom:6px;font-size:0.82rem'>"
-                            f"{icon} <b>{al['mp']} · {al['metric']}</b><br>"
-                            f"{arrow} {pct_str}<br>"
-                            f"<span style='color:#555'>{val_fmt}</span>"
-                            f"</div>", unsafe_allow_html=True
-                        )
+
+            # Resolve (year_a, month_a) [newer] vs (year_b, month_b) [baseline]
+            if _cmp_mode == _cmp_options[0]:   # last month vs previous month
+                _ya, _ma = _py,  _pm
+                _yb, _mb = _p2y, _p2m
+            elif _cmp_mode == _cmp_options[1]: # last month vs same month last year
+                _ya, _ma = _py,      _pm
+                _yb, _mb = _py - 1,  _pm
+            else:                              # current month vs last month
+                _ya, _ma = _cy, _cm
+                _yb, _mb = _py, _pm
+
+            _period_label = (
+                f"{MONTHS[_mb-1]} {_yb} → {MONTHS[_ma-1]} {_ya}"
+            )
+            st.caption(f"📅 Comparing **{_period_label}**")
+
+            _alerts = _build_alerts(_amz_conn, _alert_thr, _amz_all_mps, _ya, _ma, _yb, _mb)
+            if not _alerts:
+                st.success(f"✅ No significant changes above {int(_alert_thr*100)}% threshold.")
+            else:
+                _alert_cols = st.columns(min(len(_alerts), 3))
+                for i, al in enumerate(_alerts):
+                    pct_str = f"+{al['pct']*100:.0f}%" if al['pct'] > 0 else f"{al['pct']*100:.0f}%"
+                    arrow   = "↑" if al['pct'] > 0 else "↓"
+                    color   = "#ffd7d7" if al['bad'] else "#d4edda"
+                    icon    = "🔴" if al['bad'] else "🟢"
+                    if al.get("is_rate"):
+                        val_fmt = f"{al['val_b']*100:.1f}% → {al['val_a']*100:.1f}%"
+                    else:
+                        val_fmt = f"${al['val_b']:,.0f} → ${al['val_a']:,.0f}"
+                    _alert_cols[i % 3].markdown(
+                        f"<div style='background:{color};padding:8px 10px;border-radius:6px;"
+                        f"margin-bottom:6px;font-size:0.82rem'>"
+                        f"{icon} <b>{al['mp']} · {al['metric']}</b><br>"
+                        f"{arrow} {pct_str}<br>"
+                        f"<span style='color:#555'>{val_fmt}</span>"
+                        f"</div>", unsafe_allow_html=True
+                    )
 
         # ── Chart controls ────────────────────────────────────────────────────────
         _METRIC_LABELS = {
