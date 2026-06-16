@@ -178,9 +178,26 @@ _TRANSFER_TYPES = (
 )
 
 
-def get_amazon_monthly_net(conn, year: int, usd_nis: float) -> dict[int, float]:
-    """Return {month_index: net_payout_usd} for a given year."""
+# AGL logistics charges that are deducted from Amazon wallet but should be
+# excluded from the forecast base (user plans these manually as Scheduled Items)
+_AGL_PRODUCT_DETAILS = (
+    "FBA International Freight Shipping Charge",
+    "FBA International Freight Duties and Taxes Charge",
+)
+
+
+def get_amazon_monthly_net(conn, year: int, usd_nis: float,
+                           exclude_agl: bool = True) -> dict[int, float]:
+    """Return {month_index: net_payout_usd} for a given year.
+
+    When exclude_agl=True (default for forecasting), FBA International Freight
+    charges are added back to net_total so the base reflects the pure Amazon
+    payout before AGL deductions. The user then plans AGL costs separately
+    via Scheduled Items.
+    """
     tt = "','".join(_TRANSFER_TYPES)
+
+    # Base net (includes AGL deductions)
     rows = conn.execute(
         f"SELECT month, currency, SUM(net_total) FROM amazon_transactions "
         f"WHERE year=? AND tx_type NOT IN ('{tt}') GROUP BY month, currency",
@@ -193,6 +210,23 @@ def get_amazon_monthly_net(conn, year: int, usd_nis: float) -> dict[int, float]:
         idx = MONTHS.index(month_name) + 1
         usd = _to_usd(float(val or 0), currency or "USD", usd_nis)
         result[idx] = result.get(idx, 0.0) + usd
+
+    if exclude_agl:
+        # Add back AGL charges (they were subtracted from net_total as Service Fee)
+        agl_ph = ",".join("?" * len(_AGL_PRODUCT_DETAILS))
+        agl_rows = conn.execute(
+            f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions "
+            f"WHERE year=? AND product_details IN ({agl_ph}) "
+            f"GROUP BY month, currency",
+            [year, *_AGL_PRODUCT_DETAILS]
+        ).fetchall()
+        for month_name, currency, val in agl_rows:
+            if month_name not in MONTHS:
+                continue
+            idx = MONTHS.index(month_name) + 1
+            usd = _to_usd(float(val or 0), currency or "USD", usd_nis)
+            result[idx] = result.get(idx, 0.0) + usd  # add back
+
     return result
 
 
