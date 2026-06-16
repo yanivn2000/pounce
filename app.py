@@ -4916,7 +4916,7 @@ with tab_amazon:
             _Q = {
                 "sales":       f"SELECT month, currency, SUM(gross_sales)          FROM amazon_transactions WHERE year=? AND tx_type='Order'            AND marketplace IN ({ph}) GROUP BY month, currency",
                 "refunds":     f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='Refund'           AND marketplace IN ({ph}) GROUP BY month, currency",
-                "advertising": f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type IN ('Amazon Fees','Service Fee') AND LOWER(product_details) LIKE '%sponsor%' AND marketplace IN ({ph}) GROUP BY month, currency",
+                "advertising": f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='Service Fee' AND LOWER(product_details) LIKE '%advertis%' AND marketplace IN ({ph}) GROUP BY month, currency",
                 "storage":     f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) NOT LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
                 "lt_storage":  f"SELECT month, currency, SUM(ABS(net_total))       FROM amazon_transactions WHERE year=? AND tx_type='FBA Inventory Fee' AND LOWER(product_details) LIKE '%long%'  AND marketplace IN ({ph}) GROUP BY month, currency",
                 "vat":         f"SELECT month, currency, SUM(ABS(withheld_tax))    FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
