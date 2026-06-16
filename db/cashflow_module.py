@@ -39,8 +39,34 @@ MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
 
 
 # ── Init ─────────────────────────────────────────────────────────────────────
+_SETTING_DEFAULTS = {
+    "usd_nis":    "3.62",
+    "amz_growth": "25",
+    "cf_months":  "12",
+    "warn_usd":   "50000",
+}
+
+def get_setting(conn, key: str) -> str:
+    row = conn.execute(
+        "SELECT value FROM cashflow_settings WHERE key=?", [key]
+    ).fetchone()
+    return row[0] if row else _SETTING_DEFAULTS.get(key, "")
+
+def set_setting(conn, key: str, value) -> None:
+    conn.execute(
+        "INSERT INTO cashflow_settings(key,value) VALUES(?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+        [key, str(value)]
+    )
+    conn.commit()
+
 def init_cashflow_tables(conn):
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS cashflow_settings (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         CREATE TABLE IF NOT EXISTS cashflow_accounts (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             name            TEXT    NOT NULL,

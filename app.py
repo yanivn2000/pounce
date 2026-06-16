@@ -5288,6 +5288,7 @@ with tab_cashflow:
         init_cashflow_tables, get_accounts, update_account_balance,
         get_items, add_item, delete_item, add_account,
         build_forecast, _CATEGORIES, MONTHS as CF_MONTHS, COMPANY_LABELS,
+        get_setting, set_setting,
     )
     import sqlite3 as _cf_sqlite
 
@@ -5299,31 +5300,41 @@ with tab_cashflow:
 
     st.markdown("## 💰 Cash Forecast")
 
-    # ── Settings bar ─────────────────────────────────────────────────────────
+    # ── Settings bar (persisted in DB) ───────────────────────────────────────
     _s1, _s2, _s3, _s4 = st.columns([1, 1, 1, 1])
     with _s1:
         _cf_usd_nis = st.number_input(
             "USD / NIS rate", min_value=2.0, max_value=6.0,
-            value=3.62, step=0.01, key="cf_usd_nis",
+            value=float(get_setting(_cf_conn, "usd_nis")),
+            step=0.01, key="cf_usd_nis",
             help="Used to convert ILS ↔ USD in the merged total view"
         )
+        set_setting(_cf_conn, "usd_nis", _cf_usd_nis)
     with _s2:
         _cf_growth = st.number_input(
             "Amazon growth %", min_value=-50, max_value=200,
-            value=25, step=5, key="cf_growth",
+            value=int(get_setting(_cf_conn, "amz_growth")),
+            step=5, key="cf_growth",
             help="Applied to last year's Amazon payout as forecast base"
         ) / 100.0
+        set_setting(_cf_conn, "amz_growth", int(_cf_growth * 100))
     with _s3:
+        _horizon_opts = [6, 9, 12, 18, 24]
+        _saved_horizon = int(get_setting(_cf_conn, "cf_months"))
         _cf_months = st.selectbox(
-            "Forecast horizon", [6, 9, 12, 18, 24],
-            index=2, key="cf_months"
+            "Forecast horizon", _horizon_opts,
+            index=_horizon_opts.index(_saved_horizon) if _saved_horizon in _horizon_opts else 2,
+            key="cf_months"
         )
+        set_setting(_cf_conn, "cf_months", _cf_months)
     with _s4:
         _cf_warn_usd = st.number_input(
             "⚠️ Low cash threshold (USD)", min_value=0,
-            value=50000, step=5000, key="cf_warn",
+            value=int(get_setting(_cf_conn, "warn_usd")),
+            step=5000, key="cf_warn",
             help="Highlight months where total USD equivalent drops below this"
         )
+        set_setting(_cf_conn, "warn_usd", _cf_warn_usd)
 
     st.divider()
 
