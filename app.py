@@ -4969,6 +4969,13 @@ with tab_amazon:
                 ) / 100.0
             _alerts = _build_alerts(_amz_conn, _alert_thr, _amz_all_mps)
             with _al_col:
+                # derive period label once from the logic in _build_alerts
+                from datetime import date as _date
+                _today = _date.today()
+                _py, _pm = (_today.year - 1, 12) if _today.month == 1 else (_today.year, _today.month - 1)
+                _p2y, _p2m = (_py - 1, 12) if _pm == 1 else (_py, _pm - 1)
+                _period_label = f"{MONTHS[_p2m-1]} {_p2y} → {MONTHS[_pm-1]} {_py}"
+                st.caption(f"📅 Comparing **{_period_label}**")
                 if not _alerts:
                     st.success(f"✅ No significant changes above {int(_alert_thr*100)}% threshold.")
                 else:
@@ -4986,7 +4993,7 @@ with tab_amazon:
                             f"<div style='background:{color};padding:8px 10px;border-radius:6px;"
                             f"margin-bottom:6px;font-size:0.82rem'>"
                             f"{icon} <b>{al['mp']} · {al['metric']}</b><br>"
-                            f"{arrow} {pct_str} &nbsp;·&nbsp; {al['period']}<br>"
+                            f"{arrow} {pct_str}<br>"
                             f"<span style='color:#555'>{val_fmt}</span>"
                             f"</div>", unsafe_allow_html=True
                         )
