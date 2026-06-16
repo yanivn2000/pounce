@@ -5000,8 +5000,9 @@ with tab_amazon:
                 for i, al in enumerate(_alerts):
                     pct_str = f"+{al['pct']*100:.0f}%" if al['pct'] > 0 else f"{al['pct']*100:.0f}%"
                     arrow   = "↑" if al['pct'] > 0 else "↓"
-                    color   = "#ffd7d7" if al['bad'] else "#d4edda"
-                    icon    = "🔴" if al['bad'] else "🟢"
+                    is_adv  = al["metric"] == "📢 Advertising"
+                    color   = "#fff3cd" if is_adv else ("#ffd7d7" if al['bad'] else "#d4edda")
+                    icon    = "🟠" if is_adv else ("🔴" if al['bad'] else "🟢")
                     if al.get("is_rate"):
                         val_fmt = f"{al['val_b']*100:.1f}% → {al['val_a']*100:.1f}%"
                     else:
