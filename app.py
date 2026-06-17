@@ -635,6 +635,13 @@ with tab_inv:
             def _color_total_row(row):
                 if row.get("ASIN") == "TOTAL" or row.get("asin") == "TOTAL":
                     return ["background-color:#f0f0f0;font-weight:700"] * len(row)
+                try:
+                    sold  = float(row.get("Sold",  0) or 0)
+                    total = float(row.get("Total", 0) or 0)
+                    if sold > total:
+                        return ["background-color:#ffe0e0;color:#b00000;font-weight:600"] * len(row)
+                except (TypeError, ValueError):
+                    pass
                 return [""] * len(row)
 
             _styler = _display_df.style.apply(_color_total_row, axis=1)
