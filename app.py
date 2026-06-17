@@ -465,26 +465,22 @@ with tab_inv:
                 _shipment_cols.append(_sc)
 
             # ── Region grouping ───────────────────────────────────────────────
-            # Map a free-text shipment destination to a region code.
+            # Map shipment destination to a region code.
+            # Destination is now always one of US / UK / CA / China.
+            # Keep fuzzy fallback for any legacy free-text values.
             def _dest_region(dest: str) -> str:
-                d  = (dest or "").lower().strip()
-                # UK / EU — check first so "amazon.co.uk" doesn't match ".com"
-                if d in ("uk", "gb", "united kingdom", "europe", "eu") or any(
-                    x in d for x in ["amazon.co.uk", "amazon.de", "amazon.fr",
-                                     "amazon.it", "amazon.es", "amazon.nl",
-                                     "amazon.se", "amazon.pl",
-                                     " uk", "united kingdom", " eu", "europe"]
-                ):
+                d = (dest or "").strip()
+                if d in ("US", "UK", "CA", "China"):
+                    return d
+                dl = d.lower()
+                if any(x in dl for x in ["uk", "gb", "europe", "eu", "amazon.co.uk",
+                                          "amazon.de", "amazon.fr", "amazon.it",
+                                          "amazon.es", "amazon.nl", "amazon.se", "amazon.pl"]):
                     return "UK"
-                if d in ("ca", "canada") or any(
-                    x in d for x in ["amazon.ca", " ca ", "canada"]
-                ):
+                if any(x in dl for x in ["ca", "canada", "amazon.ca"]):
                     return "CA"
-                if d in ("us", "usa", "united states") or any(
-                    x in d for x in ["amazon.com", "walmart", " us", "usa", "united states"]
-                ):
-                    return "US"
-                # fall back to "US" if blank / unrecognised
+                if any(x in dl for x in ["china", "cn", "wh_cn", "awd cn"]):
+                    return "China"
                 return "US"
 
             # Build region → [col_name] mapping
@@ -2337,10 +2333,13 @@ div:has(#ship-list-nav-marker) ~ div button {
                 key=f"ship_name_{_ctx}",
             )
         with _sh2:
-            _ship_dest = st.text_input(
+            _dest_opts  = ["US", "UK", "CA", "China"]
+            _dest_cur   = sel_ship.get("destination") or "US"
+            _dest_index = _dest_opts.index(_dest_cur) if _dest_cur in _dest_opts else 0
+            _ship_dest = st.selectbox(
                 "Destination",
-                value=sel_ship.get("destination") or "",
-                placeholder="e.g. Amazon US FBA",
+                _dest_opts,
+                index=_dest_index,
                 disabled=_locked,
                 key=f"ship_dest_{_ctx}",
             )
