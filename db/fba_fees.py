@@ -168,66 +168,55 @@ def get_all_fba_fees_df() -> pd.DataFrame:
 
 def get_pick_pack_anomalies() -> pd.DataFrame:
     """
-    Return ASINs whose Pick & Pack fee differs from the most common fee
-    for their (marketplace, size_tier) group.
+    Flag ASINs overcharged on Pick & Pack vs other products with identical
+    physical dimensions on the same marketplace.
 
-    All comparisons are strictly within the same marketplace — an ASIN on
-    amazon.com is never compared against amazon.de data.
+    Grouping is by (marketplace, rounded W×L×H from products_catalog) —
+    NOT by Amazon's size-tier string, which is too coarse (e.g. a single mug
+    and a set-of-two both land in "UsLargeStandardSize" but have different
+    dimensions and should not be compared).
+
+    Only flags fee > expected (being charged less is fine).
     """
     conn = get_conn()
-    # Step 1: per-marketplace stats for each size tier
-    stats = pd.read_sql_query("""
+    df = pd.read_sql_query("""
         SELECT
-            marketplace,
-            size_tier,
-            pick_pack_fee,
-            COUNT(*) AS fee_count
-        FROM fba_fees
-        WHERE size_tier IS NOT NULL AND size_tier != ''
-        GROUP BY marketplace, size_tier, pick_pack_fee
-    """, conn)
-
-    fees = pd.read_sql_query("""
-        SELECT asin, marketplace, size_tier, pick_pack_fee, currency
-        FROM fba_fees
-        WHERE size_tier IS NOT NULL AND size_tier != ''
+            f.asin,
+            f.marketplace,
+            f.size_tier,
+            f.pick_pack_fee,
+            f.currency,
+            ROUND(p.width_cm,  1) AS w,
+            ROUND(p.length_cm, 1) AS l,
+            ROUND(p.height_cm, 1) AS h
+        FROM fba_fees f
+        JOIN products_catalog p ON UPPER(f.asin) = UPPER(p.asin)
+        WHERE p.width_cm  IS NOT NULL
+          AND p.length_cm IS NOT NULL
+          AND p.height_cm IS NOT NULL
     """, conn)
     conn.close()
 
-    if stats.empty or fees.empty:
+    if df.empty:
         return pd.DataFrame()
 
-    # Step 2: find expected (most common) fee per (marketplace, size_tier)
-    # and total ASINs per group — both scoped to the same marketplace
-    idx = stats.groupby(["marketplace", "size_tier"])["fee_count"].idxmax()
-    expected = (
-        stats.loc[idx, ["marketplace", "size_tier", "pick_pack_fee"]]
-        .rename(columns={"pick_pack_fee": "expected_fee"})
-    )
-    totals = (
-        stats.groupby(["marketplace", "size_tier"])["fee_count"]
-        .sum()
-        .reset_index()
-        .rename(columns={"fee_count": "total_in_marketplace_tier"})
-    )
-    expected = expected.merge(totals, on=["marketplace", "size_tier"])
+    anomalies = []
+    for (mp, w, l, h), grp in df.groupby(["marketplace", "w", "l", "h"]):
+        fee_counts = grp["pick_pack_fee"].value_counts()
+        if len(fee_counts) < 2:
+            continue                          # all same fee — no anomaly
+        expected_fee = fee_counts.index[0]    # most common fee = correct fee
+        # Only flag ASINs charged MORE than expected — lower is fine
+        outliers = grp[grp["pick_pack_fee"] > expected_fee].copy()
+        if outliers.empty:
+            continue
+        outliers["expected_fee"] = expected_fee
+        outliers["same_size_asins"] = len(grp)
+        anomalies.append(outliers)
 
-    # Step 3: keep only groups that have more than one distinct fee
-    mixed = (
-        stats.groupby(["marketplace", "size_tier"])["pick_pack_fee"]
-        .nunique()
-        .reset_index()
-        .query("pick_pack_fee >= 2")[["marketplace", "size_tier"]]
-    )
-    expected = expected.merge(mixed, on=["marketplace", "size_tier"])
-
-    if expected.empty:
+    if not anomalies:
         return pd.DataFrame()
-
-    # Step 4: join back to individual ASIN rows and flag outliers
-    merged = fees.merge(expected, on=["marketplace", "size_tier"])
-    anomalies = merged[merged["pick_pack_fee"] != merged["expected_fee"]].copy()
-    return anomalies.reset_index(drop=True)
+    return pd.concat(anomalies, ignore_index=True)
 
 
 def get_fx_rates() -> dict:

@@ -1604,26 +1604,33 @@ with _fba_tab:
         if not _fba_anomalies.empty:
             _fba_img_map = get_asin_image_map()
             with st.expander(
-                f"⚠️ Pick & Pack discrepancies — {len(_fba_anomalies)} ASIN(s) may need remeasurement",
+                f"⚠️ Overcharged Pick & Pack — {len(_fba_anomalies)} ASIN(s) may need remeasurement",
                 expanded=True,
             ):
                 st.caption(
-                    "These ASINs have a Pick & Pack fee that differs from the most common fee "
-                    "for their size tier on that marketplace. Open an Amazon case to request remeasurement."
+                    "These ASINs are charged **more** than other products of the identical size "
+                    "(same W×L×H from your product catalog, same marketplace). "
+                    "Open an Amazon case to request remeasurement."
                 )
                 _anom_display = _fba_anomalies.copy()
                 _anom_display.insert(0, "Image",
                     _anom_display["asin"].str.upper().map(_fba_img_map).fillna(""))
+                _anom_display["dimensions"] = (
+                    _anom_display["w"].astype(str) + " × " +
+                    _anom_display["l"].astype(str) + " × " +
+                    _anom_display["h"].astype(str) + " cm"
+                )
                 st.dataframe(
                     _anom_display.rename(columns={
-                        "asin":                        "ASIN",
-                        "marketplace":                 "Marketplace",
-                        "size_tier":                   "Size Tier",
-                        "pick_pack_fee":               "Their Fee ($)",
-                        "expected_fee":                "Expected Fee ($)",
-                        "currency":                    "Currency",
-                        "total_in_marketplace_tier":   "ASINs in Group",
-                    }),
+                        "asin":             "ASIN",
+                        "marketplace":      "Marketplace",
+                        "dimensions":       "Dimensions (W×L×H)",
+                        "size_tier":        "Size Tier",
+                        "pick_pack_fee":    "Charged ($)",
+                        "expected_fee":     "Expected ($)",
+                        "currency":         "Currency",
+                        "same_size_asins":  "Same-size ASINs",
+                    }).drop(columns=["w", "l", "h"], errors="ignore"),
                     column_config={
                         "Image": st.column_config.ImageColumn("Image", width=60),
                     },
