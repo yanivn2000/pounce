@@ -801,8 +801,8 @@ with tab_inv:
 # TAB — PROFIT
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_profit:
-    _suppliers_tab, _items_tab, _catalog_tab, _fba_tab = st.tabs([
-        "🏭 Suppliers", "🧩 Items", "📋 Products Catalog", "💰 FBA Fees"
+    _suppliers_tab, _items_tab, _catalog_tab, _fba_tab, _aged_tab = st.tabs([
+        "🏭 Suppliers", "🧩 Items", "📋 Products Catalog", "💰 FBA Fees", "📦 Long Storage"
     ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1668,6 +1668,115 @@ with _fba_tab:
             use_container_width=True,
             hide_index=True,
         )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PROFIT SUB-TAB — LONG STORAGE ALERTS
+# ══════════════════════════════════════════════════════════════════════════════
+with _aged_tab:
+    from db.aged_inventory import (
+        import_aged_inventory_csv, get_aged_inventory_alerts,
+        get_aged_inventory_snapshot_date, clear_aged_inventory,
+        init_aged_inventory_table,
+    )
+    from db.database import get_conn as _aged_get_conn
+    _aged_conn = _aged_get_conn()
+    init_aged_inventory_table(_aged_conn)
+    _aged_conn.close()
+
+    st.markdown("## 📦 Long Storage Alerts")
+    st.markdown(
+        f"<p style='font-size:0.85rem;color:{T['text_secondary']};'>"
+        "Download from Seller Central → Reports → Fulfillment → Fee Preview → "
+        "<strong>Aged Inventory Surcharge report</strong>. "
+        "Uploading replaces all existing data.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Upload ────────────────────────────────────────────────────────────────
+    if "aged_inv_import_key" not in st.session_state:
+        st.session_state["aged_inv_import_key"] = 0
+    if "aged_inv_result" not in st.session_state:
+        st.session_state["aged_inv_result"] = None
+
+    _aged_csv = st.file_uploader(
+        "Upload Aged Inventory Surcharge CSV",
+        type=["csv", "txt"],
+        key=f"aged_inv_csv_{st.session_state['aged_inv_import_key']}",
+    )
+    if _aged_csv:
+        _aged_n, _aged_w = import_aged_inventory_csv(_aged_csv)
+        st.session_state["aged_inv_result"] = (_aged_n, _aged_w)
+        st.session_state["aged_inv_import_key"] += 1
+        st.rerun()
+    if st.session_state["aged_inv_result"] is not None:
+        _aged_n, _aged_w = st.session_state["aged_inv_result"]
+        st.session_state["aged_inv_result"] = None
+        for w in _aged_w:
+            st.warning(w)
+        if _aged_n:
+            st.success(f"✅ {_aged_n} rows imported.")
+
+    # ── Alerts ────────────────────────────────────────────────────────────────
+    st.divider()
+    _snap_date = get_aged_inventory_snapshot_date()
+    if not _snap_date:
+        st.info("No data yet — upload the Aged Inventory Surcharge report above.")
+    else:
+        _aged_img_map = get_asin_image_map()
+        st.caption(f"Snapshot date: **{_snap_date}**")
+
+        def _render_aged_table(df: "pd.DataFrame"):
+            if df.empty:
+                return
+            df = df.copy()
+            df.insert(0, "Image", df["asin"].str.upper().map(_aged_img_map).fillna(""))
+            st.dataframe(
+                df.rename(columns={
+                    "asin":           "ASIN",
+                    "marketplace":    "Marketplace",
+                    "product_name":   "Product",
+                    "total_units":    "Units",
+                    "total_charged":  "Fee Charged",
+                    "currency":       "Currency",
+                    "age_tiers":      "Age Tiers (days)",
+                    "max_age_lower":  "Max Age (days)",
+                }),
+                column_config={
+                    "Image":        st.column_config.ImageColumn("Image", width=60),
+                    "Fee Charged":  st.column_config.NumberColumn("Fee Charged", format="%.2f"),
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # ── 🔴 Already in LTSF (365+ days) ──────────────────────────────────
+        _ltsf_df = get_aged_inventory_alerts(min_lower=365)
+        if not _ltsf_df.empty:
+            _ltsf_total = _ltsf_df["total_charged"].sum()
+            _ltsf_units = int(_ltsf_df["total_units"].sum())
+            st.error(
+                f"🔴 **Already in Long-Term Storage Fee (365+ days)** — "
+                f"{len(_ltsf_df)} ASIN/marketplace combination(s) · "
+                f"{_ltsf_units:,} units · **${_ltsf_total:,.2f}** charged"
+            )
+            _render_aged_table(_ltsf_df)
+        else:
+            st.success("✅ No products in 365+ day storage fee.")
+
+        st.divider()
+
+        # ── 🟡 Warning: Approaching LTSF (270–364 days) ──────────────────────
+        _warn_df = get_aged_inventory_alerts(min_lower=270, max_lower=365)
+        if not _warn_df.empty:
+            _warn_units = int(_warn_df["total_units"].sum())
+            st.warning(
+                f"🟡 **Approaching Long-Term Storage Fee (270–364 days)** — "
+                f"{len(_warn_df)} ASIN/marketplace combination(s) · "
+                f"{_warn_units:,} units at risk"
+            )
+            _render_aged_table(_warn_df)
+        else:
+            st.success("✅ No products approaching 365-day threshold.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — PRODUCTION

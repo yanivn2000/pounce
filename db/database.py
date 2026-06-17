@@ -282,6 +282,9 @@ def init_db():
     # Amazon transactions module
     from db.amazon_module import init_amazon_tables
     init_amazon_tables(conn)
+    # Aged inventory surcharge
+    from db.aged_inventory import init_aged_inventory_table
+    init_aged_inventory_table(conn)
     conn.close()
 
 
