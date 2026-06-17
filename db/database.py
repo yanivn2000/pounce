@@ -150,14 +150,21 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_camp_perf ON campaign_performance(campaign_name, marketplace, snapshot_date);
 
             INSERT OR IGNORE INTO fx_rates (marketplace, rate, note) VALUES
-                ('amazon.com',    1.00, 'USD baseline'),
-                ('amazon.co.uk',  0.79, 'GBP — update regularly'),
-                ('amazon.ca',     1.36, 'CAD — update regularly'),
-                ('amazon.com.au', 1.53, 'AUD — update regularly'),
-                ('amazon.de',     0.92, 'EUR — update regularly'),
-                ('amazon.fr',     0.92, 'EUR — update regularly'),
-                ('amazon.es',     0.92, 'EUR — update regularly'),
-                ('amazon.it',     0.92, 'EUR — update regularly');
+                ('amazon.com',    1.00,  'USD baseline'),
+                ('amazon.co.uk',  0.79,  'GBP — update regularly'),
+                ('amazon.ca',     1.36,  'CAD — update regularly'),
+                ('amazon.com.au', 1.53,  'AUD — update regularly'),
+                ('amazon.de',     0.92,  'EUR — update regularly'),
+                ('amazon.fr',     0.92,  'EUR — update regularly'),
+                ('amazon.es',     0.92,  'EUR — update regularly'),
+                ('amazon.it',     0.92,  'EUR — update regularly'),
+                ('amazon.nl',     0.92,  'EUR — update regularly'),
+                ('amazon.be',     0.92,  'EUR — update regularly'),
+                ('amazon.ie',     0.92,  'EUR — update regularly'),
+                ('amazon.se',    10.50,  'SEK — update regularly'),
+                ('amazon.pl',     4.00,  'PLN — update regularly'),
+                ('amazon.com.mx', 17.50, 'MXN — update regularly'),
+                ('amazon.com.br', 5.80,  'BRL — update regularly');
 
             CREATE TABLE IF NOT EXISTS app_settings (
                 key        TEXT PRIMARY KEY,
@@ -553,14 +560,21 @@ def _migrate_fx_rates(conn: sqlite3.Connection):
         conn.executemany(
             "INSERT OR IGNORE INTO fx_rates (marketplace, rate, note) VALUES (?,?,?)",
             [
-                ('amazon.com',    1.00, 'USD baseline'),
-                ('amazon.co.uk',  0.79, 'GBP — update regularly'),
-                ('amazon.ca',     1.36, 'CAD — update regularly'),
-                ('amazon.com.au', 1.53, 'AUD — update regularly'),
-                ('amazon.de',     0.92, 'EUR — update regularly'),
-                ('amazon.fr',     0.92, 'EUR — update regularly'),
-                ('amazon.es',     0.92, 'EUR — update regularly'),
-                ('amazon.it',     0.92, 'EUR — update regularly'),
+                ('amazon.com',    1.00,  'USD baseline'),
+                ('amazon.co.uk',  0.79,  'GBP — update regularly'),
+                ('amazon.ca',     1.36,  'CAD — update regularly'),
+                ('amazon.com.au', 1.53,  'AUD — update regularly'),
+                ('amazon.de',     0.92,  'EUR — update regularly'),
+                ('amazon.fr',     0.92,  'EUR — update regularly'),
+                ('amazon.es',     0.92,  'EUR — update regularly'),
+                ('amazon.it',     0.92,  'EUR — update regularly'),
+                ('amazon.nl',     0.92,  'EUR — update regularly'),
+                ('amazon.be',     0.92,  'EUR — update regularly'),
+                ('amazon.ie',     0.92,  'EUR — update regularly'),
+                ('amazon.se',    10.50,  'SEK — update regularly'),
+                ('amazon.pl',     4.00,  'PLN — update regularly'),
+                ('amazon.com.mx', 17.50, 'MXN — update regularly'),
+                ('amazon.com.br', 5.80,  'BRL — update regularly'),
             ]
         )
         conn.commit()

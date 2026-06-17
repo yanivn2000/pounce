@@ -4762,16 +4762,17 @@ with tab_amazon:
     _CURRENCY_TO_MP = {
         "USD": "amazon.com",    "CAD": "amazon.ca",
         "GBP": "amazon.co.uk", "EUR": "amazon.de",
-        "AUD": "amazon.com.au","PLN": None, "SEK": None,
+        "AUD": "amazon.com.au","SEK": "amazon.se",
+        "PLN": "amazon.pl",    "MXN": "amazon.com.mx",
+        "BRL": "amazon.com.br",
     }
-    _FALLBACK_FX = {"PLN": 0.25, "SEK": 0.096}   # rough defaults
 
     def _to_usd(amount, currency):
         mp   = _CURRENCY_TO_MP.get(currency)
         rate = _fx_mp.get(mp) if mp else None
         if rate:
             return amount / rate
-        return amount * _FALLBACK_FX.get(currency, 1.0)
+        return amount  # unknown currency — pass through as-is
 
     # ── Upload section ────────────────────────────────────────────────────────────
     with st.expander("📤 Upload Transaction View", expanded=False):
@@ -5292,11 +5293,15 @@ with tab_cashflow:
     )
     import sqlite3 as _cf_sqlite
 
-    _cf_conn = _cf_sqlite.connect(
-        __import__("db.database", fromlist=["DB_PATH"]).DB_PATH,
-        check_same_thread=False
-    )
-    init_cashflow_tables(_cf_conn)
+    # Cache connection in session_state — avoids reconnecting on every render
+    if "_cf_conn" not in st.session_state:
+        _cf_conn_new = _cf_sqlite.connect(
+            __import__("db.database", fromlist=["DB_PATH"]).DB_PATH,
+            check_same_thread=False
+        )
+        init_cashflow_tables(_cf_conn_new)
+        st.session_state["_cf_conn"] = _cf_conn_new
+    _cf_conn = st.session_state["_cf_conn"]
 
     st.markdown("## 💰 Cash Forecast")
 
@@ -5309,7 +5314,9 @@ with tab_cashflow:
             step=0.01, key="cf_usd_nis",
             help="Used to convert ILS ↔ USD in the merged total view"
         )
-        set_setting(_cf_conn, "usd_nis", _cf_usd_nis)
+        if str(_cf_usd_nis) != st.session_state.get("_cf_saved_usd_nis", ""):
+            set_setting(_cf_conn, "usd_nis", _cf_usd_nis)
+            st.session_state["_cf_saved_usd_nis"] = str(_cf_usd_nis)
     with _s2:
         _cf_growth = st.number_input(
             "Amazon growth %", min_value=-50, max_value=200,
@@ -5317,7 +5324,10 @@ with tab_cashflow:
             step=5, key="cf_growth",
             help="Applied to last year's Amazon payout as forecast base"
         ) / 100.0
-        set_setting(_cf_conn, "amz_growth", int(_cf_growth * 100))
+        _cf_growth_pct = int(_cf_growth * 100)
+        if str(_cf_growth_pct) != st.session_state.get("_cf_saved_amz_growth", ""):
+            set_setting(_cf_conn, "amz_growth", _cf_growth_pct)
+            st.session_state["_cf_saved_amz_growth"] = str(_cf_growth_pct)
     with _s3:
         _horizon_opts = [6, 9, 12, 18, 24]
         _saved_horizon = int(get_setting(_cf_conn, "cf_months"))
@@ -5326,7 +5336,9 @@ with tab_cashflow:
             index=_horizon_opts.index(_saved_horizon) if _saved_horizon in _horizon_opts else 2,
             key="cf_months"
         )
-        set_setting(_cf_conn, "cf_months", _cf_months)
+        if str(_cf_months) != st.session_state.get("_cf_saved_cf_months", ""):
+            set_setting(_cf_conn, "cf_months", _cf_months)
+            st.session_state["_cf_saved_cf_months"] = str(_cf_months)
     with _s4:
         _cf_warn_usd = st.number_input(
             "⚠️ Low cash threshold (USD)", min_value=0,
@@ -5334,7 +5346,9 @@ with tab_cashflow:
             step=5000, key="cf_warn",
             help="Highlight months where total USD equivalent drops below this"
         )
-        set_setting(_cf_conn, "warn_usd", _cf_warn_usd)
+        if str(_cf_warn_usd) != st.session_state.get("_cf_saved_warn_usd", ""):
+            set_setting(_cf_conn, "warn_usd", _cf_warn_usd)
+            st.session_state["_cf_saved_warn_usd"] = str(_cf_warn_usd)
 
     st.divider()
 
@@ -5462,35 +5476,38 @@ with tab_cashflow:
             st.line_chart(_chart_df, use_container_width=True)
 
     # ════════════════════════════════════════════════════════════════════════
-    # ACCOUNTS & BALANCES
+    # ACCOUNTS & BALANCES — wrapped in @st.fragment for fast saves
     # ════════════════════════════════════════════════════════════════════════
-    with _cf_tab_accounts:
-        _cf_accs = get_accounts(_cf_conn)
+    @st.fragment
+    def _cf_accounts_fragment(cf_conn):
+        from db.cashflow_module import get_accounts, update_account_balance, add_account
+
+        _cf_accs = get_accounts(cf_conn)
 
         st.markdown("### Current Balances")
         st.caption("Update whenever you check your accounts (weekly recommended).")
 
-        # Show accounts with editable balance
         for acc in _cf_accs:
             aid, aname, acompany, acur, abal, alimit, asort, aupdated = acc
             sym = "$" if acur == "USD" else "₪"
-            col_name, col_bal, col_btn = st.columns([3, 2, 1])
-            col_name.markdown(
-                f"**{aname}** &nbsp; <span style='color:#888;font-size:0.8rem'>"
-                f"{acompany} · {acur}"
-                + (f" · limit {sym}{alimit:,.0f}" if alimit else "")
-                + f" · updated {aupdated[:10]}</span>",
-                unsafe_allow_html=True
-            )
-            new_bal = col_bal.number_input(
-                f"Balance {aname}", value=float(abal),
-                step=100.0, label_visibility="collapsed",
-                key=f"cf_bal_{aid}", format="%.0f"
-            )
-            if col_btn.button("Save", key=f"cf_save_{aid}"):
-                update_account_balance(_cf_conn, aid, new_bal)
-                st.success(f"✅ {aname} updated to {sym}{new_bal:,.0f}")
-                st.rerun()
+            with st.form(f"cf_acc_form_{aid}", border=False):
+                col_name, col_bal, col_btn = st.columns([3, 2, 1])
+                col_name.markdown(
+                    f"**{aname}** &nbsp; <span style='color:#888;font-size:0.8rem'>"
+                    f"{acompany} · {acur}"
+                    + (f" · limit {sym}{alimit:,.0f}" if alimit else "")
+                    + f" · updated {aupdated[:10]}</span>",
+                    unsafe_allow_html=True
+                )
+                new_bal = col_bal.number_input(
+                    f"Balance {aname}", value=float(abal),
+                    step=100.0, label_visibility="collapsed",
+                    key=f"cf_bal_{aid}", format="%.0f"
+                )
+                if col_btn.form_submit_button("Save"):
+                    update_account_balance(cf_conn, aid, new_bal)
+                    st.success(f"✅ {aname} updated to {sym}{new_bal:,.0f}")
+                    st.rerun(scope="fragment")
 
             if alimit and abal < -alimit:
                 st.warning(f"⚠️ {aname} is below credit limit! {sym}{abal:,.0f} (limit {sym}{alimit:,.0f})")
@@ -5506,21 +5523,31 @@ with tab_cashflow:
             _new_alimit = _ac5.number_input("Credit limit", value=0.0, step=1000.0, format="%.0f")
             if st.form_submit_button("➕ Add Account"):
                 if _new_aname:
-                    add_account(_cf_conn, _new_aname, _new_acomp, _new_acur, _new_abal, _new_alimit)
+                    add_account(cf_conn, _new_aname, _new_acomp, _new_acur, _new_abal, _new_alimit)
                     st.success(f"✅ Account '{_new_aname}' added.")
-                    st.rerun()
+                    st.rerun(scope="fragment")
+
+    with _cf_tab_accounts:
+        _cf_accounts_fragment(_cf_conn)
 
     # ════════════════════════════════════════════════════════════════════════
-    # SCHEDULED ITEMS
+    # SCHEDULED ITEMS  — wrapped in @st.fragment so add/edit/delete only
+    # reruns this section, not the entire app (skips build_forecast etc.)
     # ════════════════════════════════════════════════════════════════════════
-    with _cf_tab_items:
-        _cf_items = get_items(_cf_conn)
+    @st.fragment
+    def _cf_items_fragment(cf_conn):
+        from db.cashflow_module import (
+            get_items, add_item, update_item, delete_item,
+            change_from_month, _CATEGORIES,
+        )
+        import pandas as _cf_pd2
+
         _co_opts  = {"LLC": "EOS ONLINE LLC", "IL": "EOS TRADE LTD"}
         _today_ym = __import__("datetime").date.today().strftime("%Y-%m")
+        _cf_items = get_items(cf_conn)
 
         # ── Items table ───────────────────────────────────────────────────
         if _cf_items:
-            import pandas as _cf_pd2
             _item_rows = []
             for item in _cf_items:
                 iid, name, direction, category, amount, currency, frequency, \
@@ -5592,11 +5619,11 @@ with tab_cashflow:
                         _enotes = _e10.text_input("Notes", value=_snotes or "")
 
                         if st.form_submit_button("💾 Save changes"):
-                            update_item(_cf_conn, _sel_id, _ename, _edir, _ecat,
+                            update_item(cf_conn, _sel_id, _ename, _edir, _ecat,
                                         _eamt, _ecur, _efreq, _eco,
                                         _estart, _eend or None, _enotes or None)
                             st.success("✅ Item updated.")
-                            st.rerun()
+                            st.rerun(scope="fragment")
 
                 # ── CHANGE FROM MONTH ─────────────────────────────────────
                 with _act_tab_change:
@@ -5624,9 +5651,9 @@ with tab_cashflow:
                         )
                         if st.form_submit_button("✂️ Apply change"):
                             if _chg_from and _chg_amt > 0:
-                                change_from_month(_cf_conn, _sel_id, _chg_from, _chg_amt)
+                                change_from_month(cf_conn, _sel_id, _chg_from, _chg_amt)
                                 st.success(f"✅ Done — {_sname} split at {_chg_from}.")
-                                st.rerun()
+                                st.rerun(scope="fragment")
                             else:
                                 st.error("Month and new amount are required.")
 
@@ -5637,9 +5664,9 @@ with tab_cashflow:
                         f"This cannot be undone."
                     )
                     if st.button("🗑️ Confirm Delete", key="cf_confirm_del"):
-                        delete_item(_cf_conn, _sel_id)
+                        delete_item(cf_conn, _sel_id)
                         st.success("Deleted.")
-                        st.rerun()
+                        st.rerun(scope="fragment")
 
         st.divider()
         st.markdown("### ➕ Add Scheduled Item")
@@ -5666,14 +5693,15 @@ with tab_cashflow:
 
             if st.form_submit_button("➕ Add Item"):
                 if _iname and _iamount > 0 and _istart:
-                    add_item(_cf_conn, _iname, _idir, _icat, _iamount, _icur,
+                    add_item(cf_conn, _iname, _idir, _icat, _iamount, _icur,
                              _ifreq, _ico, _istart, _iend or None, _inotes or None)
                     st.success(f"✅ '{_iname}' added.")
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 else:
                     st.error("Name, Amount and Start date are required.")
 
-    _cf_conn.close()
+    with _cf_tab_items:
+        _cf_items_fragment(_cf_conn)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 7 — ADMIN  (admin role only)
