@@ -1616,15 +1616,14 @@ with _fba_tab:
                     _anom_display["asin"].str.upper().map(_fba_img_map).fillna(""))
                 st.dataframe(
                     _anom_display.rename(columns={
-                        "asin":               "ASIN",
-                        "marketplace":        "Marketplace",
-                        "size_tier":          "Size Tier",
-                        "pick_pack_fee":      "Their Fee ($)",
-                        "expected_fee":       "Expected Fee ($)",
-                        "currency":           "Currency",
-                        "asin_count_in_group": "ASINs in Group",
-                    }).drop(columns=["expected_fee"], errors="ignore")
-                    .assign(**{"Expected Fee ($)": _anom_display["expected_fee"]}),
+                        "asin":                        "ASIN",
+                        "marketplace":                 "Marketplace",
+                        "size_tier":                   "Size Tier",
+                        "pick_pack_fee":               "Their Fee ($)",
+                        "expected_fee":                "Expected Fee ($)",
+                        "currency":                    "Currency",
+                        "total_in_marketplace_tier":   "ASINs in Group",
+                    }),
                     column_config={
                         "Image": st.column_config.ImageColumn("Image", width=60),
                     },

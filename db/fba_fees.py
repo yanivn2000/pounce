@@ -168,35 +168,66 @@ def get_all_fba_fees_df() -> pd.DataFrame:
 
 def get_pick_pack_anomalies() -> pd.DataFrame:
     """
-    Return ASINs where the Pick & Pack fee differs from the most common fee
-    for that (marketplace, size_tier) group. Only groups with a known size_tier
-    and at least 2 distinct fee values are returned.
+    Return ASINs whose Pick & Pack fee differs from the most common fee
+    for their (marketplace, size_tier) group.
+
+    All comparisons are strictly within the same marketplace — an ASIN on
+    amazon.com is never compared against amazon.de data.
     """
     conn = get_conn()
-    df = pd.read_sql_query(
-        "SELECT asin, marketplace, size_tier, pick_pack_fee, currency "
-        "FROM fba_fees WHERE size_tier IS NOT NULL AND size_tier != '' "
-        "ORDER BY marketplace, size_tier, pick_pack_fee",
-        conn
-    )
+    # Step 1: per-marketplace stats for each size tier
+    stats = pd.read_sql_query("""
+        SELECT
+            marketplace,
+            size_tier,
+            pick_pack_fee,
+            COUNT(*) AS fee_count
+        FROM fba_fees
+        WHERE size_tier IS NOT NULL AND size_tier != ''
+        GROUP BY marketplace, size_tier, pick_pack_fee
+    """, conn)
+
+    fees = pd.read_sql_query("""
+        SELECT asin, marketplace, size_tier, pick_pack_fee, currency
+        FROM fba_fees
+        WHERE size_tier IS NOT NULL AND size_tier != ''
+    """, conn)
     conn.close()
-    if df.empty:
+
+    if stats.empty or fees.empty:
         return pd.DataFrame()
 
-    anomalies = []
-    for (mp, tier), grp in df.groupby(["marketplace", "size_tier"]):
-        fee_counts = grp["pick_pack_fee"].value_counts()
-        if len(fee_counts) < 2:
-            continue                         # all same fee — no anomaly
-        expected_fee = fee_counts.index[0]   # most common fee
-        outliers = grp[grp["pick_pack_fee"] != expected_fee].copy()
-        outliers["expected_fee"] = expected_fee
-        outliers["asin_count_in_group"] = len(grp)
-        anomalies.append(outliers)
+    # Step 2: find expected (most common) fee per (marketplace, size_tier)
+    # and total ASINs per group — both scoped to the same marketplace
+    idx = stats.groupby(["marketplace", "size_tier"])["fee_count"].idxmax()
+    expected = (
+        stats.loc[idx, ["marketplace", "size_tier", "pick_pack_fee"]]
+        .rename(columns={"pick_pack_fee": "expected_fee"})
+    )
+    totals = (
+        stats.groupby(["marketplace", "size_tier"])["fee_count"]
+        .sum()
+        .reset_index()
+        .rename(columns={"fee_count": "total_in_marketplace_tier"})
+    )
+    expected = expected.merge(totals, on=["marketplace", "size_tier"])
 
-    if not anomalies:
+    # Step 3: keep only groups that have more than one distinct fee
+    mixed = (
+        stats.groupby(["marketplace", "size_tier"])["pick_pack_fee"]
+        .nunique()
+        .reset_index()
+        .query("pick_pack_fee >= 2")[["marketplace", "size_tier"]]
+    )
+    expected = expected.merge(mixed, on=["marketplace", "size_tier"])
+
+    if expected.empty:
         return pd.DataFrame()
-    return pd.concat(anomalies, ignore_index=True)
+
+    # Step 4: join back to individual ASIN rows and flag outliers
+    merged = fees.merge(expected, on=["marketplace", "size_tier"])
+    anomalies = merged[merged["pick_pack_fee"] != merged["expected_fee"]].copy()
+    return anomalies.reset_index(drop=True)
 
 
 def get_fx_rates() -> dict:
