@@ -1598,6 +1598,17 @@ with _fba_tab:
     if _fba_df.empty:
         st.info("No FBA fees imported yet. Upload a Fee Preview CSV above.")
     else:
+        # Marketplace filter
+        _fba_mps = ["All"] + sorted(_fba_df["marketplace"].dropna().unique().tolist())
+        _fba_mp_sel = st.selectbox("Marketplace", _fba_mps, key="fba_mp_filter")
+        if _fba_mp_sel != "All":
+            _fba_df = _fba_df[_fba_df["marketplace"] == _fba_mp_sel]
+
+        # Attach product images from catalog
+        _fba_img_map = get_asin_image_map()
+        _fba_df = _fba_df.copy()
+        _fba_df.insert(0, "Image", _fba_df["asin"].str.upper().map(_fba_img_map).fillna(""))
+
         st.markdown(f"**{len(_fba_df):,} rows** · last updated from Fee Preview report")
         st.dataframe(
             _fba_df.rename(columns={
@@ -1608,6 +1619,9 @@ with _fba_tab:
                 "currency":      "Currency",
                 "updated_at":    "Updated",
             }),
+            column_config={
+                "Image": st.column_config.ImageColumn("Image", width=60),
+            },
             use_container_width=True,
             hide_index=True,
         )
