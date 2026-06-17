@@ -10,10 +10,11 @@ _PICK_PACK_COLS = [
     "expected-fulfillment-fee-per-unit",           # NA (US/CA)
     "expected-domestic-fulfilment-fee-per-unit",   # UK/EU
 ]
-_REFERRAL_COL  = "estimated-referral-fee-per-unit"
-_ASIN_COL      = "asin"
-_CURRENCY_COL  = "currency"
-_STORE_COL     = "amazon-store"   # e.g. "US", "CA", "UK"
+_REFERRAL_COL   = "estimated-referral-fee-per-unit"
+_ASIN_COL       = "asin"
+_CURRENCY_COL   = "currency"
+_STORE_COL      = "amazon-store"   # e.g. "US", "CA", "UK"
+_SIZE_TIER_COL  = "product-size-tier"
 
 # Map amazon-store codes → internal marketplace strings
 _STORE_MAP = {
@@ -112,15 +113,21 @@ def import_fee_preview_csv(file_obj) -> tuple[int, list[str]]:
                 if currency_col_present else ""
             )
 
+            size_tier = (
+                str(row.get(_SIZE_TIER_COL, "")).strip()
+                if _SIZE_TIER_COL in df.columns else ""
+            )
+
             conn.execute("""
-                INSERT INTO fba_fees (asin, marketplace, pick_pack_fee, referral_fee, currency, updated_at)
-                VALUES (?, ?, ?, ?, ?, datetime('now'))
+                INSERT INTO fba_fees (asin, marketplace, pick_pack_fee, referral_fee, currency, size_tier, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(asin, marketplace) DO UPDATE SET
                     pick_pack_fee = excluded.pick_pack_fee,
                     referral_fee  = excluded.referral_fee,
                     currency      = excluded.currency,
+                    size_tier     = excluded.size_tier,
                     updated_at    = excluded.updated_at
-            """, (asin, marketplace, pick_pack, referral, currency))
+            """, (asin, marketplace, pick_pack, referral, currency, size_tier))
             saved += 1
 
     conn.close()
@@ -151,12 +158,45 @@ def get_all_fba_fees_df() -> pd.DataFrame:
     """Return all fba_fees rows as a DataFrame for display."""
     conn = get_conn()
     df = pd.read_sql_query(
-        "SELECT asin, marketplace, pick_pack_fee, referral_fee, currency, updated_at "
+        "SELECT asin, marketplace, size_tier, pick_pack_fee, referral_fee, currency, updated_at "
         "FROM fba_fees ORDER BY marketplace, asin",
         conn
     )
     conn.close()
     return df
+
+
+def get_pick_pack_anomalies() -> pd.DataFrame:
+    """
+    Return ASINs where the Pick & Pack fee differs from the most common fee
+    for that (marketplace, size_tier) group. Only groups with a known size_tier
+    and at least 2 distinct fee values are returned.
+    """
+    conn = get_conn()
+    df = pd.read_sql_query(
+        "SELECT asin, marketplace, size_tier, pick_pack_fee, currency "
+        "FROM fba_fees WHERE size_tier IS NOT NULL AND size_tier != '' "
+        "ORDER BY marketplace, size_tier, pick_pack_fee",
+        conn
+    )
+    conn.close()
+    if df.empty:
+        return pd.DataFrame()
+
+    anomalies = []
+    for (mp, tier), grp in df.groupby(["marketplace", "size_tier"]):
+        fee_counts = grp["pick_pack_fee"].value_counts()
+        if len(fee_counts) < 2:
+            continue                         # all same fee — no anomaly
+        expected_fee = fee_counts.index[0]   # most common fee
+        outliers = grp[grp["pick_pack_fee"] != expected_fee].copy()
+        outliers["expected_fee"] = expected_fee
+        outliers["asin_count_in_group"] = len(grp)
+        anomalies.append(outliers)
+
+    if not anomalies:
+        return pd.DataFrame()
+    return pd.concat(anomalies, ignore_index=True)
 
 
 def get_fx_rates() -> dict:

@@ -42,6 +42,7 @@ from db.inventory import (
 from db.importer import import_orders_csv, save_recommendation, save_recommendations_batch, update_recommendation_outcome
 from db.fba_fees import (
     import_fee_preview_csv, get_fba_fees_map, get_all_fba_fees_df, clear_all_fba_fees,
+    get_pick_pack_anomalies,
     get_fx_rates, get_fx_rates_df, save_fx_rate,
 )
 from db.queries import (
@@ -1598,7 +1599,42 @@ with _fba_tab:
     if _fba_df.empty:
         st.info("No FBA fees imported yet. Upload a Fee Preview CSV above.")
     else:
-        # Marketplace filter
+        # ── Anomaly detection ─────────────────────────────────────────────
+        _fba_anomalies = get_pick_pack_anomalies()
+        if not _fba_anomalies.empty:
+            _fba_img_map = get_asin_image_map()
+            with st.expander(
+                f"⚠️ Pick & Pack discrepancies — {len(_fba_anomalies)} ASIN(s) may need remeasurement",
+                expanded=True,
+            ):
+                st.caption(
+                    "These ASINs have a Pick & Pack fee that differs from the most common fee "
+                    "for their size tier on that marketplace. Open an Amazon case to request remeasurement."
+                )
+                _anom_display = _fba_anomalies.copy()
+                _anom_display.insert(0, "Image",
+                    _anom_display["asin"].str.upper().map(_fba_img_map).fillna(""))
+                st.dataframe(
+                    _anom_display.rename(columns={
+                        "asin":               "ASIN",
+                        "marketplace":        "Marketplace",
+                        "size_tier":          "Size Tier",
+                        "pick_pack_fee":      "Their Fee ($)",
+                        "expected_fee":       "Expected Fee ($)",
+                        "currency":           "Currency",
+                        "asin_count_in_group": "ASINs in Group",
+                    }).drop(columns=["expected_fee"], errors="ignore")
+                    .assign(**{"Expected Fee ($)": _anom_display["expected_fee"]}),
+                    column_config={
+                        "Image": st.column_config.ImageColumn("Image", width=60),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        st.divider()
+
+        # ── Marketplace filter ────────────────────────────────────────────
         _fba_mps = ["All"] + sorted(_fba_df["marketplace"].dropna().unique().tolist())
         _fba_mp_sel = st.selectbox("Marketplace", _fba_mps, key="fba_mp_filter")
         if _fba_mp_sel != "All":
@@ -1614,6 +1650,7 @@ with _fba_tab:
             _fba_df.rename(columns={
                 "asin":          "ASIN",
                 "marketplace":   "Marketplace",
+                "size_tier":     "Size Tier",
                 "pick_pack_fee": "Pick & Pack ($)",
                 "referral_fee":  "Referral ($)",
                 "currency":      "Currency",

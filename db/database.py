@@ -516,7 +516,7 @@ def _migrate_recommendations_score(conn: sqlite3.Connection):
 
 
 def _migrate_fba_fees(conn: sqlite3.Connection):
-    """Ensure fba_fees table exists (created in executescript; safe no-op)."""
+    """Ensure fba_fees table exists and has size_tier column."""
     try:
         conn.execute("SELECT 1 FROM fba_fees LIMIT 1")
     except Exception:
@@ -529,6 +529,7 @@ def _migrate_fba_fees(conn: sqlite3.Connection):
                     pick_pack_fee REAL DEFAULT 0,
                     referral_fee  REAL DEFAULT 0,
                     currency      TEXT DEFAULT 'USD',
+                    size_tier     TEXT DEFAULT '',
                     updated_at    TEXT DEFAULT (datetime('now')),
                     UNIQUE(asin, marketplace)
                 )
@@ -536,6 +537,11 @@ def _migrate_fba_fees(conn: sqlite3.Connection):
             conn.commit()
         except Exception:
             pass
+    # Add size_tier to existing tables that predate this column
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(fba_fees)").fetchall()]
+    if "size_tier" not in cols:
+        conn.execute("ALTER TABLE fba_fees ADD COLUMN size_tier TEXT DEFAULT ''")
+        conn.commit()
 
 
 def _migrate_fx_rates(conn: sqlite3.Connection):
