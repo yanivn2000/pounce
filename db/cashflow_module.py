@@ -101,6 +101,13 @@ def init_cashflow_tables(conn):
             notes         TEXT,
             created_at    TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS cashflow_completions (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id      INTEGER NOT NULL,
+            ym           TEXT    NOT NULL,
+            completed_at TEXT    DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(item_id, ym)
+        );
     """)
     # Migration: add company column to cashflow_items if it was created without it
     cols = [r[1] for r in conn.execute("PRAGMA table_info(cashflow_items)").fetchall()]
@@ -210,6 +217,29 @@ def add_account(conn, name, company, currency, balance, credit_limit):
     conn.commit()
 
 
+# ── Completions (Mark as Paid) ────────────────────────────────────────────────
+def mark_item_paid(conn, item_id: int, ym: str):
+    conn.execute(
+        "INSERT OR IGNORE INTO cashflow_completions(item_id, ym) VALUES(?,?)",
+        [item_id, ym]
+    )
+    conn.commit()
+
+
+def unmark_item_paid(conn, item_id: int, ym: str):
+    conn.execute(
+        "DELETE FROM cashflow_completions WHERE item_id=? AND ym=?",
+        [item_id, ym]
+    )
+    conn.commit()
+
+
+def get_completions_set(conn) -> set:
+    """Returns set of (item_id, ym) tuples for all paid items."""
+    rows = conn.execute("SELECT item_id, ym FROM cashflow_completions").fetchall()
+    return {(r[0], r[1]) for r in rows}
+
+
 # ── Amazon payout forecast from DB ───────────────────────────────────────────
 _TRANSFER_TYPES = (
     "Transfer","Debt","Übertrag","Verbindlichkeit",
@@ -301,8 +331,14 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
     items    = get_items(conn)
 
     # Amazon payout history (previous year, fallback two years)
-    prev_year_net = get_amazon_monthly_net(conn, today.year - 1, usd_nis)
-    two_years_net = get_amazon_monthly_net(conn, today.year - 2, usd_nis)
+    prev_year_net    = get_amazon_monthly_net(conn, today.year - 1, usd_nis)
+    two_years_net    = get_amazon_monthly_net(conn, today.year - 2, usd_nis)
+    # Actual Amazon payout received so far this year (for current-month deduction)
+    current_year_net = get_amazon_monthly_net(conn, today.year, usd_nis)
+    current_ym       = f"{today.year}-{today.month:02d}"
+
+    # Items marked as paid — skip them in forecast
+    completions = get_completions_set(conn)
 
     # Amazon account id (first account named "Amazon")
     amazon_acc_id = next(
@@ -336,14 +372,23 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
         monthly_flows = []
 
         # ── Amazon payout ──────────────────────────────────────────────────
-        base = prev_year_net.get(fm) or two_years_net.get(fm, 0.0)
-        amz_payout = max(base * (1 + amazon_growth), 0.0)
+        base          = prev_year_net.get(fm) or two_years_net.get(fm, 0.0)
+        amz_payout_full = max(base * (1 + amazon_growth), 0.0)
+        if ym == current_ym:
+            # Deduct what Amazon already paid this month — only forecast the remainder
+            already_received = current_year_net.get(fm, 0.0)
+            amz_payout = max(0.0, amz_payout_full - already_received)
+        else:
+            already_received = 0.0
+            amz_payout = amz_payout_full
         if amazon_acc_id and amz_payout:
             running[amazon_acc_id] = running.get(amazon_acc_id, 0.0) + amz_payout
             monthly_flows.append({
                 "name": "Amazon Payout (auto)", "direction": "in",
                 "amount": amz_payout, "currency": "USD",
-                "company": "LLC", "auto": True,
+                "company": "LLC", "auto": True, "item_id": None,
+                "already_received": already_received,
+                "amz_payout_full": amz_payout_full,
             })
 
         # ── Scheduled items ────────────────────────────────────────────────
@@ -356,6 +401,8 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
             if start_ym and ym < start_ym:
                 continue
             if end_ym and ym > end_ym:
+                continue
+            if (iid, ym) in completions:
                 continue
 
             # Does this item fire this month?
@@ -390,7 +437,7 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
             monthly_flows.append({
                 "name": name, "direction": direction, "category": category,
                 "amount": amount, "currency": currency,
-                "company": company, "auto": False,
+                "company": company, "auto": False, "item_id": iid,
             })
 
         result.append({
