@@ -1210,17 +1210,7 @@ def get_report_freshness() -> list[dict]:
     ).fetchall()
     for row in mp_rows:
         mp = row[0]
-        d = _q("SELECT MAX(date) FROM amazon_transactions WHERE marketplace=?", (mp,))
-        if not d:
-            row2 = conn.execute(
-                "SELECT year, month FROM amazon_transactions WHERE marketplace=? "
-                "ORDER BY year DESC, rowid DESC LIMIT 1", (mp,)
-            ).fetchone()
-            if row2:
-                _MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
-                           "Jul","Aug","Sep","Oct","Nov","Dec"]
-                mi = _MONTHS.index(row2[1]) + 1 if row2[1] in _MONTHS else 1
-                d = f"{row2[0]}-{mi:02d}-28"
+        d = _q("SELECT MAX(tx_date) FROM amazon_transactions WHERE marketplace=?", (mp,))
         reports.append({"group": "Amazon Transactions", "label": f"Transactions — {mp}",
                         "last_date": d[:10] if d else None, "cadence_days": 7})
 
