@@ -5641,13 +5641,6 @@ with tab_cashflow:
                 _warn_labels = [f"{CF_MONTHS[int(c[5:7])-1]} {c[:4]}" for c in _warn_cols]
                 st.warning(f"⚠️ Closing balance drops below ${_cf_warn_usd:,} in: **{', '.join(_warn_labels)}**")
 
-            # ── Chart ─────────────────────────────────────────────────────
-            st.markdown("#### 💰 Projected Closing Balance (USD)")
-            _chart_df = _cf_pd.DataFrame(
-                {"Closing Balance": _closings}, index=_col_labels
-            )
-            st.line_chart(_chart_df, use_container_width=True)
-
             # ── Current Month: Mark as Paid ───────────────────────────────
             from datetime import date as _cf_date
             _today      = _cf_date.today()
@@ -5723,6 +5716,13 @@ with tab_cashflow:
                                 if st.button("Mark as Paid", key=f"pay_{_iid}_{_today_ym}"):
                                     mark_item_paid(_cf_conn, _iid, _today_ym)
                                     st.rerun()
+
+            # ── Chart ─────────────────────────────────────────────────────
+            st.markdown("#### 💰 Projected Closing Balance (USD)")
+            _chart_df = _cf_pd.DataFrame(
+                {"Closing Balance": _closings}, index=_col_labels
+            )
+            st.line_chart(_chart_df, use_container_width=True)
 
     # ════════════════════════════════════════════════════════════════════════
     # ACCOUNTS & BALANCES — wrapped in @st.fragment for fast saves
