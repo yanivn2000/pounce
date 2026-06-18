@@ -331,11 +331,8 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
     items    = get_items(conn)
 
     # Amazon payout history (previous year, fallback two years)
-    prev_year_net    = get_amazon_monthly_net(conn, today.year - 1, usd_nis)
-    two_years_net    = get_amazon_monthly_net(conn, today.year - 2, usd_nis)
-    # Actual Amazon payout received so far this year (for current-month deduction)
-    current_year_net = get_amazon_monthly_net(conn, today.year, usd_nis)
-    current_ym       = f"{today.year}-{today.month:02d}"
+    prev_year_net = get_amazon_monthly_net(conn, today.year - 1, usd_nis)
+    two_years_net = get_amazon_monthly_net(conn, today.year - 2, usd_nis)
 
     # Items marked as paid — skip them in forecast
     completions = get_completions_set(conn)
@@ -372,23 +369,14 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
         monthly_flows = []
 
         # ── Amazon payout ──────────────────────────────────────────────────
-        base          = prev_year_net.get(fm) or two_years_net.get(fm, 0.0)
-        amz_payout_full = max(base * (1 + amazon_growth), 0.0)
-        if ym == current_ym:
-            # Deduct what Amazon already paid this month — only forecast the remainder
-            already_received = current_year_net.get(fm, 0.0)
-            amz_payout = max(0.0, amz_payout_full - already_received)
-        else:
-            already_received = 0.0
-            amz_payout = amz_payout_full
+        base       = prev_year_net.get(fm) or two_years_net.get(fm, 0.0)
+        amz_payout = max(base * (1 + amazon_growth), 0.0)
         if amazon_acc_id and amz_payout:
             running[amazon_acc_id] = running.get(amazon_acc_id, 0.0) + amz_payout
             monthly_flows.append({
                 "name": "Amazon Payout (auto)", "direction": "in",
                 "amount": amz_payout, "currency": "USD",
                 "company": "LLC", "auto": True, "item_id": None,
-                "already_received": already_received,
-                "amz_payout_full": amz_payout_full,
             })
 
         # ── Scheduled items ────────────────────────────────────────────────

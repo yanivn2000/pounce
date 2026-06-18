@@ -5672,21 +5672,6 @@ with tab_cashflow:
 
             st.divider()
             with st.expander(f"✅ {_month_label} — Mark items as paid", expanded=True):
-                # Amazon payout status (auto-calculated)
-                _cur_month_result = next((r for r in _cf_result if r["ym"] == _today_ym), None)
-                if _cur_month_result:
-                    _amz_flow = next((f for f in _cur_month_result["flows"] if f.get("auto")), None)
-                    if _amz_flow:
-                        _received  = _amz_flow.get("already_received", 0.0)
-                        _remaining = _amz_flow["amount"]
-                        _expected  = _amz_flow.get("amz_payout_full", _remaining)
-                        st.info(
-                            f"🤖 **Amazon Payout (auto)** — "
-                            f"Expected: **${_expected:,.0f}** · "
-                            f"Received: **${_received:,.0f}** · "
-                            f"Remaining in forecast: **${_remaining:,.0f}**"
-                        )
-
                 if not _cur_items:
                     st.caption("No scheduled items for this month.")
                 else:
