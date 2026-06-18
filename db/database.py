@@ -1169,3 +1169,98 @@ def _migrate_returns(conn: sqlite3.Connection):
         """)
     except Exception:
         pass
+
+
+# ── Report freshness dashboard ────────────────────────────────────────────────
+def get_report_freshness() -> list[dict]:
+    """
+    Return a list of report status dicts for the Data Health dashboard.
+    Each dict: { group, label, last_date (YYYY-MM-DD or None), cadence_days }
+    cadence_days is the recommended max gap before a yellow alert (red = 2×).
+    """
+    conn = get_conn()
+
+    def _q(sql, params=()):
+        row = conn.execute(sql, params).fetchone()
+        return row[0] if row and row[0] else None
+
+    reports = []
+
+    # ── Inventory ─────────────────────────────────────────────────────────
+    for loc, label, cadence in [
+        ("FBA_US",  "FBA Inventory — US",       14),
+        ("FBA_CA",  "FBA Inventory — CA",       14),
+        ("FBA_UK",  "FBA Inventory — UK",       14),
+        ("AWD_US",  "AWD Inventory — US",       14),
+        ("AWD_CN",  "AWD Inventory — CN",       30),
+        ("3PL_UK",  "3PL Inventory — UK (SPM)", 14),
+        ("WH_CN",   "Warehouse — China",        30),
+    ]:
+        d = _q(
+            "SELECT MAX(snapshot_date) FROM inventory_snapshots WHERE location=?",
+            (loc,)
+        )
+        reports.append({"group": "Inventory", "label": label,
+                        "last_date": d[:10] if d else None, "cadence_days": cadence})
+
+    # ── Amazon Transactions ───────────────────────────────────────────────
+    mp_rows = conn.execute(
+        "SELECT DISTINCT marketplace FROM amazon_transactions "
+        "WHERE marketplace IS NOT NULL ORDER BY marketplace"
+    ).fetchall()
+    for row in mp_rows:
+        mp = row[0]
+        d = _q("SELECT MAX(date) FROM amazon_transactions WHERE marketplace=?", (mp,))
+        if not d:
+            row2 = conn.execute(
+                "SELECT year, month FROM amazon_transactions WHERE marketplace=? "
+                "ORDER BY year DESC, rowid DESC LIMIT 1", (mp,)
+            ).fetchone()
+            if row2:
+                _MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
+                           "Jul","Aug","Sep","Oct","Nov","Dec"]
+                mi = _MONTHS.index(row2[1]) + 1 if row2[1] in _MONTHS else 1
+                d = f"{row2[0]}-{mi:02d}-28"
+        reports.append({"group": "Amazon Transactions", "label": f"Transactions — {mp}",
+                        "last_date": d[:10] if d else None, "cadence_days": 7})
+
+    # ── FBA Fees ──────────────────────────────────────────────────────────
+    d = _q("SELECT MAX(updated_at) FROM fba_fees")
+    reports.append({"group": "FBA Fees", "label": "FBA Fee Preview",
+                    "last_date": d[:10] if d else None, "cadence_days": 30})
+
+    # ── Aged Inventory Surcharge ──────────────────────────────────────────
+    d = _q("SELECT MAX(snapshot_date) FROM aged_inventory")
+    reports.append({"group": "Aged Inventory", "label": "Aged Inventory Surcharge",
+                    "last_date": d[:10] if d else None, "cadence_days": 30})
+
+    # ── Returns ───────────────────────────────────────────────────────────
+    try:
+        ret_rows = conn.execute(
+            "SELECT region, last_imported FROM returns_meta ORDER BY region"
+        ).fetchall()
+        for row in ret_rows:
+            region, last_imp = row[0], row[1]
+            reports.append({"group": "Returns", "label": f"Returns — {region}",
+                            "last_date": last_imp[:10] if last_imp else None, "cadence_days": 14})
+    except Exception:
+        pass
+
+    # ── Advertising / Campaign Performance ───────────────────────────────
+    try:
+        cp_rows = conn.execute(
+            "SELECT DISTINCT marketplace FROM campaign_performance ORDER BY marketplace"
+        ).fetchall()
+        for row in cp_rows:
+            mp = row[0]
+            d = _q(
+                "SELECT MAX(snapshot_date) FROM campaign_performance WHERE marketplace=?",
+                (mp,)
+            )
+            reports.append({"group": "Advertising", "label": f"Placement Report — {mp}",
+                            "last_date": d[:10] if d else None, "cadence_days": 14})
+    except Exception:
+        pass
+
+    conn.close()
+    return reports

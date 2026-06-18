@@ -389,14 +389,14 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_admin = st.tabs([
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_datahealth, tab_admin = st.tabs([
         "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
-        "🛒 Amazon Transactions", "💰 Cash Forecast", "⚙️ Admin"
+        "🛒 Amazon Transactions", "💰 Cash Forecast", "🔔 Data Health", "⚙️ Admin"
     ])
 else:
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow = st.tabs([
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_datahealth = st.tabs([
         "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
-        "🛒 Amazon Transactions", "💰 Cash Forecast"
+        "🛒 Amazon Transactions", "💰 Cash Forecast", "🔔 Data Health"
     ])
     tab_admin = None
 
@@ -5938,7 +5938,84 @@ with tab_cashflow:
         _cf_items_fragment(_cf_conn)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 7 — ADMIN  (admin role only)
+# TAB 7 — DATA HEALTH
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_datahealth:
+    from datetime import date as _dh_date
+    from db.database import get_report_freshness
+
+    st.markdown("# 🔔 Data Health")
+    st.caption("Track when each report was last uploaded. Yellow = past recommended cadence. Red = overdue.")
+
+    _dh_reports = get_report_freshness()
+    _dh_today   = _dh_date.today()
+
+    def _dh_days_ago(d_str):
+        if not d_str:
+            return None
+        try:
+            from datetime import datetime
+            return (_dh_today - datetime.strptime(d_str, "%Y-%m-%d").date()).days
+        except Exception:
+            return None
+
+    def _dh_flag(days, cadence):
+        if days is None:       return "⚫", "Never uploaded", "#888"
+        if days <= cadence:    return "🟢", f"{days}d ago", "#1a7f4b"
+        if days <= cadence*2:  return "🟡", f"{days}d ago", "#b07d00"
+        return "🔴", f"{days}d ago — overdue", "#b00000"
+
+    # Group reports
+    _dh_groups = {}
+    for r in _dh_reports:
+        _dh_groups.setdefault(r["group"], []).append(r)
+
+    _GROUP_ORDER = ["Inventory", "Amazon Transactions", "FBA Fees",
+                    "Aged Inventory", "Returns", "Advertising"]
+
+    for _grp in _GROUP_ORDER:
+        if _grp not in _dh_groups:
+            continue
+        st.markdown(f"### {_grp}")
+        _grp_rows = _dh_groups[_grp]
+        _cols = st.columns(min(len(_grp_rows), 3))
+        for i, rep in enumerate(_grp_rows):
+            days = _dh_days_ago(rep["last_date"])
+            icon, age_label, color = _dh_flag(days, rep["cadence_days"])
+            with _cols[i % 3]:
+                st.markdown(
+                    f"""<div style="
+                        border:0.5px solid {color}40;
+                        border-left:3px solid {color};
+                        border-radius:6px;
+                        padding:10px 14px;
+                        margin-bottom:10px;
+                        background:{'#fff8f8' if color=='#b00000' else '#fffdf0' if color=='#b07d00' else 'var(--color-background-secondary)'};
+                    ">
+                    <div style="font-size:13px;font-weight:500;color:var(--color-text-primary);">{icon} {rep['label']}</div>
+                    <div style="font-size:12px;color:{color};margin-top:4px;">{age_label}</div>
+                    <div style="font-size:11px;color:var(--color-text-secondary);margin-top:2px;">
+                        Last: {rep['last_date'] or '—'} &nbsp;·&nbsp; Cadence: {rep['cadence_days']}d
+                    </div>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
+
+    # Summary bar
+    _total  = len(_dh_reports)
+    _ok     = sum(1 for r in _dh_reports if _dh_days_ago(r["last_date"]) is not None and _dh_days_ago(r["last_date"]) <= r["cadence_days"])
+    _yellow = sum(1 for r in _dh_reports if _dh_days_ago(r["last_date"]) is not None and r["cadence_days"] < _dh_days_ago(r["last_date"]) <= r["cadence_days"]*2)
+    _red    = sum(1 for r in _dh_reports if _dh_days_ago(r["last_date"]) is None or _dh_days_ago(r["last_date"]) > r["cadence_days"]*2)
+
+    st.divider()
+    _s1, _s2, _s3, _s4 = st.columns(4)
+    _s1.metric("Total Reports",  _total)
+    _s2.metric("🟢 Up to date",  _ok)
+    _s3.metric("🟡 Overdue",     _yellow)
+    _s4.metric("🔴 Critical",    _red)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 8 — ADMIN  (admin role only)
 # ══════════════════════════════════════════════════════════════════════════════
 if tab_admin is not None:
     with tab_admin:
