@@ -389,18 +389,116 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_datahealth, tab_admin = st.tabs([
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_occasions, tab_datahealth, tab_admin = st.tabs([
         "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
-        "🛒 Amazon Transactions", "💰 Cash Forecast", "🔔 Data Health", "⚙️ Admin"
+        "🛒 Amazon Transactions", "💰 Cash Forecast", "🎁 Occasions", "🔔 Data Health", "⚙️ Admin"
     ])
 else:
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_datahealth = st.tabs([
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_occasions, tab_datahealth = st.tabs([
         "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
-        "🛒 Amazon Transactions", "💰 Cash Forecast", "🔔 Data Health"
+        "🛒 Amazon Transactions", "💰 Cash Forecast", "🎁 Occasions", "🔔 Data Health"
     ])
     tab_admin = None
 
 # Analysis content moved into Ads tab below
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — OCCASIONS (Occasion Runway)
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_occasions:
+    from db.occasions import build_occasion_runway, _REGION_FLAG
+
+    st.markdown("# 🎁 Occasion Runway")
+    st.markdown(
+        f"<p style='color:{T['text_secondary']};font-size:0.92rem;'>"
+        "Gift mugs are occasion-driven. For each upcoming occasion (per market), "
+        "this shows which products will <b>run short</b> and the latest date to "
+        "<b>reorder from the factory</b> so stock lands in time.</p>",
+        unsafe_allow_html=True,
+    )
+
+    _oc1, _oc2, _oc3 = st.columns(3)
+    with _oc1:
+        _oc_lead = st.number_input(
+            "Factory + freight lead time (days)", min_value=20, max_value=180,
+            value=90, step=5, key="oc_lead",
+            help="Production + ocean freight + check-in. Sets the 'order by' date.",
+        )
+    with _oc2:
+        _oc_horizon = st.number_input(
+            "Look ahead (days)", min_value=60, max_value=400, value=210, step=30,
+            key="oc_horizon",
+        )
+    with _oc3:
+        _oc_lookback = st.number_input(
+            "Sales rate window (days)", min_value=14, max_value=90, value=30, step=7,
+            key="oc_lookback", help="Days of recent orders used to estimate sell-through.",
+        )
+
+    _runway = build_occasion_runway(int(_oc_lead), int(_oc_horizon), int(_oc_lookback))
+
+    if not _runway:
+        st.info("No upcoming occasions in the look-ahead window, or no product data yet.")
+    else:
+        _OS = {
+            "overdue": ("🔴 ORDER NOW", "#cf222e"),
+            "soon":    ("🟠 Order soon", "#9a6700"),
+            "ok":      ("🟢 On track", "#1a7f37"),
+        }
+        # Top strip: occasions needing a reorder decision
+        _act = [o for o in _runway if o["order_status"] in ("overdue", "soon") and o["items"]]
+        if _act:
+            st.markdown("##### ⏰ Reorder decisions due")
+            for o in _act:
+                _lbl, _clr = _OS[o["order_status"]]
+                _flags = " ".join(_REGION_FLAG.get(r, r) for r in o["regions"])
+                st.markdown(
+                    f"<div style='border-left:4px solid {_clr};padding:6px 12px;margin:5px 0;"
+                    f"background:#fafbfc;'>"
+                    f"<b>{_lbl}</b> &nbsp;·&nbsp; <b>{o['label']}</b> {_flags} "
+                    f"&nbsp;—&nbsp; {o['date']} ({o['days_away']}d away)<br>"
+                    f"<span style='font-size:0.85rem;color:#444;'>Order by <b>{o['order_by']}</b> "
+                    f"({o['days_to_order']}d) &nbsp;·&nbsp; "
+                    f"<span style='color:#cf222e;'>{o['n_short']} product(s) will run short</span> "
+                    f"of {len(o['items'])} tied to this occasion</span></div>",
+                    unsafe_allow_html=True,
+                )
+            st.divider()
+
+        # Full per-occasion detail
+        for o in _runway:
+            _lbl, _clr = _OS[o["order_status"]]
+            _flags = " ".join(_REGION_FLAG.get(r, r) for r in o["regions"])
+            _hdr = (f"{o['label']} {_flags} — {o['date']} · {o['days_away']}d away "
+                    f"· {_lbl} (order by {o['order_by']})")
+            with st.expander(_hdr, expanded=(o["order_status"] == "overdue" and o["n_short"] > 0)):
+                if not o["items"]:
+                    st.caption("No live products tagged to this occasion.")
+                    continue
+                _rows = []
+                for it in o["items"]:
+                    _rows.append({
+                        "":          "🔴" if it["short_for_occasion"] else "",
+                        "Product":   it["name"][:42] if it["name"] else it["asin"],
+                        "ASIN":      it["asin"],
+                        "On hand":   it["onhand"],
+                        "Sales/day": it["daily"],
+                        "Days cover": it["cover_days"],
+                        "Runs out":  it["stockout_date"] or "—",
+                    })
+                st.dataframe(
+                    pd.DataFrame(_rows), use_container_width=True, hide_index=True,
+                    column_config={
+                        "":           st.column_config.TextColumn(width=36),
+                        "On hand":    st.column_config.NumberColumn(format="%d"),
+                        "Sales/day":  st.column_config.NumberColumn(format="%.2f"),
+                        "Days cover": st.column_config.NumberColumn(format="%d"),
+                    },
+                )
+                st.caption(
+                    f"🔴 = projected to sell out before {o['date']} at current pace. "
+                    f"Reorder by **{o['order_by']}** (lead {int(_oc_lead)}d) to land in time."
+                )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — INVENTORY
