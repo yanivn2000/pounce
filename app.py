@@ -5693,12 +5693,19 @@ with tab_cashflow:
             # ── Collect all unique income / expense item names ─────────────
             _income_names  = []
             _expense_names = []
+            _expense_company = {}   # name → 'LLC' | 'IL'
             for r in _cf_result:
                 for f in r["flows"]:
                     if f["direction"] == "in"  and f["name"] not in _income_names:
                         _income_names.append(f["name"])
                     if f["direction"] == "out" and f["name"] not in _expense_names:
                         _expense_names.append(f["name"])
+                    if f["direction"] == "out":
+                        _expense_company[f["name"]] = f.get("company", "LLC")
+
+            # Split expenses by company (US = LLC, IL = EOS TRADE LTD)
+            _us_exp_names = [n for n in _expense_names if _expense_company.get(n) != "IL"]
+            _il_exp_names = [n for n in _expense_names if _expense_company.get(n) == "IL"]
 
             # ── Inventory value depletion (COGS ≈ cash tied up in stock) ────
             _cogs_pct_val = int(get_setting(_cf_conn, "cogs_pct"))
@@ -5724,19 +5731,23 @@ with tab_cashflow:
             _current_inv = _onhand_inv + _draft_inv
 
             # ── Build cash-flow statement table ───────────────────────────
-            # Rows: Opening | income items | Total Income | expense items | Total Expenses | Closing
-            #       (+ Inventory Value & Cash+Inventory when inventory data exists)
+            # Compact main table: Opening | income | Total Income |
+            #   US Expenses subtotal | IL Expenses subtotal | Total Expenses |
+            #   Closing (+ inventory rows). Per-item detail lives in two
+            #   collapsed expanders below (US / IL).
             _cf_row_labels = (
                 ["📊 Opening Balance"]
                 + [f"  ↑ {n}" for n in _income_names]
                 + ["= Total Income"]
-                + [f"  ↓ {n}" for n in _expense_names]
+                + ["= 🇺🇸 US Expenses (LLC)", "= 🇮🇱 IL Expenses"]
                 + ["= Total Expenses"]
                 + ["💰 Closing Balance"]
                 + (["🏭 Monthly COGS", "📦 Inventory Value", "💎 Cash + Inventory"]
                    if _has_inv else [])
             )
             _cf_data   = {lbl: [] for lbl in _cf_row_labels}
+            _us_exp_data = {n: [] for n in _us_exp_names}   # detail (US)
+            _il_exp_data = {n: [] for n in _il_exp_names}   # detail (IL)
             _warn_cols = []
             opening    = _opening_usd
 
@@ -5749,7 +5760,11 @@ with tab_cashflow:
                     flow_usd[key] = flow_usd.get(key, 0.0) + amt
 
                 total_in  = sum(v for (d,_), v in flow_usd.items() if d == "in")
-                total_out = sum(v for (d,_), v in flow_usd.items() if d == "out")
+                us_out = sum(v for (d, n), v in flow_usd.items()
+                             if d == "out" and _expense_company.get(n) != "IL")
+                il_out = sum(v for (d, n), v in flow_usd.items()
+                             if d == "out" and _expense_company.get(n) == "IL")
+                total_out = us_out + il_out
                 closing   = opening + total_in - total_out
                 if closing < _cf_warn_usd:
                     _warn_cols.append(r["ym"])
@@ -5758,8 +5773,8 @@ with tab_cashflow:
                 for n in _income_names:
                     _cf_data[f"  ↑ {n}"].append(flow_usd.get(("in", n), 0.0))
                 _cf_data["= Total Income"].append(total_in)
-                for n in _expense_names:
-                    _cf_data[f"  ↓ {n}"].append(flow_usd.get(("out", n), 0.0))
+                _cf_data["= 🇺🇸 US Expenses (LLC)"].append(us_out)
+                _cf_data["= 🇮🇱 IL Expenses"].append(il_out)
                 _cf_data["= Total Expenses"].append(total_out)
                 _cf_data["💰 Closing Balance"].append(closing)
                 if _has_inv:
@@ -5767,6 +5782,11 @@ with tab_cashflow:
                     _cf_data["🏭 Monthly COGS"].append(_cogs_by_ym.get(r["ym"], 0.0))
                     _cf_data["📦 Inventory Value"].append(_inv_v)
                     _cf_data["💎 Cash + Inventory"].append(closing + _inv_v)
+                # Per-item detail (USD)
+                for n in _us_exp_names:
+                    _us_exp_data[n].append(flow_usd.get(("out", n), 0.0))
+                for n in _il_exp_names:
+                    _il_exp_data[n].append(flow_usd.get(("out", n), 0.0))
                 opening = closing
 
             _df_cf = _cf_pd.DataFrame(_cf_data, index=_col_labels).T
@@ -5791,6 +5811,8 @@ with tab_cashflow:
                             s.loc["💰 Closing Balance", col] = "font-weight:bold;background:#d4edda"
                     # Totals — slightly shaded
                     s.loc["= Total Income",    col] = "font-weight:bold;background:#f8fff8"
+                    s.loc["= 🇺🇸 US Expenses (LLC)", col] = "background:#fffaf5"
+                    s.loc["= 🇮🇱 IL Expenses", col]      = "background:#fffaf5"
                     s.loc["= Total Expenses",  col] = "font-weight:bold;background:#fff8f8"
                     # Inventory rows — amber (asset, not cash)
                     if "📦 Inventory Value" in df.index:
@@ -5804,6 +5826,23 @@ with tab_cashflow:
                 use_container_width=True,
                 height=min(80 + 35 * len(_cf_row_labels), 700)
             )
+
+            # ── Expense detail (grouped by company, collapsed by default) ──
+            def _render_exp_detail(data, names, label):
+                if not names:
+                    st.caption(f"No {label} expenses.")
+                    return
+                _dfd = _cf_pd.DataFrame(data, index=_col_labels).T
+                st.dataframe(
+                    _dfd.style.format(_fmt_usd),
+                    use_container_width=True,
+                    height=min(80 + 35 * len(names), 600)
+                )
+
+            with st.expander("🇺🇸 US (LLC) expense detail", expanded=False):
+                _render_exp_detail(_us_exp_data, _us_exp_names, "US")
+            with st.expander("🇮🇱 IL expense detail", expanded=False):
+                _render_exp_detail(_il_exp_data, _il_exp_names, "IL")
 
             # ── Warnings ──────────────────────────────────────────────────
             if _warn_cols:
