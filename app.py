@@ -5341,6 +5341,131 @@ with tab_amazon:
             )
             st.altair_chart(_chart, use_container_width=True)
 
+        # ── Business KPIs (ratios) ─────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 📊 Business KPIs")
+        st.caption(
+            "COGS = SellerBoard landed cost per unit × units ordered.  "
+            "Net = actual Amazon payout after all fees, ads, refunds & taxes.  "
+            "Period = selected year + marketplaces above."
+        )
+
+        def _kpi_components(year):
+            return {
+                "sales":   _monthly_metric(_amz_conn, year, "sales",       _sel_mps),
+                "cogs":    _monthly_metric(_amz_conn, year, "cogs",        _sel_mps),
+                "net":     _monthly_metric(_amz_conn, year, "net",         _sel_mps),
+                "fees":    _monthly_metric(_amz_conn, year, "amazon_fees", _sel_mps),
+                "adv":     _monthly_metric(_amz_conn, year, "advertising", _sel_mps),
+                "refunds": _monthly_metric(_amz_conn, year, "refunds",     _sel_mps),
+            }
+
+        _comp = _kpi_components(_sel_year)
+
+        def _tot(d):  return sum(d.values())
+        def _safe(n, d):  return (n / d) if d else 0.0
+
+        _sales_t = _tot(_comp["sales"]);  _cogs_t = _tot(_comp["cogs"])
+        _net_t   = _tot(_comp["net"]);    _fees_t = _tot(_comp["fees"])
+        _adv_t   = _tot(_comp["adv"]);    _ref_t2 = _tot(_comp["refunds"])
+
+        # KPI summary cards (period totals)
+        _kp1, _kp2, _kp3, _kp4, _kp5, _kp6 = st.columns(6)
+        _kp1.metric("📈 Markup",            f"{_safe(_sales_t, _cogs_t):.2f}×",
+                    help="Sales ÷ COGS — how many times you sell over product cost (e.g. 3× = sell for triple cost)")
+        _kp2.metric("💹 Gross ROI",         f"{_safe(_sales_t - _cogs_t, _cogs_t)*100:.0f}%",
+                    help="(Sales − COGS) ÷ COGS — gross return per $ of product cost (before Amazon fees)")
+        _kp3.metric("🟢 Gross Margin",      f"{_safe(_sales_t - _cogs_t, _sales_t)*100:.0f}%",
+                    help="(Sales − COGS) ÷ Sales — product profit as % of sales")
+        _kp4.metric("💰 Net Payout Margin", f"{_safe(_net_t, _sales_t)*100:.0f}%",
+                    help="Net Amazon payout ÷ Sales — % of every sales $ that actually lands in your account")
+        _kp5.metric("🎯 True Net Margin",   f"{_safe(_net_t - _cogs_t, _sales_t)*100:.0f}%",
+                    help="(Net − COGS) ÷ Sales — real bottom-line % after BOTH Amazon fees and product cost")
+        _kp6.metric("🪙 Real Profit",       f"${_net_t - _cogs_t:,.0f}",
+                    help="Net payout − COGS — actual $ profit for the period (excludes off-Amazon costs like salary/logistics)")
+
+        _kq1, _kq2, _kq3 = st.columns(3)
+        _kq1.metric("🏦 Fee Rate",     f"{_safe(_fees_t, _sales_t)*100:.0f}%",
+                    help="Amazon fees ÷ Sales")
+        _kq2.metric("📢 Ad Rate / TACOS", f"{_safe(_adv_t, _sales_t)*100:.0f}%",
+                    help="Advertising ÷ Sales — total ad cost of sales")
+        _kq3.metric("🔁 Refund Rate",  f"{_safe(_ref_t2, _sales_t)*100:.0f}%",
+                    help="Refunds ÷ Sales")
+
+        # KPI trend chart
+        _RATIO_DEFS = {
+            "📈 Markup (Sales÷COGS)":              ("markup",       "×"),
+            "💹 Gross ROI ((Sales−COGS)÷COGS)":    ("gross_roi",    "%"),
+            "🟢 Gross Margin ((Sales−COGS)÷Sales)": ("gross_margin", "%"),
+            "💰 Net Payout Margin (Net÷Sales)":    ("net_margin",   "%"),
+            "🎯 True Net Margin ((Net−COGS)÷Sales)": ("contribution", "%"),
+            "🏦 Fee Rate (Fees÷Sales)":            ("fee_rate",     "%"),
+            "📢 Ad Rate / TACOS (Ads÷Sales)":      ("ad_rate",      "%"),
+            "🔁 Refund Rate (Refunds÷Sales)":      ("refund_rate",  "%"),
+        }
+        _rc1, _rc2 = st.columns([3, 1])
+        with _rc1:
+            _ratio_label = st.radio("KPI trend", list(_RATIO_DEFS.keys()),
+                                    horizontal=True, key="amz_ratio_metric")
+        with _rc2:
+            _ratio_yoy = st.checkbox("Compare to last year", value=False, key="amz_ratio_yoy")
+        _ratio_key, _ratio_unit = _RATIO_DEFS[_ratio_label]
+
+        def _ratio_series(comp, key, unit):
+            out = {}
+            for m in MONTHS:
+                s = comp["sales"].get(m, 0.0);  c = comp["cogs"].get(m, 0.0)
+                n = comp["net"].get(m, 0.0);    f = comp["fees"].get(m, 0.0)
+                a = comp["adv"].get(m, 0.0);    r = comp["refunds"].get(m, 0.0)
+                v = None
+                if   key == "markup":       v = (s / c) if c else None
+                elif key == "gross_roi":    v = ((s - c) / c) if c else None
+                elif key == "gross_margin": v = ((s - c) / s) if s else None
+                elif key == "net_margin":   v = (n / s) if s else None
+                elif key == "contribution": v = ((n - c) / s) if s else None
+                elif key == "fee_rate":     v = (f / s) if s else None
+                elif key == "ad_rate":      v = (a / s) if s else None
+                elif key == "refund_rate":  v = (r / s) if s else None
+                if v is not None:
+                    out[m] = v if unit == "×" else v * 100
+            return out
+
+        _ratio_curr = _ratio_series(_comp, _ratio_key, _ratio_unit)
+        _ratio_prev = (_ratio_series(_kpi_components(_sel_year - 1), _ratio_key, _ratio_unit)
+                       if _ratio_yoy else {})
+        _ratio_months = [m for m in MONTHS if m in _ratio_curr or m in _ratio_prev]
+
+        if _ratio_months:
+            import altair as alt
+            _rrows = []
+            for m in _ratio_months:
+                if m in _ratio_curr:
+                    _rrows.append({"Month": m, "Year": str(_sel_year),     "Value": _ratio_curr[m]})
+                if m in _ratio_prev:
+                    _rrows.append({"Month": m, "Year": str(_sel_year - 1), "Value": _ratio_prev[m]})
+            _rdf  = pd.DataFrame(_rrows)
+            _ydom = [str(_sel_year), str(_sel_year - 1)] if _ratio_yoy else [str(_sel_year)]
+            _ycol = ["#0969da", "#cf222e"] if _ratio_yoy else ["#0969da"]
+            _yfmt = ".2f" if _ratio_unit == "×" else ".0f"
+            _rchart = (
+                alt.Chart(_rdf)
+                .mark_line(point=alt.OverlayMarkDef(size=60))
+                .encode(
+                    x=alt.X("Month:O", sort=MONTHS, title="", axis=alt.Axis(labelAngle=0)),
+                    y=alt.Y("Value:Q", title=_ratio_unit,
+                            axis=alt.Axis(format=_yfmt, labelFontSize=11)),
+                    color=alt.Color("Year:N",
+                        scale=alt.Scale(domain=_ydom, range=_ycol),
+                        legend=alt.Legend(title="Year", orient="top-right")),
+                    tooltip=[alt.Tooltip("Month:O"), alt.Tooltip("Year:N"),
+                             alt.Tooltip("Value:Q", format=_yfmt, title=_ratio_label)],
+                )
+                .properties(height=260)
+            )
+            st.altair_chart(_rchart, use_container_width=True)
+        else:
+            st.info("Not enough data for the KPI trend (need both Sales and COGS for the period).")
+
         # ── Monthly summary table ─────────────────────────────────────────────────
         _active = [m for m in MONTHS if _monthly[m]["net"] != 0]
         if _active:
