@@ -5700,8 +5700,29 @@ with tab_cashflow:
                     if f["direction"] == "out" and f["name"] not in _expense_names:
                         _expense_names.append(f["name"])
 
+            # ── Inventory value depletion (COGS ≈ cash tied up in stock) ────
+            _cogs_pct_val = int(get_setting(_cf_conn, "cogs_pct"))
+            _cogs_pct = st.slider(
+                "📦 COGS % of gross sales (drives inventory depletion below)",
+                min_value=10, max_value=90, value=_cogs_pct_val, step=5,
+                help="Estimated % of gross sales consumed as COGS each month. "
+                     "Adjust to match your actual product cost ratio.",
+                key="cf_cogs_pct"
+            )
+            if _cogs_pct != _cogs_pct_val:
+                set_setting(_cf_conn, "cogs_pct", _cogs_pct)
+
+            _inv_forecast = get_inventory_value_forecast(
+                _cf_conn, _cf_months, _cf_growth, _cf_usd_nis, _cogs_pct / 100.0
+            )
+            # Map ym → projected inventory value (aligned to _cf_result order)
+            _inv_by_ym = {r["ym"]: r["inventory_value"] for r in _inv_forecast}
+            _has_inv   = bool(_inv_forecast)
+            _current_inv = get_current_inventory_value(_cf_conn) if _has_inv else 0.0
+
             # ── Build cash-flow statement table ───────────────────────────
             # Rows: Opening | income items | Total Income | expense items | Total Expenses | Closing
+            #       (+ Inventory Value & Cash+Inventory when inventory data exists)
             _cf_row_labels = (
                 ["📊 Opening Balance"]
                 + [f"  ↑ {n}" for n in _income_names]
@@ -5709,6 +5730,7 @@ with tab_cashflow:
                 + [f"  ↓ {n}" for n in _expense_names]
                 + ["= Total Expenses"]
                 + ["💰 Closing Balance"]
+                + (["📦 Inventory Value", "💎 Cash + Inventory"] if _has_inv else [])
             )
             _cf_data   = {lbl: [] for lbl in _cf_row_labels}
             _closings  = []
@@ -5738,6 +5760,10 @@ with tab_cashflow:
                     _cf_data[f"  ↓ {n}"].append(flow_usd.get(("out", n), 0.0))
                 _cf_data["= Total Expenses"].append(total_out)
                 _cf_data["💰 Closing Balance"].append(closing)
+                if _has_inv:
+                    _inv_v = _inv_by_ym.get(r["ym"], 0.0)
+                    _cf_data["📦 Inventory Value"].append(_inv_v)
+                    _cf_data["💎 Cash + Inventory"].append(closing + _inv_v)
                 opening = closing
 
             _df_cf = _cf_pd.DataFrame(_cf_data, index=_col_labels).T
@@ -5763,6 +5789,10 @@ with tab_cashflow:
                     # Totals — slightly shaded
                     s.loc["= Total Income",    col] = "font-weight:bold;background:#f8fff8"
                     s.loc["= Total Expenses",  col] = "font-weight:bold;background:#fff8f8"
+                    # Inventory rows — amber (asset, not cash)
+                    if "📦 Inventory Value" in df.index:
+                        s.loc["📦 Inventory Value", col]  = "background:#fff8e8;color:#8a6d00"
+                        s.loc["💎 Cash + Inventory", col] = "font-weight:bold;background:#eef6ff"
                 return s
 
             st.dataframe(
@@ -5775,6 +5805,21 @@ with tab_cashflow:
             if _warn_cols:
                 _warn_labels = [f"{CF_MONTHS[int(c[5:7])-1]} {c[:4]}" for c in _warn_cols]
                 st.warning(f"⚠️ Closing balance drops below ${_cf_warn_usd:,} in: **{', '.join(_warn_labels)}**")
+
+            # ── Inventory depletion note ───────────────────────────────────
+            if _has_inv:
+                st.caption(
+                    f"📦 Inventory rows: starting value **${_current_inv:,.0f}** "
+                    f"(latest snapshot × COGS), depleted each month by estimated COGS "
+                    f"(last-year sales × growth × {_cogs_pct}%). "
+                    f"**💎 Cash + Inventory** = closing balance + stock on hand."
+                )
+                _zero_months = [r["label"] for r in _inv_forecast if r["inventory_value"] <= 0]
+                if _zero_months:
+                    st.warning(
+                        f"⚠️ Inventory may run out by **{_zero_months[0]}** at current sales pace. "
+                        f"Consider restocking before that date."
+                    )
 
             # ── Current Month: Mark as Paid ───────────────────────────────
             from datetime import date as _cf_date
@@ -5837,53 +5882,12 @@ with tab_cashflow:
                                     mark_item_paid(_cf_conn, _iid, _today_ym)
                                     st.rerun()
 
-            # ── Charts ────────────────────────────────────────────────────
+            # ── Chart ──────────────────────────────────────────────────────
             st.markdown("#### 💰 Projected Closing Balance (USD)")
             _chart_df = _cf_pd.DataFrame(
                 {"Closing Balance": _closings}, index=_col_labels
             )
             st.line_chart(_chart_df, use_container_width=True)
-
-            # ── Inventory Value Forecast ───────────────────────────────────
-            _cogs_pct_val = int(get_setting(_cf_conn, "cogs_pct"))
-            _cogs_pct = st.slider(
-                "📦 COGS % of gross sales (for inventory depletion model)",
-                min_value=10, max_value=90, value=_cogs_pct_val, step=5,
-                help="Estimated % of gross sales consumed as COGS each month. "
-                     "Adjust to match your actual product cost ratio.",
-                key="cf_cogs_pct"
-            )
-            if _cogs_pct != _cogs_pct_val:
-                set_setting(_cf_conn, "cogs_pct", _cogs_pct)
-
-            _inv_forecast = get_inventory_value_forecast(
-                _cf_conn, _cf_months, _cf_growth, _cf_usd_nis, _cogs_pct / 100.0
-            )
-            if _inv_forecast:
-                _current_inv = get_current_inventory_value(_cf_conn)
-                st.markdown(
-                    f"#### 📦 Projected Inventory Value (USD)  "
-                    f"<span style='font-size:0.85rem;color:#888;font-weight:400'>"
-                    f"Starting value: ${_current_inv:,.0f}</span>",
-                    unsafe_allow_html=True
-                )
-                _inv_labels = [r["label"] for r in _inv_forecast]
-                _inv_values = [r["inventory_value"] for r in _inv_forecast]
-                _inv_df = _cf_pd.DataFrame({"Inventory Value": _inv_values}, index=_inv_labels)
-                st.line_chart(_inv_df, use_container_width=True)
-
-                # Warn if inventory hits zero within the forecast period
-                _zero_months = [r["label"] for r in _inv_forecast if r["inventory_value"] <= 0]
-                if _zero_months:
-                    st.warning(
-                        f"⚠️ Inventory may run out by **{_zero_months[0]}** at current sales pace. "
-                        f"Consider restocking before that date."
-                    )
-            else:
-                st.info(
-                    "📦 No inventory data found. Upload an inventory report to see the "
-                    "projected inventory value chart."
-                )
 
     # ════════════════════════════════════════════════════════════════════════
     # ACCOUNTS & BALANCES — wrapped in @st.fragment for fast saves
