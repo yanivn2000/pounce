@@ -44,6 +44,7 @@ _SETTING_DEFAULTS = {
     "amz_growth": "25",
     "cf_months":  "12",
     "warn_usd":   "50000",
+    "cogs_pct":   "45",
 }
 
 def get_setting(conn, key: str) -> str:
@@ -437,3 +438,80 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
         })
 
     return accounts, result
+
+
+# ── Inventory Value Forecast ──────────────────────────────────────────────────
+def get_current_inventory_value(conn) -> float:
+    """Return total inventory value in USD from latest snapshot × sellerboard_cogs."""
+    try:
+        row = conn.execute("""
+            SELECT SUM(s.qty * c.cost_usd)
+            FROM (
+                SELECT UPPER(asin) AS asin,
+                       SUM(COALESCE(units_available, 0) + COALESCE(units_inbound, 0)) AS qty
+                FROM inventory_snapshots
+                WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM inventory_snapshots)
+                GROUP BY UPPER(asin)
+            ) s
+            JOIN sellerboard_cogs c ON s.asin = UPPER(c.asin)
+        """).fetchone()
+        return float(row[0] or 0) if row else 0.0
+    except Exception:
+        return 0.0
+
+
+def get_monthly_gross_sales(conn, year: int, usd_nis: float) -> dict[int, float]:
+    """Return {month_index: gross_sales_usd} for a given calendar year."""
+    try:
+        rows = conn.execute(
+            "SELECT month, currency, SUM(gross_sales) FROM amazon_transactions "
+            "WHERE year=? AND gross_sales > 0 GROUP BY month, currency",
+            [year]
+        ).fetchall()
+    except Exception:
+        return {}
+    result: dict[int, float] = {}
+    for month_name, currency, val in rows:
+        if month_name not in MONTHS:
+            continue
+        idx = MONTHS.index(month_name) + 1
+        usd = _to_usd(float(val or 0), currency or "USD", usd_nis)
+        result[idx] = result.get(idx, 0.0) + usd
+    return result
+
+
+def get_inventory_value_forecast(conn, months_ahead: int, amazon_growth: float,
+                                  usd_nis: float, cogs_pct: float) -> list[dict]:
+    """Return list of {ym, label, inventory_value} dicts.
+
+    Model: start from current inventory value, subtract each month's estimated
+    COGS (last-year gross sales × growth × COGS%). Falls back to prior year if
+    needed. Returns empty list when current inventory value is unknown.
+    """
+    from datetime import date
+    today = date.today()
+
+    current_value = get_current_inventory_value(conn)
+    if current_value <= 0:
+        return []
+
+    prev_year_sales = get_monthly_gross_sales(conn, today.year - 1, usd_nis)
+    two_years_sales = get_monthly_gross_sales(conn, today.year - 2, usd_nis)
+
+    fy, fm = today.year, today.month
+    result = []
+    inv_value = current_value
+
+    for _ in range(months_ahead):
+        ym    = f"{fy}-{fm:02d}"
+        label = f"{MONTHS[fm - 1]} {fy}"
+        base  = prev_year_sales.get(fm) or two_years_sales.get(fm, 0.0)
+        cogs  = base * (1 + amazon_growth) * cogs_pct
+        inv_value = max(0.0, inv_value - cogs)
+        result.append({"ym": ym, "label": label, "inventory_value": inv_value})
+        fm += 1
+        if fm > 12:
+            fm = 1
+            fy += 1
+
+    return result
