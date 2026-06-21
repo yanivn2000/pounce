@@ -442,13 +442,20 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
 
 # ── Inventory Value Forecast ──────────────────────────────────────────────────
 def get_current_inventory_value(conn) -> float:
-    """Return total inventory value in USD from latest snapshot × sellerboard_cogs."""
+    """Return total inventory value in USD from latest snapshot × sellerboard_cogs.
+
+    Counts all owned units: available + inbound + reserved across every location
+    (FBA, AWD, 3PL). Does NOT include draft/unshipped shipments (tracked in
+    cartons separately) — see get_unshipped_inventory_value().
+    """
     try:
         row = conn.execute("""
             SELECT SUM(s.qty * c.cost_usd)
             FROM (
                 SELECT UPPER(asin) AS asin,
-                       SUM(COALESCE(units_available, 0) + COALESCE(units_inbound, 0)) AS qty
+                       SUM(COALESCE(units_available, 0)
+                         + COALESCE(units_inbound, 0)
+                         + COALESCE(units_reserved, 0)) AS qty
                 FROM inventory_snapshots
                 WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM inventory_snapshots)
                 GROUP BY UPPER(asin)
@@ -482,7 +489,7 @@ def get_monthly_gross_sales(conn, year: int, usd_nis: float) -> dict[int, float]
 
 def get_inventory_value_forecast(conn, months_ahead: int, amazon_growth: float,
                                   usd_nis: float, cogs_pct: float) -> list[dict]:
-    """Return list of {ym, label, inventory_value} dicts.
+    """Return list of {ym, label, cogs, inventory_value} dicts.
 
     Model: start from current inventory value, subtract each month's estimated
     COGS (last-year gross sales × growth × COGS%). Falls back to prior year if
@@ -508,7 +515,8 @@ def get_inventory_value_forecast(conn, months_ahead: int, amazon_growth: float,
         base  = prev_year_sales.get(fm) or two_years_sales.get(fm, 0.0)
         cogs  = base * (1 + amazon_growth) * cogs_pct
         inv_value = max(0.0, inv_value - cogs)
-        result.append({"ym": ym, "label": label, "inventory_value": inv_value})
+        result.append({"ym": ym, "label": label,
+                       "cogs": cogs, "inventory_value": inv_value})
         fm += 1
         if fm > 12:
             fm = 1

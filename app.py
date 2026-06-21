@@ -5715,9 +5715,10 @@ with tab_cashflow:
             _inv_forecast = get_inventory_value_forecast(
                 _cf_conn, _cf_months, _cf_growth, _cf_usd_nis, _cogs_pct / 100.0
             )
-            # Map ym → projected inventory value (aligned to _cf_result order)
-            _inv_by_ym = {r["ym"]: r["inventory_value"] for r in _inv_forecast}
-            _has_inv   = bool(_inv_forecast)
+            # Map ym → projected inventory value + monthly COGS (aligned to _cf_result)
+            _inv_by_ym  = {r["ym"]: r["inventory_value"] for r in _inv_forecast}
+            _cogs_by_ym = {r["ym"]: r["cogs"] for r in _inv_forecast}
+            _has_inv    = bool(_inv_forecast)
             _current_inv = get_current_inventory_value(_cf_conn) if _has_inv else 0.0
 
             # ── Build cash-flow statement table ───────────────────────────
@@ -5730,7 +5731,8 @@ with tab_cashflow:
                 + [f"  ↓ {n}" for n in _expense_names]
                 + ["= Total Expenses"]
                 + ["💰 Closing Balance"]
-                + (["📦 Inventory Value", "💎 Cash + Inventory"] if _has_inv else [])
+                + (["🏭 Monthly COGS", "📦 Inventory Value", "💎 Cash + Inventory"]
+                   if _has_inv else [])
             )
             _cf_data   = {lbl: [] for lbl in _cf_row_labels}
             _closings  = []
@@ -5762,6 +5764,7 @@ with tab_cashflow:
                 _cf_data["💰 Closing Balance"].append(closing)
                 if _has_inv:
                     _inv_v = _inv_by_ym.get(r["ym"], 0.0)
+                    _cf_data["🏭 Monthly COGS"].append(_cogs_by_ym.get(r["ym"], 0.0))
                     _cf_data["📦 Inventory Value"].append(_inv_v)
                     _cf_data["💎 Cash + Inventory"].append(closing + _inv_v)
                 opening = closing
@@ -5791,6 +5794,7 @@ with tab_cashflow:
                     s.loc["= Total Expenses",  col] = "font-weight:bold;background:#fff8f8"
                     # Inventory rows — amber (asset, not cash)
                     if "📦 Inventory Value" in df.index:
+                        s.loc["🏭 Monthly COGS", col]     = "background:#fdf3f3;color:#9a3a3a"
                         s.loc["📦 Inventory Value", col]  = "background:#fff8e8;color:#8a6d00"
                         s.loc["💎 Cash + Inventory", col] = "font-weight:bold;background:#eef6ff"
                 return s
