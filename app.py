@@ -5709,13 +5709,15 @@ with tab_cashflow:
 
             # ── Inventory value depletion (COGS ≈ cash tied up in stock) ────
             _cogs_pct_val = int(get_setting(_cf_conn, "cogs_pct"))
-            _cogs_pct = st.slider(
-                "📦 COGS % of gross sales (drives inventory depletion below)",
-                min_value=10, max_value=90, value=_cogs_pct_val, step=5,
-                help="Estimated % of gross sales consumed as COGS each month. "
-                     "Adjust to match your actual product cost ratio.",
-                key="cf_cogs_pct"
-            )
+            _cw_cogs, _ = st.columns([1, 4])
+            with _cw_cogs:
+                _cogs_pct = st.number_input(
+                    "📦 COGS % of sales",
+                    min_value=0, max_value=100, value=_cogs_pct_val, step=1,
+                    help="Estimated % of gross sales consumed as COGS each month "
+                         "(drives inventory depletion below). Default 8%.",
+                    key="cf_cogs_pct"
+                )
             if _cogs_pct != _cogs_pct_val:
                 set_setting(_cf_conn, "cogs_pct", _cogs_pct)
 

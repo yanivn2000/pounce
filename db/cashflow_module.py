@@ -44,7 +44,7 @@ _SETTING_DEFAULTS = {
     "amz_growth": "25",
     "cf_months":  "12",
     "warn_usd":   "50000",
-    "cogs_pct":   "45",
+    "cogs_pct":   "8",
 }
 
 def get_setting(conn, key: str) -> str:
