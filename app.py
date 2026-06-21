@@ -5737,7 +5737,6 @@ with tab_cashflow:
                    if _has_inv else [])
             )
             _cf_data   = {lbl: [] for lbl in _cf_row_labels}
-            _closings  = []
             _warn_cols = []
             opening    = _opening_usd
 
@@ -5752,7 +5751,6 @@ with tab_cashflow:
                 total_in  = sum(v for (d,_), v in flow_usd.items() if d == "in")
                 total_out = sum(v for (d,_), v in flow_usd.items() if d == "out")
                 closing   = opening + total_in - total_out
-                _closings.append(closing)
                 if closing < _cf_warn_usd:
                     _warn_cols.append(r["ym"])
 
@@ -5827,13 +5825,6 @@ with tab_cashflow:
                         f"⚠️ Inventory may run out by **{_zero_months[0]}** at current sales pace. "
                         f"Consider restocking before that date."
                     )
-
-            # ── Chart ──────────────────────────────────────────────────────
-            st.markdown("#### 💰 Projected Closing Balance (USD)")
-            _chart_df = _cf_pd.DataFrame(
-                {"Closing Balance": _closings}, index=_col_labels
-            )
-            st.line_chart(_chart_df, use_container_width=True)
 
     # ════════════════════════════════════════════════════════════════════════
     # ACCOUNTS & BALANCES — wrapped in @st.fragment for fast saves
