@@ -467,6 +467,30 @@ def get_current_inventory_value(conn) -> float:
         return 0.0
 
 
+def get_unshipped_inventory_value(conn) -> float:
+    """Value of draft (not-yet-shipped) shipments = cartons × carton_units × COGS.
+
+    This is stock the user is producing / planning but that Amazon hasn't received
+    yet (so it's NOT in the inventory snapshot). The user controls it via the
+    shipment 'status' field: only status='draft' counts here. Once a shipment is
+    actually received (shows up as snapshot inbound), change its status off 'draft'
+    so it is not double-counted.
+    """
+    try:
+        row = conn.execute("""
+            SELECT SUM(sl.num_cartons * COALESCE(pc.carton_units, 0)
+                                      * COALESCE(c.cost_usd, 0))
+            FROM shipments sh
+            JOIN shipment_lines sl   ON sl.shipment_id = sh.id
+            LEFT JOIN products_catalog pc ON UPPER(pc.sku)  = UPPER(sl.sku)
+            LEFT JOIN sellerboard_cogs c  ON UPPER(c.asin)  = UPPER(pc.asin)
+            WHERE sh.status = 'draft'
+        """).fetchone()
+        return float(row[0] or 0) if row else 0.0
+    except Exception:
+        return 0.0
+
+
 def get_monthly_gross_sales(conn, year: int, usd_nis: float) -> dict[int, float]:
     """Return {month_index: gross_sales_usd} for a given calendar year."""
     try:
@@ -498,7 +522,9 @@ def get_inventory_value_forecast(conn, months_ahead: int, amazon_growth: float,
     from datetime import date
     today = date.today()
 
-    current_value = get_current_inventory_value(conn)
+    # Starting value = on-hand snapshot (avail+inbound+reserved) + draft shipments
+    # (in-production stock not yet received by Amazon).
+    current_value = get_current_inventory_value(conn) + get_unshipped_inventory_value(conn)
     if current_value <= 0:
         return []
 

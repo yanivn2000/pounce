@@ -5598,6 +5598,7 @@ with tab_cashflow:
         get_setting, set_setting,
         mark_item_paid, unmark_item_paid, get_completions_set,
         get_inventory_value_forecast, get_current_inventory_value,
+        get_unshipped_inventory_value,
     )
     import sqlite3 as _cf_sqlite
 
@@ -5719,7 +5720,9 @@ with tab_cashflow:
             _inv_by_ym  = {r["ym"]: r["inventory_value"] for r in _inv_forecast}
             _cogs_by_ym = {r["ym"]: r["cogs"] for r in _inv_forecast}
             _has_inv    = bool(_inv_forecast)
-            _current_inv = get_current_inventory_value(_cf_conn) if _has_inv else 0.0
+            _onhand_inv = get_current_inventory_value(_cf_conn) if _has_inv else 0.0
+            _draft_inv  = get_unshipped_inventory_value(_cf_conn) if _has_inv else 0.0
+            _current_inv = _onhand_inv + _draft_inv
 
             # ── Build cash-flow statement table ───────────────────────────
             # Rows: Opening | income items | Total Income | expense items | Total Expenses | Closing
@@ -5813,10 +5816,11 @@ with tab_cashflow:
             # ── Inventory depletion note ───────────────────────────────────
             if _has_inv:
                 st.caption(
-                    f"📦 Inventory rows: starting value **${_current_inv:,.0f}** "
-                    f"(latest snapshot × COGS), depleted each month by estimated COGS "
-                    f"(last-year sales × growth × {_cogs_pct}%). "
-                    f"**💎 Cash + Inventory** = closing balance + stock on hand."
+                    f"📦 Starting value **${_current_inv:,.0f}** = "
+                    f"${_onhand_inv:,.0f} on-hand (snapshot: available + inbound + reserved) "
+                    f"+ ${_draft_inv:,.0f} in-production (draft shipments). "
+                    f"Depleted each month by 🏭 Monthly COGS (last-year sales × growth × {_cogs_pct}%). "
+                    f"**💎 Cash + Inventory** = closing balance + stock value."
                 )
                 _zero_months = [r["label"] for r in _inv_forecast if r["inventory_value"] <= 0]
                 if _zero_months:
