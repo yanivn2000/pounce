@@ -5268,6 +5268,14 @@ with tab_amazon:
                 "Overboeking","Schuld",           # NL
                 "Saldo negativo",                  # IT
             ])
+            # Inbound logistics (AGL international freight) — one-time shipping cost,
+            # not operational Amazon outcome. Excluded from operational "net" so
+            # KPIs (Net Payout Margin, True Net Margin, Real Profit) reflect ops.
+            # Same charges the Cash Forecast plans separately (_AGL_PRODUCT_DETAILS).
+            _FREIGHT_EXCLUDE = "','".join([
+                "FBA International Freight Shipping Charge",
+                "FBA International Freight Duties and Taxes Charge",
+            ])
             # All queries group by month + currency so we can apply FX → USD
             _Q = {
                 "sales":        f"SELECT month, currency, SUM(gross_sales)    FROM amazon_transactions WHERE year=? AND tx_type='Order' AND marketplace IN ({ph}) GROUP BY month, currency",
@@ -5288,7 +5296,7 @@ with tab_amazon:
                 "storage":    f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND tx_type IN ('{_STORAGE_TYPES}') AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
                 "lt_storage": f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND tx_type IN ('{_STORAGE_TYPES}') AND LOWER(COALESCE(product_details,'')) LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
                 "vat":        f"SELECT month, currency, SUM(ABS(withheld_tax)) FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
-                "net":        f"SELECT month, currency, SUM(net_total) FROM amazon_transactions WHERE year=? AND tx_type NOT IN ('{_TRANSFER_TYPES}') AND marketplace IN ({ph}) GROUP BY month, currency",
+                "net":        f"SELECT month, currency, SUM(net_total) FROM amazon_transactions WHERE year=? AND tx_type NOT IN ('{_TRANSFER_TYPES}') AND COALESCE(product_details,'') NOT IN ('{_FREIGHT_EXCLUDE}') AND marketplace IN ({ph}) GROUP BY month, currency",
                 "promos":     f"SELECT month, currency, SUM(ABS(promo_rebates)) FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
             }
             rows = conn.execute(_Q[metric], p).fetchall()
@@ -5346,7 +5354,8 @@ with tab_amazon:
         st.markdown("### 📊 Business KPIs")
         st.caption(
             "COGS = SellerBoard landed cost per unit × units ordered.  "
-            "Net = actual Amazon payout after all fees, ads, refunds & taxes.  "
+            "Net = operational Amazon payout after all fees, ads, refunds & taxes, "
+            "**excluding** one-time inbound freight (FBA International Freight shipping + duties/taxes).  "
             "Period = selected year + marketplaces above."
         )
 
