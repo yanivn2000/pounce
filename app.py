@@ -3727,7 +3727,187 @@ with tab_ads:
     _placement_tab, = st.tabs(["📍 Placement"])
 
     with _placement_tab:
-        _recs_view, _history_view, _alerts_view, _analysis_view = st.tabs(["🔧 Workbench", "📜 History", "🔔 Alerts", "📤 Upload Reports"])
+        _recs_view, _scoreboard_view, _history_view, _alerts_view, _analysis_view = st.tabs(
+            ["🔧 Workbench", "💵 Scoreboard", "📜 History", "🔔 Alerts", "📤 Upload Reports"]
+        )
+
+        with _scoreboard_view:
+            # ── DECISION SCOREBOARD ───────────────────────────────────────────
+            # Change Attribution ($) + settle-time verdicts. Scores every
+            # documented bid change by the dollar-profit it caused.
+            from db.attribution import (
+                get_change_attribution, summarize_attribution, undo_hint,
+            )
+
+            st.markdown("# 💵 Decision Scoreboard")
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.92rem;'>"
+                "Every documented bid change, scored by the <b>dollar profit</b> it caused — "
+                "not just a ROAS arrow. Profit is read from your 30-day placement reports.</p>",
+                unsafe_allow_html=True,
+            )
+
+            _sb1, _sb2, _sb3 = st.columns([2, 1, 1])
+            with _sb1:
+                _sb_mkt = st.selectbox(
+                    "Marketplace",
+                    ["all", "amazon.com", "amazon.co.uk", "amazon.ca",
+                     "amazon.com.au", "amazon.de"],
+                    key="sb_market",
+                )
+                _sb_mkt = None if _sb_mkt == "all" else _sb_mkt
+            with _sb2:
+                _sb_settle = st.number_input(
+                    "Settle window (days)", min_value=7, max_value=60, value=30, step=1,
+                    key="sb_settle",
+                    help="Reports are 30-day trailing, so a change only reads 'clean' "
+                         "in a snapshot this many days after it. Verdicts stay locked "
+                         "as ⏳ Settling until then.",
+                )
+            with _sb3:
+                _sb_thresh = st.number_input(
+                    "Win/Loss threshold ($/mo)", min_value=0, max_value=2000,
+                    value=20, step=10, key="sb_thresh",
+                    help="Monthly profit change smaller than this counts as Flat.",
+                )
+
+            _attr = get_change_attribution(_sb_mkt, int(_sb_settle), float(_sb_thresh))
+
+            if not _attr:
+                st.info("No documented bid changes yet. Log changes in the Workbench / "
+                        "History tab, then upload follow-up reports to see their $ impact here.")
+            else:
+                _sum = summarize_attribution(_attr)
+
+                # ── Headline ───────────────────────────────────────────────
+                _realized = _sum["realized_usd"]
+                _rcolor = "#1a7f37" if _realized >= 0 else "#cf222e"
+                _rsign  = "+" if _realized >= 0 else "−"
+                st.markdown(
+                    f"<div style='background:#f6f8fa;border:1px solid #d0d7de;border-radius:10px;"
+                    f"padding:14px 18px;margin-bottom:10px;'>"
+                    f"<span style='font-size:0.85rem;color:#666;'>Realized impact of settled changes "
+                    f"(accrued since each change)</span><br>"
+                    f"<span style='font-size:2rem;font-weight:800;color:{_rcolor};'>"
+                    f"{_rsign}${abs(_realized):,.0f}</span> "
+                    f"<span style='font-size:0.9rem;color:#666;'>"
+                    f"&nbsp;·&nbsp; run-rate {('+' if _sum['monthly_run_rate']>=0 else '−')}"
+                    f"${abs(_sum['monthly_run_rate']):,.0f}/mo</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                _m1, _m2, _m3, _m4, _m5, _m6 = st.columns(6)
+                _m1.metric("🏆 Wins",      _sum["wins"])
+                _m2.metric("🔻 Losses",    _sum["losses"])
+                _m3.metric("➖ Flat",       _sum["flat"])
+                _m4.metric("⏳ Settling",   _sum["settling"])
+                _m5.metric("🕓 Pending",    _sum["pending"])
+                _m6.metric("📈 Win rate",
+                           f"{_sum['win_rate']:.0f}%" if _sum["win_rate"] is not None else "—")
+                if _sum["no_baseline"]:
+                    st.caption(f"ℹ️ {_sum['no_baseline']} change(s) have no pre-change snapshot "
+                               "to compare against (uploaded after the change). They'll score "
+                               "once an earlier baseline exists.")
+
+                _VERDICT = {
+                    "win":         ("🏆 WIN",       "#1a7f37"),
+                    "loss":        ("🔻 LOSS",      "#cf222e"),
+                    "flat":        ("➖ FLAT",       "#57606a"),
+                    "settling":    ("⏳ SETTLING",   "#9a6700"),
+                    "pending":     ("🕓 PENDING",    "#57606a"),
+                    "no_baseline": ("∅ NO BASELINE", "#8c959f"),
+                }
+
+                # ── Best & worst decisions ─────────────────────────────────
+                _scored = [r for r in _attr if r["monthly_delta"] is not None]
+                _best  = sorted([r for r in _scored if r["monthly_delta"] > 0],
+                                key=lambda r: r["monthly_delta"], reverse=True)[:5]
+                _worst = sorted([r for r in _scored if r["monthly_delta"] < 0],
+                                key=lambda r: r["monthly_delta"])[:5]
+
+                def _delta_str(r):
+                    d = r["monthly_delta"]
+                    s = "+" if d >= 0 else "−"
+                    prelim = "" if r["settled"] else " <i>(prelim)</i>"
+                    return f"{s}${abs(d):,.0f}/mo{prelim}"
+
+                _bw1, _bw2 = st.columns(2)
+                with _bw1:
+                    st.markdown("##### 🏆 Best decisions")
+                    if not _best:
+                        st.caption("None yet.")
+                    for r in _best:
+                        st.markdown(
+                            f"<div style='border-left:3px solid #1a7f37;padding:4px 10px;margin:4px 0;"
+                            f"font-size:0.85rem;'>"
+                            f"<b>{_delta_str(r)}</b> &nbsp;·&nbsp; {r['campaign']}<br>"
+                            f"<span style='color:#666;'>{r['placement']} "
+                            f"{r['bid_before']}%→{r['bid_after']}% · {r['change_date']}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                with _bw2:
+                    st.markdown("##### 🔻 Worst decisions")
+                    if not _worst:
+                        st.caption("None yet.")
+                    for r in _worst:
+                        st.markdown(
+                            f"<div style='border-left:3px solid #cf222e;padding:4px 10px;margin:4px 0;"
+                            f"font-size:0.85rem;'>"
+                            f"<b>{_delta_str(r)}</b> &nbsp;·&nbsp; {r['campaign']}<br>"
+                            f"<span style='color:#666;'>{r['placement']} "
+                            f"{r['bid_before']}%→{r['bid_after']}% · {r['change_date']}</span><br>"
+                            f"<span style='color:#cf222e;font-size:0.78rem;'>↩️ "
+                            f"Undo: revert to {r['bid_before']}%</span></div>",
+                            unsafe_allow_html=True,
+                        )
+
+                # ── Full ledger ────────────────────────────────────────────
+                st.markdown("##### 📋 All changes")
+                from datetime import date as _sb_date
+                _today_sb = _sb_date.today()
+
+                def _clean_countdown(r):
+                    if r["settled"] or r["verdict"] == "no_baseline":
+                        return ""
+                    try:
+                        rd = _sb_date.fromisoformat(r["clean_read_date"])
+                        days = (rd - _today_sb).days
+                        return f"clean read in {days}d ({r['clean_read_date']})" if days > 0 \
+                            else f"clean read ready ({r['clean_read_date']})"
+                    except Exception:
+                        return ""
+
+                _table = []
+                for r in _attr:
+                    _vlabel, _ = _VERDICT.get(r["verdict"], (r["verdict"], "#000"))
+                    _table.append({
+                        "Verdict":   _vlabel,
+                        "Date":      r["change_date"],
+                        "Campaign":  r["campaign"],
+                        "Placement": r["placement"],
+                        "Bid":       f"{r['bid_before']}%→{r['bid_after']}%",
+                        "Profit before": r["profit_p1"],
+                        "Profit after":  r["profit_p2"],
+                        "Δ $/mo":    r["monthly_delta"],
+                        "Cumulative $": r["cumulative_usd"],
+                        "Status":    _clean_countdown(r),
+                    })
+                st.dataframe(
+                    pd.DataFrame(_table),
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Profit before": st.column_config.NumberColumn(format="$%.0f"),
+                        "Profit after":  st.column_config.NumberColumn(format="$%.0f"),
+                        "Δ $/mo":        st.column_config.NumberColumn(format="$%.0f"),
+                        "Cumulative $":  st.column_config.NumberColumn(format="$%.0f"),
+                    },
+                )
+                st.caption(
+                    "Δ $/mo = post-change 30-day profit − pre-change 30-day profit for that "
+                    "placement. Cumulative = Δ accrued since the change (settled only). "
+                    "'Prelim' marks reads whose 30-day window still overlaps pre-change days."
+                )
 
         with _recs_view:
             # ── WORKBENCH ─────────────────────────────────────────────────────
