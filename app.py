@@ -426,8 +426,10 @@ with tab_occasions:
         )
     with _oc2:
         _oc_horizon = st.number_input(
-            "Look ahead (days)", min_value=60, max_value=400, value=210, step=30,
+            "Look ahead (days)", min_value=60, max_value=400, value=365, step=30,
             key="oc_horizon",
+            help="A full year shows every occasion — urgency comes from the "
+                 "'order by' date, not how far away the occasion is.",
         )
     with _oc3:
         _oc_lookback = st.number_input(
