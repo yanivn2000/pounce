@@ -5596,7 +5596,6 @@ with tab_cashflow:
         get_items, add_item, update_item, delete_item, change_from_month, add_account,
         build_forecast, _CATEGORIES, MONTHS as CF_MONTHS, COMPANY_LABELS,
         get_setting, set_setting,
-        mark_item_paid, unmark_item_paid, get_completions_set,
         get_inventory_value_forecast, get_current_inventory_value,
         get_unshipped_inventory_value,
     )
@@ -5828,67 +5827,6 @@ with tab_cashflow:
                         f"⚠️ Inventory may run out by **{_zero_months[0]}** at current sales pace. "
                         f"Consider restocking before that date."
                     )
-
-            # ── Current Month: Mark as Paid ───────────────────────────────
-            from datetime import date as _cf_date
-            _today      = _cf_date.today()
-            _today_ym   = f"{_today.year}-{_today.month:02d}"
-            _month_label = f"{CF_MONTHS[_today.month - 1]} {_today.year}"
-            _completions = get_completions_set(_cf_conn)
-
-            # Helper: does an item fire in a given ym?
-            def _item_fires_in(item, ym):
-                iid, name, direction, category, amount, currency, frequency, \
-                    company, start_ym, end_ym, notes = item
-                if category == "Amazon Payout":  return False
-                if start_ym and ym < start_ym:   return False
-                if end_ym   and ym > end_ym:     return False
-                fy2, fm2 = int(ym[:4]), int(ym[5:7])
-                if frequency == "monthly":    return True
-                if frequency == "quarterly":
-                    if not start_ym: return False
-                    sy, sm = int(start_ym[:4]), int(start_ym[5:7])
-                    elapsed = (fy2 - sy) * 12 + (fm2 - sm)
-                    return elapsed >= 0 and elapsed % 3 == 0
-                if frequency == "annual":
-                    return bool(start_ym) and int(start_ym[5:7]) == fm2
-                if frequency == "once":
-                    return ym == start_ym
-                return False
-
-            _cur_items = [it for it in get_items(_cf_conn) if _item_fires_in(it, _today_ym)]
-
-            st.divider()
-            with st.expander(f"✅ {_month_label} — Mark items as paid", expanded=True):
-                if not _cur_items:
-                    st.caption("No scheduled items for this month.")
-                else:
-                    for _it in _cur_items:
-                        _iid  = _it[0]
-                        _name = _it[1]
-                        _dir  = _it[2]
-                        _amt  = _it[4]
-                        _cur  = _it[5]
-                        _is_paid = (_iid, _today_ym) in _completions
-                        _icon = "↑" if _dir == "in" else "↓"
-                        _col1, _col2 = st.columns([5, 2])
-                        with _col1:
-                            if _is_paid:
-                                st.markdown(
-                                    f"~~{_icon} **{_name}** — {_cur} {_amt:,.0f}~~ &nbsp; ✅ Paid",
-                                    unsafe_allow_html=True,
-                                )
-                            else:
-                                st.markdown(f"{_icon} **{_name}** — {_cur} {_amt:,.0f}")
-                        with _col2:
-                            if _is_paid:
-                                if st.button("Undo", key=f"unpay_{_iid}_{_today_ym}"):
-                                    unmark_item_paid(_cf_conn, _iid, _today_ym)
-                                    st.rerun()
-                            else:
-                                if st.button("Mark as Paid", key=f"pay_{_iid}_{_today_ym}"):
-                                    mark_item_paid(_cf_conn, _iid, _today_ym)
-                                    st.rerun()
 
             # ── Chart ──────────────────────────────────────────────────────
             st.markdown("#### 💰 Projected Closing Balance (USD)")

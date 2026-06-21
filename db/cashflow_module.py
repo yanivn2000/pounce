@@ -335,9 +335,6 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
     prev_year_net = get_amazon_monthly_net(conn, today.year - 1, usd_nis)
     two_years_net = get_amazon_monthly_net(conn, today.year - 2, usd_nis)
 
-    # Items marked as paid — skip them in forecast
-    completions = get_completions_set(conn)
-
     # Amazon account id (first account named "Amazon")
     amazon_acc_id = next(
         (a[0] for a in accounts if a[1].lower() == "amazon"), None
@@ -390,8 +387,6 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
             if start_ym and ym < start_ym:
                 continue
             if end_ym and ym > end_ym:
-                continue
-            if (iid, ym) in completions:
                 continue
 
             # Does this item fire this month?
