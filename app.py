@@ -3203,13 +3203,97 @@ with tab_sales:
     # ── View toggle: Orders vs Bundles ────────────────────────────────────────
     _sales_view = st.radio(
         "View",
-        ["📊 Orders", "📦 Bundles"],
+        ["📊 Orders", "📦 Bundles", "🎯 Themes"],
         horizontal=True,
         key="sales_view_toggle",
         label_visibility="collapsed",
     )
 
     st.markdown("<div style='margin:4px 0 8px;'></div>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # THEMES VIEW — which product niche drives the business + what to develop next
+    # ══════════════════════════════════════════════════════════════════════════
+    if _sales_view == "🎯 Themes":
+        from db.themes import get_theme_performance
+
+        st.markdown(
+            f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>🎯 Theme Performance &nbsp;"
+            f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
+            f"Which gift niche drives sales & profit — and where to expand next.</span></p>",
+            unsafe_allow_html=True,
+        )
+
+        _tc1, _tc2 = st.columns([1, 3])
+        with _tc1:
+            _theme_days = st.selectbox(
+                "Period", [90, 180, 365], index=2, key="theme_days",
+                format_func=lambda d: f"Last {d} days",
+            )
+        _themes = get_theme_performance(int(_theme_days))
+
+        if not _themes:
+            st.info("No order data in this period yet.")
+        else:
+            _tot_rev = sum(t["revenue"] for t in _themes) or 1
+            # Headline picks
+            _by_rev    = _themes[0]
+            _by_effic  = max(_themes, key=lambda t: t["rev_per_sku"])
+            _growers   = [t for t in _themes if t["growth_pct"] is not None]
+            _by_growth = max(_growers, key=lambda t: t["growth_pct"]) if _growers else None
+
+            _h1, _h2, _h3 = st.columns(3)
+            _h1.metric("🏆 Biggest theme", _by_rev["label"].split(" ", 1)[-1],
+                       f"${_by_rev['revenue']:,.0f}")
+            _h2.metric("💡 Best $ / SKU (expand)", _by_effic["label"].split(" ", 1)[-1],
+                       f"${_by_effic['rev_per_sku']:,.0f}/SKU")
+            if _by_growth:
+                _h3.metric("📈 Fastest growing", _by_growth["label"].split(" ", 1)[-1],
+                           f"{_by_growth['growth_pct']:+.0f}% vs prev")
+
+            # "Develop next" callout: high $/SKU AND positive growth AND few SKUs
+            _ranked_rps = sorted(_themes, key=lambda t: t["rev_per_sku"], reverse=True)
+            _ideas = [t for t in _ranked_rps
+                      if t["n_skus"] <= 6 and (t["growth_pct"] is None or t["growth_pct"] >= 0)][:3]
+            if _ideas:
+                _txt = " · ".join(
+                    f"**{t['label']}** (${t['rev_per_sku']:,.0f}/SKU, {t['n_skus']} SKUs"
+                    + (f", {t['growth_pct']:+.0f}%" if t['growth_pct'] is not None else "") + ")"
+                    for t in _ideas
+                )
+                st.success(f"💡 **Develop next:** {_txt} — high revenue per product from few SKUs "
+                           f"means room to add variations.")
+
+            # Full table
+            _rows = []
+            for t in _themes:
+                _rows.append({
+                    "Theme":      t["label"],
+                    "SKUs":       t["n_skus"],
+                    "Units":      t["units"],
+                    "Revenue":    t["revenue"],
+                    "% of sales": round(100 * t["revenue"] / _tot_rev, 1),
+                    "Gross profit": t["gross_profit"],
+                    "Margin %":   t["margin_pct"],
+                    "$ / SKU":    t["rev_per_sku"],
+                    "Growth %":   t["growth_pct"],
+                })
+            st.dataframe(
+                pd.DataFrame(_rows), use_container_width=True, hide_index=True,
+                column_config={
+                    "Revenue":      st.column_config.NumberColumn(format="$%d"),
+                    "Gross profit": st.column_config.NumberColumn(format="$%d"),
+                    "$ / SKU":      st.column_config.NumberColumn(format="$%d"),
+                    "% of sales":   st.column_config.NumberColumn(format="%.1f%%"),
+                    "Margin %":     st.column_config.NumberColumn(format="%.1f%%"),
+                    "Growth %":     st.column_config.NumberColumn(format="%+.0f%%"),
+                },
+            )
+            st.caption(
+                "Themes overlap on purpose (a 'Best Grandma' mug counts in both Grandparents "
+                "and Grandma), so columns sum to more than 100%. Gross profit = revenue − COGS "
+                "(before Amazon fees/ads). Growth = this period vs the previous equal period."
+            )
 
     # ══════════════════════════════════════════════════════════════════════════
     # BUNDLES VIEW
