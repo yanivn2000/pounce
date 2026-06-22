@@ -5249,9 +5249,33 @@ with tab_amazon:
         with _fa1:
             _sel_year = st.selectbox("Year", _amz_years, key="amz_year")
         with _fa2:
+            st.markdown("Marketplaces")
+            # Region presets (only shown when those markets exist in the data)
+            _NA = [m for m in _amz_all_mps if m in ("US", "CA", "MX")]
+            _EU = [m for m in _amz_all_mps
+                   if m in ("UK", "DE", "FR", "ES", "IT", "NL", "BE", "IE", "PL", "SE")]
+
+            # Initialise / prune the selection (drop markets no longer present)
+            if "amz_mps" not in st.session_state:
+                st.session_state["amz_mps"] = list(_amz_all_mps)
+            else:
+                st.session_state["amz_mps"] = [
+                    m for m in st.session_state["amz_mps"] if m in _amz_all_mps
+                ]
+
+            _qb = st.columns(4)
+            if _qb[0].button("🌍 All", key="mps_all", use_container_width=True):
+                st.session_state["amz_mps"] = list(_amz_all_mps)
+            if _qb[1].button("🧹 Clear", key="mps_clear", use_container_width=True):
+                st.session_state["amz_mps"] = []
+            if _NA and _qb[2].button("🌎 N. America", key="mps_na", use_container_width=True):
+                st.session_state["amz_mps"] = _NA
+            if _EU and _qb[3].button("🇪🇺 EU", key="mps_eu", use_container_width=True):
+                st.session_state["amz_mps"] = _EU
+
             _sel_mps = st.multiselect(
-                "Marketplaces", _amz_all_mps, default=_amz_all_mps, key="amz_mps",
-                placeholder="All marketplaces"
+                "Marketplaces", _amz_all_mps, key="amz_mps",
+                placeholder="All marketplaces", label_visibility="collapsed",
             )
         if not _sel_mps:
             _sel_mps = _amz_all_mps
