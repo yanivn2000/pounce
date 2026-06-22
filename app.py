@@ -3230,8 +3230,6 @@ with tab_sales:
         # ── Theme editor ───────────────────────────────────────────────────
         with st.expander("⚙️ Manage themes — create · rename · add/remove SKUs · delete"):
             _all_prod = get_all_products()                      # [(ASIN, name)]
-            _prod_label = {a: (f"{n[:46]}  ·  {a}" if n else a) for a, n in _all_prod}
-            _prod_asins = [a for a, _ in _all_prod]
 
             st.markdown("**➕ Create a new theme**")
             _nc1, _nc2, _nc3 = st.columns([2, 2, 1])
@@ -3260,24 +3258,62 @@ with tab_sales:
                 _ed_name  = _ec1.text_input("Name", value=_sel["name"], key=f"theme_name_{_sel_id}")
                 _ed_label = _ec2.text_input("Display label", value=_sel["label"],
                                             key=f"theme_label_{_sel_id}")
-                _cur_skus = get_theme_skus(_sel_id)
-                _members = st.multiselect(
-                    "SKUs in this theme (add or remove)",
-                    _prod_asins, default=[a for a in _cur_skus if a in _prod_asins],
-                    format_func=lambda a: _prod_label.get(a, a),
-                    key=f"theme_skus_{_sel_id}",
+                _cur_skus = set(get_theme_skus(_sel_id))
+                _theme_img_map = get_asin_image_map()
+
+                st.markdown("**SKUs in this theme** — tick to include, see the photo to decide")
+                _flt = st.text_input(
+                    "🔎 Filter products", key=f"theme_filt_{_sel_id}",
+                    placeholder="type part of a name or ASIN…",
+                ).lower().strip()
+
+                _ed_rows = []
+                for a, n in _all_prod:
+                    if _flt and _flt not in (n or "").lower() and _flt not in a.lower():
+                        continue
+                    _ed_rows.append({
+                        "In theme": a in _cur_skus,
+                        "Photo":    _theme_img_map.get(a.upper(), ""),
+                        "Product":  n or "",
+                        "ASIN":     a,
+                    })
+                # current members first, then alphabetical
+                _ed_rows.sort(key=lambda r: (not r["In theme"], r["Product"].lower()))
+
+                _edited = st.data_editor(
+                    pd.DataFrame(_ed_rows, columns=["In theme", "Photo", "Product", "ASIN"]),
+                    column_config={
+                        "In theme": st.column_config.CheckboxColumn("In theme", width="small",
+                                       help="Tick to include this product in the theme"),
+                        "Photo":    st.column_config.ImageColumn("Photo", width="small"),
+                        "Product":  st.column_config.TextColumn("Product", width="large"),
+                        "ASIN":     st.column_config.TextColumn("ASIN", width="small"),
+                    },
+                    disabled=["Photo", "Product", "ASIN"],
+                    hide_index=True, use_container_width=True, height=380,
+                    key=f"theme_editor_{_sel_id}",
                 )
+
+                # Filter-safe membership: keep hidden members, apply checkboxes to visible rows
+                _visible = {r["ASIN"] for r in _ed_rows}
+                _checked = set(_edited.loc[_edited["In theme"], "ASIN"]) if not _edited.empty else set()
+                _final_members = sorted(_checked | (_cur_skus - _visible))
+
+                st.caption(
+                    f"{len(_final_members)} SKU(s) in this theme"
+                    + (f" · filtered to {len(_ed_rows)} shown" if _flt else "")
+                    + ". Themes overlap — a product can belong to several."
+                )
+
                 _b1, _b2, _b3 = st.columns([1, 1, 1])
                 if _b1.button("💾 Save", key=f"theme_save_{_sel_id}", use_container_width=True):
-                    set_theme_skus(_sel_id, _members)
+                    set_theme_skus(_sel_id, _final_members)
                     rename_theme(_sel_id, _ed_name, _ed_label)
                     st.success("Saved."); st.rerun()
                 if _b3.button("🗑️ Delete theme", key=f"theme_del_{_sel_id}",
                               use_container_width=True):
                     delete_theme(_sel_id)
                     st.success(f"Deleted '{_sel['label']}'."); st.rerun()
-                st.caption(f"{len(_members)} SKU(s) selected. "
-                           "Themes overlap — a product can belong to several.")
 
         _tc1, _tc2 = st.columns([1, 3])
         with _tc1:
