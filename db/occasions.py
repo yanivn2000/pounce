@@ -96,6 +96,8 @@ def _grandparents_day(year, region):
 
 def _valentines(year, region):  return _dt.date(year, 2, 14)
 def _christmas(year, region):   return _dt.date(year, 12, 25)
+def _galentines(year, region):  return _dt.date(year, 2, 13) if region in _EN_MARKETS else None
+def _sweetest_day(year, region): return _nth_weekday(year, 10, 5, 3) if region in ("US", "CA") else None  # 3rd Sat Oct
 
 # US "national days" — fire for English-language markets only
 def _siblings_day(year, region): return _dt.date(year, 4, 10)  if region in _EN_MARKETS else None
@@ -124,7 +126,9 @@ def _diwali(year, region):    return _lunar("diwali", year)         if region in
 # occasion key → (display label, date function(year, region))
 OCCASIONS = {
     "three_kings":      ("👑 Three Kings (Reyes)",     _three_kings),
+    "galentines":       ("💞 Galentine's Day",          _galentines),
     "valentines":       ("💘 Valentine's Day",          _valentines),
+    "sweetest_day":     ("🍫 Sweetest Day",             _sweetest_day),
     "siblings_day":     ("👫 Siblings Day",             _siblings_day),
     "compadres":        ("🤝 Compadres & Comadres",     _compadres),
     "mothers_day":      ("💐 Mother's Day",             _mothers_day),
@@ -155,6 +159,11 @@ _THEME_KEYWORDS = {
     "valentines":   ["husband", "wife", "mr & mrs", "mr&mrs", "mr right",
                      "mrs always", "couple", "hubby", "wifey", "anniversary",
                      "love", "boyfriend", "girlfriend", "mr mrs"],
+    "sweetest_day": ["husband", "wife", "mr & mrs", "mr&mrs", "mr right",
+                     "mrs always", "couple", "hubby", "wifey", "anniversary",
+                     "love", "boyfriend", "girlfriend", "mr mrs"],
+    "galentines":   ["sister", "bestie", "best friend", "bff", "friend",
+                     "galentine", "wife", "wifey", "soul sister", "bonus sister"],
     "grandparents_day": ["grandma", "grandpa", "grandparents", "grandmother",
                          "grandfather", "abuela", "abuelo", "nana", "grandad"],
     "siblings_day": ["sister", "brother", "sibling", "big sister", "little sister",
