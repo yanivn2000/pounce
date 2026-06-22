@@ -506,8 +506,8 @@ with tab_occasions:
 # TAB — INVENTORY
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_inv:
-    _inv_overview_tab, _inv_upload_tab, _inv_manual_tab, _inv_prod_tab, _inv_stock_tab, _inv_ship_tab, _inv_returns_tab = st.tabs([
-        "📊 Overview", "📤 Upload Data", "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns"
+    _inv_overview_tab, _inv_aged_tab, _inv_upload_tab, _inv_manual_tab, _inv_prod_tab, _inv_stock_tab, _inv_ship_tab, _inv_returns_tab = st.tabs([
+        "📊 Overview", "📦 Long Storage", "📤 Upload Data", "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns"
     ])
 
     # ── OVERVIEW ─────────────────────────────────────────────────────────────
@@ -904,8 +904,8 @@ with tab_inv:
 # TAB — PROFIT
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_profit:
-    _suppliers_tab, _items_tab, _catalog_tab, _fba_tab, _aged_tab = st.tabs([
-        "🏭 Suppliers", "🧩 Items", "📋 Products Catalog", "💰 FBA Fees", "📦 Long Storage"
+    _suppliers_tab, _items_tab, _catalog_tab, _fba_tab = st.tabs([
+        "🏭 Suppliers", "🧩 Items", "📋 Products Catalog", "💰 FBA Fees"
     ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1773,9 +1773,9 @@ with _fba_tab:
         )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PROFIT SUB-TAB — LONG STORAGE ALERTS
+# INVENTORY SUB-TAB — LONG STORAGE ALERTS
 # ══════════════════════════════════════════════════════════════════════════════
-with _aged_tab:
+with _inv_aged_tab:
     from db.aged_inventory import (
         import_aged_inventory_csv, get_aged_inventory_alerts,
         get_aged_inventory_snapshot_date, clear_aged_inventory,
