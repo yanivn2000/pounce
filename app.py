@@ -3215,7 +3215,10 @@ with tab_sales:
     # THEMES VIEW — which product niche drives the business + what to develop next
     # ══════════════════════════════════════════════════════════════════════════
     if _sales_view == "🎯 Themes":
-        from db.themes import get_theme_performance
+        from db.themes import (
+            get_theme_performance, get_themes, get_all_products, get_theme_skus,
+            create_theme, rename_theme, delete_theme, set_theme_skus,
+        )
 
         st.markdown(
             f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>🎯 Theme Performance &nbsp;"
@@ -3223,6 +3226,58 @@ with tab_sales:
             f"Which gift niche drives sales & profit — and where to expand next.</span></p>",
             unsafe_allow_html=True,
         )
+
+        # ── Theme editor ───────────────────────────────────────────────────
+        with st.expander("⚙️ Manage themes — create · rename · add/remove SKUs · delete"):
+            _all_prod = get_all_products()                      # [(ASIN, name)]
+            _prod_label = {a: (f"{n[:46]}  ·  {a}" if n else a) for a, n in _all_prod}
+            _prod_asins = [a for a, _ in _all_prod]
+
+            st.markdown("**➕ Create a new theme**")
+            _nc1, _nc2, _nc3 = st.columns([2, 2, 1])
+            _new_name  = _nc1.text_input("Name", key="theme_new_name",
+                                         placeholder="e.g. Pet Lovers")
+            _new_label = _nc2.text_input("Display label (emoji ok)", key="theme_new_label",
+                                         placeholder="🐾 Pet Lovers")
+            if _nc3.button("Create", key="theme_create_btn", use_container_width=True):
+                _r = create_theme(_new_name, _new_label)
+                if _r == "saved":      st.success(f"Created '{_new_name}'."); st.rerun()
+                elif _r == "duplicate": st.warning("A theme with that name already exists.")
+                else:                  st.error(_r)
+
+            st.divider()
+            _themes_list = get_themes()
+            if _themes_list:
+                st.markdown("**✏️ Edit a theme**")
+                _opts = {t["id"]: t for t in _themes_list}
+                _sel_id = st.selectbox(
+                    "Theme to edit", list(_opts.keys()),
+                    format_func=lambda i: f"{_opts[i]['label']}  ({_opts[i]['n_skus']} SKUs)",
+                    key="theme_edit_sel",
+                )
+                _sel = _opts[_sel_id]
+                _ec1, _ec2 = st.columns(2)
+                _ed_name  = _ec1.text_input("Name", value=_sel["name"], key=f"theme_name_{_sel_id}")
+                _ed_label = _ec2.text_input("Display label", value=_sel["label"],
+                                            key=f"theme_label_{_sel_id}")
+                _cur_skus = get_theme_skus(_sel_id)
+                _members = st.multiselect(
+                    "SKUs in this theme (add or remove)",
+                    _prod_asins, default=[a for a in _cur_skus if a in _prod_asins],
+                    format_func=lambda a: _prod_label.get(a, a),
+                    key=f"theme_skus_{_sel_id}",
+                )
+                _b1, _b2, _b3 = st.columns([1, 1, 1])
+                if _b1.button("💾 Save", key=f"theme_save_{_sel_id}", use_container_width=True):
+                    set_theme_skus(_sel_id, _members)
+                    rename_theme(_sel_id, _ed_name, _ed_label)
+                    st.success("Saved."); st.rerun()
+                if _b3.button("🗑️ Delete theme", key=f"theme_del_{_sel_id}",
+                              use_container_width=True):
+                    delete_theme(_sel_id)
+                    st.success(f"Deleted '{_sel['label']}'."); st.rerun()
+                st.caption(f"{len(_members)} SKU(s) selected. "
+                           "Themes overlap — a product can belong to several.")
 
         _tc1, _tc2 = st.columns([1, 3])
         with _tc1:
