@@ -54,72 +54,135 @@ _REGION_FLAG = {
 }
 
 
-# ── Per-region occasion dates for a given year ──────────────────────────────────
-def _mothers_day(year: int, region: str) -> _dt.date:
-    if region in ("UK", "IE"):
-        return _easter(year) - _dt.timedelta(days=21)   # Mothering Sunday
-    if region == "MX":
-        return _dt.date(year, 5, 10)
-    if region == "ES":
-        return _nth_weekday(year, 5, 6, 1)              # 1st Sun May
-    if region in ("FR", "SE"):
-        return _last_weekday(year, 5, 6)                # last Sun May
-    return _nth_weekday(year, 5, 6, 2)                  # default: 2nd Sun May
+# Market groups for occasions that aren't worldwide.
+_EN_MARKETS = {"US", "CA", "UK", "AU"}          # US-style "national days" resonate here
+_DIASPORA   = {"US", "CA", "UK", "AU"}          # Indian-diaspora gifting markets
+
+# Lunar / movable cultural dates have NO reliable formula — keep a small table and
+# EXTEND IT YEARLY. Unknown years return None (no false date is ever shown).
+# ⚠️ Verify these against a current Hindu calendar before relying on them.
+_LUNAR = {
+    "raksha_bandhan": {2025: "2025-08-09", 2026: "2026-08-28", 2027: "2027-08-26"},
+    "bhai_dooj":      {2025: "2025-10-23", 2026: "2026-11-11", 2027: "2027-10-31"},
+    "diwali":         {2025: "2025-10-20", 2026: "2026-11-08", 2027: "2027-10-29"},
+}
+def _lunar(name: str, year: int):
+    s = _LUNAR.get(name, {}).get(year)
+    return _dt.date.fromisoformat(s) if s else None
 
 
-def _fathers_day(year: int, region: str) -> _dt.date:
-    if region == "DE":
-        return _easter(year) + _dt.timedelta(days=39)   # Ascension
-    if region in ("ES", "IT"):
-        return _dt.date(year, 3, 19)
-    if region == "AU":
-        return _nth_weekday(year, 9, 6, 1)              # 1st Sun Sep
-    if region == "SE":
-        return _nth_weekday(year, 11, 6, 2)            # 2nd Sun Nov
-    return _nth_weekday(year, 6, 6, 3)                  # default: 3rd Sun Jun
+# ── Per-region occasion dates for a given year (return None = not in this market) ─
+def _mothers_day(year, region):
+    if region in ("UK", "IE"):  return _easter(year) - _dt.timedelta(days=21)  # Mothering Sun
+    if region == "MX":          return _dt.date(year, 5, 10)
+    if region == "ES":          return _nth_weekday(year, 5, 6, 1)             # 1st Sun May
+    if region in ("FR", "SE"):  return _last_weekday(year, 5, 6)              # last Sun May
+    return _nth_weekday(year, 5, 6, 2)                                         # 2nd Sun May
 
+def _fathers_day(year, region):
+    if region == "DE":          return _easter(year) + _dt.timedelta(days=39)  # Ascension
+    if region in ("ES", "IT"):  return _dt.date(year, 3, 19)
+    if region == "AU":          return _nth_weekday(year, 9, 6, 1)            # 1st Sun Sep
+    if region == "SE":          return _nth_weekday(year, 11, 6, 2)           # 2nd Sun Nov
+    return _nth_weekday(year, 6, 6, 3)                                         # 3rd Sun Jun
 
-def _grandparents_day(year: int, region: str):
-    if region == "US":
-        labor = _nth_weekday(year, 9, 0, 1)             # 1st Mon Sep
-        return labor + _dt.timedelta(days=6)            # following Sunday
-    if region == "IT":
-        return _dt.date(year, 10, 2)                    # Festa dei nonni
+def _grandparents_day(year, region):
+    if region == "US":          return _nth_weekday(year, 9, 0, 1) + _dt.timedelta(days=6)
+    if region == "UK":          return _nth_weekday(year, 10, 6, 1)           # 1st Sun Oct
+    if region == "ES":          return _dt.date(year, 7, 26)                  # Día de los Abuelos
+    if region == "MX":          return _dt.date(year, 8, 28)                  # Día del Abuelo
+    if region == "IT":          return _dt.date(year, 10, 2)                  # Festa dei nonni
     return None
 
-
-# occasion key → (display, theme keywords, date function)
 def _valentines(year, region):  return _dt.date(year, 2, 14)
 def _christmas(year, region):   return _dt.date(year, 12, 25)
 
+# US "national days" — fire for English-language markets only
+def _siblings_day(year, region): return _dt.date(year, 4, 10)  if region in _EN_MARKETS else None
+def _sisters_day(year, region):  return _nth_weekday(year, 8, 6, 1) if region in _EN_MARKETS else None  # 1st Sun Aug
+def _brothers_day(year, region): return _dt.date(year, 5, 24) if region in _EN_MARKETS else None
+def _friends_day(year, region):  return _dt.date(year, 6, 8)  if region in _EN_MARKETS else None  # Best Friends
+def _bosss_day(year, region):    return _dt.date(year, 10, 16) if region in _EN_MARKETS else None
+def _nurses_day(year, region):   return _dt.date(year, 5, 6)  if region in _EN_MARKETS else None
+def _teacher_day(year, region):
+    # US Teacher Appreciation Day = Tuesday of the first full week of May
+    return (_nth_weekday(year, 5, 6, 1) + _dt.timedelta(days=2)) if region in _EN_MARKETS else None
+
+# Spanish / Latino
+def _three_kings(year, region):  return _dt.date(year, 1, 6) if region in ("ES", "MX") else None
+def _compadres(year, region):
+    # Mexican Jueves de Compadres ≈ 2nd Thursday before Ash Wednesday (Easter−59).
+    # ⚠️ Tradition/date varies by region — confirm locally.
+    return (_easter(year) - _dt.timedelta(days=59)) if region == "MX" else None
+
+# Indian diaspora (lunar — from table)
+def _rakhi(year, region):     return _lunar("raksha_bandhan", year) if region in _DIASPORA else None
+def _bhai_dooj(year, region): return _lunar("bhai_dooj", year)      if region in _DIASPORA else None
+def _diwali(year, region):    return _lunar("diwali", year)         if region in _DIASPORA else None
+
+
+# occasion key → (display label, date function(year, region))
 OCCASIONS = {
-    "valentines":       ("💘 Valentine's Day",   _valentines),
-    "mothers_day":      ("💐 Mother's Day",       _mothers_day),
-    "fathers_day":      ("👔 Father's Day",       _fathers_day),
-    "grandparents_day": ("👵 Grandparents Day",   _grandparents_day),
-    "christmas":        ("🎄 Christmas",          _christmas),
+    "three_kings":      ("👑 Three Kings (Reyes)",     _three_kings),
+    "valentines":       ("💘 Valentine's Day",          _valentines),
+    "siblings_day":     ("👫 Siblings Day",             _siblings_day),
+    "compadres":        ("🤝 Compadres & Comadres",     _compadres),
+    "mothers_day":      ("💐 Mother's Day",             _mothers_day),
+    "teacher_day":      ("🍎 Teacher Appreciation",     _teacher_day),
+    "nurses_day":       ("🩺 Nurses Day",               _nurses_day),
+    "brothers_day":     ("👬 Brothers Day",             _brothers_day),
+    "fathers_day":      ("👔 Father's Day",             _fathers_day),
+    "friends_day":      ("🫶 Best Friends Day",         _friends_day),
+    "grandparents_day": ("👵 Grandparents Day",         _grandparents_day),
+    "sisters_day":      ("👭 Sisters Day",              _sisters_day),
+    "raksha_bandhan":   ("🪢 Raksha Bandhan (Rakhi)",   _rakhi),
+    "bhai_dooj":        ("🪔 Bhai Dooj",                _bhai_dooj),
+    "bosss_day":        ("💼 Boss's Day",               _bosss_day),
+    "diwali":           ("🪔 Diwali",                   _diwali),
+    "christmas":        ("🎄 Christmas",                _christmas),
 }
 
-# Product-name keyword → occasions it serves. Christmas applies to everything.
+# Product-name keyword → occasions it serves.
+# Occasions with NO keywords here = universal gift days (apply to every product):
+#   christmas, three_kings, diwali.
 _THEME_KEYWORDS = {
-    "mothers_day": ["mom", "mommy", "mother", "mum", "grandma", "grandmother",
-                    "nana", "abuela", "abuelita", "wife", "wifey", "mrs",
-                    "aunt", "sister", "madrina", "mamá", "mama"],
-    "fathers_day": ["dad", "daddy", "father", "grandpa", "grandfather", "papa",
-                    "abuelo", "abuelito", "husband", "hubby", "uncle", "boss",
-                    "padrino", "grandad", "grandparents"],
-    "valentines":  ["husband", "wife", "mr & mrs", "mr&mrs", "mr right",
-                    "mrs always", "couple", "hubby", "wifey", "anniversary",
-                    "love", "boyfriend", "girlfriend", "him", "her", "mr mrs"],
+    "mothers_day":  ["mom", "mommy", "mother", "mum", "grandma", "grandmother",
+                     "nana", "abuela", "abuelita", "wife", "wifey", "mrs",
+                     "madrina", "mamá", "mama"],
+    "fathers_day":  ["dad", "daddy", "father", "grandpa", "grandfather", "papa",
+                     "abuelo", "abuelito", "husband", "hubby", "uncle",
+                     "padrino", "grandad", "grandparents"],
+    "valentines":   ["husband", "wife", "mr & mrs", "mr&mrs", "mr right",
+                     "mrs always", "couple", "hubby", "wifey", "anniversary",
+                     "love", "boyfriend", "girlfriend", "mr mrs"],
     "grandparents_day": ["grandma", "grandpa", "grandparents", "grandmother",
                          "grandfather", "abuela", "abuelo", "nana", "grandad"],
+    "siblings_day": ["sister", "brother", "sibling", "big sister", "little sister",
+                     "big brother", "crazy sister", "best sister", "best brother"],
+    "sisters_day":  ["sister", "big sister", "little sister", "crazy sister",
+                     "best sister", "bonus sister"],
+    "brothers_day": ["brother", "big brother", "best brother", "bonus brother"],
+    "friends_day":  ["friend", "bestie", "best friend", "bff", "bonus"],
+    "bosss_day":    ["boss"],
+    "teacher_day":  ["teacher", "mentor", "professor", "tutor"],
+    "nurses_day":   ["nurse"],
+    "compadres":    ["padrino", "madrina", "compadre", "comadre", "abuela", "abuelo"],
+    "raksha_bandhan": ["sister", "brother", "sibling", "rakhi", "bhai", "behen"],
+    "bhai_dooj":    ["brother", "sister", "bhai", "sibling"],
 }
+
+# Universal gift days = occasions with no keyword filter.
+_UNIVERSAL = {k for k in OCCASIONS if k not in _THEME_KEYWORDS}
 
 
 def tag_occasions(name: str) -> set:
-    """Return the set of occasion keys a product name serves (+ christmas always)."""
+    """Return the set of occasion keys a product name serves.
+
+    Universal gift days (Christmas, Three Kings, Diwali) apply to every product;
+    the rest are matched on name keywords.
+    """
     low = (name or "").lower()
-    keys = {"christmas"}
+    keys = set(_UNIVERSAL)
     for occ, words in _THEME_KEYWORDS.items():
         if any(w in low for w in words):
             keys.add(occ)
