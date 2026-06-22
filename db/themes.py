@@ -78,15 +78,22 @@ def get_theme_performance(days: int = 365) -> list[dict]:
 
     Each dict: theme, label, n_skus, units, revenue, cogs, gross_profit,
     margin_pct, rev_per_sku, profit_per_sku, prior_revenue, growth_pct.
+
+    growth_pct is **year-over-year**: this period vs the SAME calendar window
+    one year earlier. This removes seasonality (Q4 gift peak), which an adjacent
+    period comparison would otherwise mistake for a decline. None = no sales in
+    that window a year ago.
     """
     conn = get_conn()
     today = _dt.date.today()
     p_start = (today - _dt.timedelta(days=days)).isoformat()
     p_end   = today.isoformat()
-    q_start = (today - _dt.timedelta(days=2 * days)).isoformat()
+    # Year-over-year baseline: same window, one year earlier
+    yoy_start = (today - _dt.timedelta(days=days + 365)).isoformat()
+    yoy_end   = (today - _dt.timedelta(days=365)).isoformat()
 
     cur   = _orders_by_asin(conn, p_start, p_end)
-    prior = _orders_by_asin(conn, q_start, p_start)
+    prior = _orders_by_asin(conn, yoy_start, yoy_end)
 
     # ASIN → name (catalog first, fall back to most recent order title)
     names = {r[0].upper(): (r[1] or "")

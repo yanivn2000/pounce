@@ -3248,8 +3248,8 @@ with tab_sales:
             _h2.metric("💡 Best $ / SKU (expand)", _by_effic["label"].split(" ", 1)[-1],
                        f"${_by_effic['rev_per_sku']:,.0f}/SKU")
             if _by_growth:
-                _h3.metric("📈 Fastest growing", _by_growth["label"].split(" ", 1)[-1],
-                           f"{_by_growth['growth_pct']:+.0f}% vs prev")
+                _h3.metric("📈 Fastest growing (YoY)", _by_growth["label"].split(" ", 1)[-1],
+                           f"{_by_growth['growth_pct']:+.0f}% vs last year")
 
             # "Develop next" callout: high $/SKU AND positive growth AND few SKUs
             _ranked_rps = sorted(_themes, key=lambda t: t["rev_per_sku"], reverse=True)
@@ -3276,23 +3276,50 @@ with tab_sales:
                     "Gross profit": t["gross_profit"],
                     "Margin %":   t["margin_pct"],
                     "$ / SKU":    t["rev_per_sku"],
-                    "Growth %":   t["growth_pct"],
+                    "YoY %":      t["growth_pct"],
                 })
             st.dataframe(
                 pd.DataFrame(_rows), use_container_width=True, hide_index=True,
                 column_config={
-                    "Revenue":      st.column_config.NumberColumn(format="$%d"),
-                    "Gross profit": st.column_config.NumberColumn(format="$%d"),
-                    "$ / SKU":      st.column_config.NumberColumn(format="$%d"),
-                    "% of sales":   st.column_config.NumberColumn(format="%.1f%%"),
-                    "Margin %":     st.column_config.NumberColumn(format="%.1f%%"),
-                    "Growth %":     st.column_config.NumberColumn(format="%+.0f%%"),
+                    "Theme": st.column_config.TextColumn(
+                        help="Gift niche, inferred from product names. Themes overlap — a "
+                             "'Best Grandma' mug counts in both Grandparents and Grandma."),
+                    "SKUs": st.column_config.NumberColumn(
+                        help="Distinct products in this theme that sold during the period."),
+                    "Units": st.column_config.NumberColumn(
+                        help="Total units sold during the period."),
+                    "Revenue": st.column_config.NumberColumn(
+                        format="$%d",
+                        help="Gross sales (item price × qty) during the period, converted to USD."),
+                    "% of sales": st.column_config.NumberColumn(
+                        format="%.1f%%",
+                        help="This theme's revenue ÷ revenue across all themes. Sums to >100% "
+                             "because themes overlap."),
+                    "Gross profit": st.column_config.NumberColumn(
+                        format="$%d",
+                        help="Revenue − COGS (SellerBoard landed cost per unit). This is BEFORE "
+                             "Amazon fees and advertising."),
+                    "Margin %": st.column_config.NumberColumn(
+                        format="%.1f%%",
+                        help="Gross profit ÷ Revenue = (Revenue − COGS) ÷ Revenue. Product margin "
+                             "only — it does NOT yet subtract Amazon fees or ad spend, so the real "
+                             "take-home is lower."),
+                    "$ / SKU": st.column_config.NumberColumn(
+                        format="$%d",
+                        help="Revenue ÷ number of SKUs. High revenue from few SKUs = an efficient "
+                             "niche with room to add variations (your 'develop next' signal)."),
+                    "YoY %": st.column_config.NumberColumn(
+                        format="%+.0f%%",
+                        help="Year-over-year growth: revenue this period vs the SAME calendar "
+                             "window one year ago. Removes seasonality (Q4 gift peak). '—' = no "
+                             "sales in that window a year ago."),
                 },
             )
             st.caption(
                 "Themes overlap on purpose (a 'Best Grandma' mug counts in both Grandparents "
-                "and Grandma), so columns sum to more than 100%. Gross profit = revenue − COGS "
-                "(before Amazon fees/ads). Growth = this period vs the previous equal period."
+                "and Grandma), so columns sum to more than 100%. Gross profit = revenue − COGS, "
+                "**before** Amazon fees/ads (so the ~90% margins are not take-home). "
+                "YoY % compares to the same window one year ago to neutralise seasonality."
             )
 
     # ══════════════════════════════════════════════════════════════════════════
