@@ -110,7 +110,7 @@ def _int(val) -> int:
 
 # ── Main importer ─────────────────────────────────────────────────────────────
 
-def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
+def import_campaign_manager_csv(file_obj, export_date: str = None) -> tuple[int, int, list[str]]:
     """
     Parse an Amazon Ads Campaign Manager CSV and:
       1. Upsert rows into campaign_targets
@@ -145,13 +145,10 @@ def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
     if missing:
         return 0, 0, [f"Missing required columns: {missing}. Available: {list(df_raw.columns[:10])}"]
 
-    # Determine import_date from the report's max end date before inserting
-    _all_ends = []
-    for _dr in df.get("date_range", pd.Series(dtype=str)).dropna():
-        _, _end = _parse_date_range(str(_dr).strip())
-        if _end:
-            _all_ends.append(_end)
-    import_date = max(_all_ends) if _all_ends else datetime.utcnow().strftime("%Y-%m-%d")
+    # import_date = the day the CSV was exported (= when the bids were current).
+    # The date range inside the CSV only affects performance columns (spend/ROAS),
+    # NOT the Target Bid column — bids always reflect the moment of export.
+    import_date = export_date or datetime.utcnow().strftime("%Y-%m-%d")
 
     conn = get_conn()
     rows_saved = 0

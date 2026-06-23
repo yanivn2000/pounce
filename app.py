@@ -4240,7 +4240,7 @@ with tab_ads:
                 )
                 _kw_attr = get_keyword_attribution(_sb_mkt)
                 if not _kw_attr:
-                    st.info("No keyword bid changes detected yet. Upload two consecutive 90-day Campaign Manager CSVs in the Upload Reports tab.")
+                    st.info("No keyword bid changes detected yet. Upload a CSV today as baseline, then upload again next week after Rotem adjusts bids.")
                 else:
                     _kw_summary = summarize_keyword_attribution(_kw_attr)
                     _kws1, _kws2, _kws3, _kws4, _kws5 = st.columns(5)
@@ -5473,22 +5473,31 @@ with tab_ads:
                 f"<p style='color:{T['text_secondary']};font-size:0.9rem;'>"
                 "Download from Amazon Ads → Campaign Manager → <b>Export all</b>. "
                 "Set date range to <b>Last 90 days</b>. "
-                "Upload two consecutive 90-day exports (e.g. ending Jun 14 then Jun 22). "
-                "Pounce will compare and auto-detect keyword bid changes.</p>",
+                "Upload once a week — Pounce compares consecutive uploads to detect keyword bid changes automatically. "
+                "<b>The export date (= when you downloaded the file) is used as the bid snapshot date.</b></p>",
                 unsafe_allow_html=True,
             )
             _last_cm = get_campaign_manager_last_import()
             if _last_cm:
-                st.caption(f"Latest report period: {_last_cm}")
+                st.caption(f"Latest snapshot: {_last_cm}")
 
             _cm_file = st.file_uploader(
                 "Campaign Manager CSV", type=["csv"],
                 key=f"cm_csv_{st.session_state.get('cm_import_key', 0)}",
             )
             if _cm_file:
+                import datetime as _dt
+                _cm_export_date = st.date_input(
+                    "Export date (when you downloaded this file)",
+                    value=_dt.date.today(),
+                    help="Amazon's bid column reflects the bid at the moment of export, not the report end date. "
+                         "Change this only if you're uploading a file downloaded on a different day.",
+                )
                 if st.button("📥 Import Campaign Manager CSV", type="primary"):
                     with st.spinner("Importing…"):
-                        _cm_rows, _cm_changes, _cm_warns = import_campaign_manager_csv(_cm_file)
+                        _cm_rows, _cm_changes, _cm_warns = import_campaign_manager_csv(
+                            _cm_file, export_date=str(_cm_export_date)
+                        )
                     st.session_state["cm_import_key"] = st.session_state.get("cm_import_key", 0) + 1
                     if _cm_warns:
                         for w in _cm_warns[:3]:
@@ -5563,7 +5572,8 @@ with tab_ads:
                     if _kw_df.empty:
                         st.info(
                             "No keyword bid changes detected yet. "
-                            "Upload two consecutive 90-day Campaign Manager CSVs (e.g. ending Jun 14 then Jun 22) to see changes."
+                            "Upload a CSV today as baseline, then upload again next week after Rotem adjusts bids — "
+                            "changes will appear automatically."
                         )
                     else:
                         _kw_df["direction"] = _kw_df.apply(
