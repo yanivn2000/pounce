@@ -48,6 +48,7 @@ from db.fba_fees import (
 from db.campaign_manager import (
     import_campaign_manager_csv, get_campaign_overview,
     get_keyword_bid_changes, get_campaign_manager_last_import,
+    get_keyword_attribution, summarize_keyword_attribution,
 )
 from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
@@ -4227,6 +4228,57 @@ with tab_ads:
                     "placement. Cumulative = Δ accrued since the change (settled only). "
                     "'Prelim' marks reads whose 30-day window still overlaps pre-change days."
                 )
+
+                # ── Keyword bid changes scoreboard ────────────────────────────
+                st.divider()
+                st.markdown("### 🔑 Keyword Bid Changes")
+                st.markdown(
+                    f"<p style='color:{T['text_secondary']};font-size:0.9rem;'>"
+                    "Auto-detected from Campaign Manager CSV. "
+                    "Scored by ROAS before vs after the bid change.</p>",
+                    unsafe_allow_html=True,
+                )
+                _kw_attr = get_keyword_attribution(_sb_mkt)
+                if not _kw_attr:
+                    st.info("No keyword bid changes detected yet. Upload a Last 90 days Campaign Manager CSV in the Upload Reports tab.")
+                else:
+                    _kw_summary = summarize_keyword_attribution(_kw_attr)
+                    _kws1, _kws2, _kws3, _kws4, _kws5 = st.columns(5)
+                    _kws1.metric("Total changes", _kw_summary["total"])
+                    _kws2.metric("Wins", _kw_summary["wins"])
+                    _kws3.metric("Losses", _kw_summary["losses"])
+                    _kws4.metric("Settling", _kw_summary["settling"] + _kw_summary["pending"])
+                    _kws5.metric("Win rate", f"{int(_kw_summary['win_rate'])}%" if _kw_summary["win_rate"] else "—")
+
+                    _VERDICT_ICON = {
+                        "win": "✅ Win", "loss": "❌ Loss", "flat": "➡️ Flat",
+                        "settling": "⏳ Settling", "pending": "⏳ Pending",
+                        "no_baseline": "— No baseline",
+                    }
+                    _kw_rows = []
+                    for r in _kw_attr:
+                        _kw_rows.append({
+                            "Date":         r["change_date"],
+                            "Campaign":     r["campaign"],
+                            "Marketplace":  r["marketplace"],
+                            "Bid Before":   f"{r['currency']} {r['bid_before']:.2f}" if r["bid_before"] else "—",
+                            "Bid After":    f"{r['currency']} {r['bid_after']:.2f}",
+                            "ROAS P1":      r["roas_p1"],
+                            "ROAS P2":      r["roas_p2"],
+                            "ROAS Δ":       r["roas_delta"],
+                            "P2 Days":      r["p2_days"],
+                            "Verdict":      _VERDICT_ICON.get(r["verdict"], r["verdict"]),
+                        })
+                    st.dataframe(
+                        _kw_rows,
+                        column_config={
+                            "ROAS P1":  st.column_config.NumberColumn(format="%.2fx"),
+                            "ROAS P2":  st.column_config.NumberColumn(format="%.2fx"),
+                            "ROAS Δ":   st.column_config.NumberColumn(format="%.2fx"),
+                        },
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
         with _recs_view:
             # ── WORKBENCH ─────────────────────────────────────────────────────

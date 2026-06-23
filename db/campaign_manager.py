@@ -217,16 +217,15 @@ def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
                 })
 
     # ── Bid change detection ──────────────────────────────────────────────────
-    bid_changes_detected = _detect_bid_changes(rows_for_detection, conn)
+    bid_changes_detected = _detect_bid_changes(rows_for_detection, conn, import_date)
     conn.close()
     return rows_saved, bid_changes_detected, warnings
 
 
-def _detect_bid_changes(rows: list[dict], conn) -> int:
+def _detect_bid_changes(rows: list[dict], conn, import_date: str) -> int:
     """
-    For each (campaign_id, target_id) group, sort by date and find consecutive
-    rows where the bid differs.  Insert into keyword_bid_changes if not already
-    stored.
+    Compare current import's bids against the most recent PREVIOUS import
+    for the same (campaign_id, target_id). A difference = bid change.
 
     Returns number of new bid changes inserted.
     """
@@ -236,42 +235,63 @@ def _detect_bid_changes(rows: list[dict], conn) -> int:
     df = pd.DataFrame(rows)
     inserted = 0
 
-    for (campaign_id, target_id), grp in df.groupby(["campaign_id", "target_id"]):
-        grp_sorted = grp.sort_values("date_start").reset_index(drop=True)
-        if len(grp_sorted) < 2:
+    # Get the most recent previous import date (before today's import)
+    prev_import = conn.execute("""
+        SELECT MAX(import_date) FROM campaign_targets
+        WHERE import_date < ?
+    """, (import_date,)).fetchone()[0]
+
+    if not prev_import:
+        return 0  # first ever import — nothing to compare against
+
+    # Build previous-import bid map: (campaign_id, target_id) → bid
+    prev_rows = conn.execute("""
+        SELECT campaign_id, target_id, MAX(target_bid) AS target_bid
+        FROM campaign_targets
+        WHERE import_date = ? AND target_bid IS NOT NULL
+        GROUP BY campaign_id, target_id
+    """, (prev_import,)).fetchall()
+    prev_bids = {(r["campaign_id"], r["target_id"]): float(r["target_bid"])
+                 for r in prev_rows}
+
+    # Current import: one bid per (campaign_id, target_id) — use MAX (all rows same bid)
+    current = df.groupby(["campaign_id", "target_id"]).agg(
+        campaign_name=("campaign_name", "first"),
+        marketplace=("marketplace", "first"),
+        currency=("currency", "first"),
+        ad_product=("ad_product", "first"),
+        target_bid=("target_bid", "max"),
+    ).reset_index()
+
+    for _, row in current.iterrows():
+        cid = row["campaign_id"]
+        tid = row["target_id"]
+        bid_after = float(row["target_bid"]) if row["target_bid"] else None
+        if bid_after is None:
             continue
 
-        for i in range(1, len(grp_sorted)):
-            prev = grp_sorted.iloc[i - 1]
-            curr = grp_sorted.iloc[i]
+        bid_before = prev_bids.get((cid, tid))
+        if bid_before is None:
+            continue  # new keyword — no baseline to compare
 
-            bid_before = float(prev["target_bid"])
-            bid_after  = float(curr["target_bid"])
+        if abs(bid_after - bid_before) < 0.001:
+            continue  # unchanged
 
-            if abs(bid_before - bid_after) < 0.001:
-                continue  # same bid — no change
-
-            change_date = curr["date_start"]
-            campaign_name = curr["campaign_name"]
-            marketplace   = curr["marketplace"]
-            currency      = curr["currency"]
-            ad_product    = curr["ad_product"]
-
-            try:
-                with conn:
-                    conn.execute("""
-                        INSERT OR IGNORE INTO keyword_bid_changes
-                            (change_date, campaign_id, campaign_name, target_id,
-                             marketplace, bid_before, bid_after, currency, ad_product)
-                        VALUES (?,?,?,?,?,?,?,?,?)
-                    """, (
-                        change_date, campaign_id, campaign_name, target_id,
-                        marketplace, round(bid_before, 3), round(bid_after, 3),
-                        currency, ad_product,
-                    ))
-                inserted += 1
-            except Exception:
-                pass
+        try:
+            with conn:
+                conn.execute("""
+                    INSERT OR IGNORE INTO keyword_bid_changes
+                        (change_date, campaign_id, campaign_name, target_id,
+                         marketplace, bid_before, bid_after, currency, ad_product)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                """, (
+                    import_date, cid, row["campaign_name"], tid,
+                    row["marketplace"], round(bid_before, 3), round(bid_after, 3),
+                    row["currency"], row["ad_product"],
+                ))
+            inserted += 1
+        except Exception:
+            pass
 
     return inserted
 
@@ -337,6 +357,147 @@ def get_keyword_bid_changes(marketplace: str = None) -> pd.DataFrame:
     """, conn, params=params)
     conn.close()
     return df
+
+
+def get_keyword_attribution(marketplace: str = None,
+                            min_p2_days: int = 7,
+                            roas_threshold: float = 0.2) -> list[dict]:
+    """
+    Score every auto-detected keyword bid change using performance data already
+    in campaign_targets (the 90-day window).
+
+    For each keyword_bid_changes row:
+      P1 = all campaign_targets rows for same (campaign_id, target_id)
+           where date_range_end < change_date  (pre-change performance)
+      P2 = all campaign_targets rows for same (campaign_id, target_id)
+           where date_range_start >= change_date  (post-change performance)
+
+    Verdict:
+      win      — ROAS P2 > P1 + roas_threshold
+      loss     — ROAS P2 < P1 − roas_threshold
+      flat     — within threshold
+      settling — P2 has fewer than min_p2_days of data
+      pending  — no P2 data yet
+      no_baseline — no P1 data
+
+    Returns list of dicts, newest change first.
+    """
+    conn = get_conn()
+    mp_filter = "WHERE marketplace = ?" if marketplace else ""
+    params = [marketplace] if marketplace else []
+
+    changes = conn.execute(f"""
+        SELECT id, change_date, campaign_id, campaign_name, target_id,
+               marketplace, bid_before, bid_after, currency, ad_product, notes
+        FROM keyword_bid_changes
+        {mp_filter}
+        ORDER BY change_date DESC, campaign_name
+    """, params).fetchall()
+
+    rows = []
+    for ch in changes:
+        cid   = ch["campaign_id"]
+        tid   = ch["target_id"]
+        mkt   = ch["marketplace"]
+        cdate = str(ch["change_date"])[:10]
+
+        # P1: aggregate performance before change
+        p1 = conn.execute("""
+            SELECT SUM(spend) AS spend, SUM(sales) AS sales,
+                   SUM(purchases) AS purchases, SUM(impressions) AS impressions,
+                   SUM(clicks) AS clicks, MAX(date_range_end) AS last_date
+            FROM campaign_targets
+            WHERE campaign_id=? AND target_id=? AND marketplace=?
+              AND date_range_end < ?
+        """, (cid, tid, mkt, cdate)).fetchone()
+
+        # P2: aggregate performance after change
+        p2 = conn.execute("""
+            SELECT SUM(spend) AS spend, SUM(sales) AS sales,
+                   SUM(purchases) AS purchases, SUM(impressions) AS impressions,
+                   SUM(clicks) AS clicks,
+                   MIN(date_range_start) AS first_date,
+                   MAX(date_range_end)   AS last_date
+            FROM campaign_targets
+            WHERE campaign_id=? AND target_id=? AND marketplace=?
+              AND date_range_start >= ?
+        """, (cid, tid, mkt, cdate)).fetchone()
+
+        # ROAS
+        p1_spend = float(p1["spend"] or 0) if p1 else 0
+        p1_sales = float(p1["sales"] or 0) if p1 else 0
+        p2_spend = float(p2["spend"] or 0) if p2 else 0
+        p2_sales = float(p2["sales"] or 0) if p2 else 0
+
+        roas_p1 = round(p1_sales / p1_spend, 2) if p1_spend > 0 else None
+        roas_p2 = round(p2_sales / p2_spend, 2) if p2_spend > 0 else None
+
+        # Days of P2 data
+        p2_days = None
+        if p2 and p2["first_date"] and p2["last_date"]:
+            from datetime import datetime as _dt
+            try:
+                p2_days = (_dt.strptime(p2["last_date"], "%Y-%m-%d") -
+                           _dt.strptime(p2["first_date"], "%Y-%m-%d")).days + 1
+            except ValueError:
+                p2_days = None
+
+        # Verdict
+        if roas_p1 is None:
+            verdict = "no_baseline"
+        elif roas_p2 is None:
+            verdict = "pending"
+        elif p2_days is not None and p2_days < min_p2_days:
+            verdict = "settling"
+        elif roas_p2 > roas_p1 + roas_threshold:
+            verdict = "win"
+        elif roas_p2 < roas_p1 - roas_threshold:
+            verdict = "loss"
+        else:
+            verdict = "flat"
+
+        rows.append({
+            "id":           ch["id"],
+            "change_date":  cdate,
+            "campaign":     ch["campaign_name"],
+            "target_id":    tid,
+            "marketplace":  mkt,
+            "ad_product":   ch["ad_product"],
+            "currency":     ch["currency"],
+            "bid_before":   ch["bid_before"],
+            "bid_after":    ch["bid_after"],
+            "notes":        ch["notes"],
+            "roas_p1":      roas_p1,
+            "roas_p2":      roas_p2,
+            "roas_delta":   round(roas_p2 - roas_p1, 2) if (roas_p1 and roas_p2) else None,
+            "spend_p1":     round(p1_spend, 2),
+            "spend_p2":     round(p2_spend, 2),
+            "sales_p1":     round(p1_sales, 2),
+            "sales_p2":     round(p2_sales, 2),
+            "p2_days":      p2_days,
+            "verdict":      verdict,
+        })
+
+    conn.close()
+    return rows
+
+
+def summarize_keyword_attribution(rows: list[dict]) -> dict:
+    settled  = [r for r in rows if r["verdict"] in ("win", "loss", "flat")]
+    wins     = [r for r in settled if r["verdict"] == "win"]
+    losses   = [r for r in settled if r["verdict"] == "loss"]
+    decided  = len(wins) + len(losses)
+    return {
+        "total":       len(rows),
+        "settled":     len(settled),
+        "wins":        len(wins),
+        "losses":      len(losses),
+        "flat":        len(settled) - len(wins) - len(losses),
+        "settling":    sum(1 for r in rows if r["verdict"] == "settling"),
+        "pending":     sum(1 for r in rows if r["verdict"] == "pending"),
+        "no_baseline": sum(1 for r in rows if r["verdict"] == "no_baseline"),
+        "win_rate":    round(100 * len(wins) / decided, 0) if decided else None,
+    }
 
 
 def get_campaign_manager_last_import() -> str | None:
