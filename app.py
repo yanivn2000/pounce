@@ -1706,14 +1706,20 @@ with _fba_tab:
         _fba_anomalies = get_pick_pack_anomalies()
         if not _fba_anomalies.empty:
             _fba_img_map = get_asin_image_map()
+            _cross_border_count = (
+                (_fba_anomalies.get("reason", "") == "Cross-border (no local inventory)").sum()
+                if "reason" in _fba_anomalies.columns else 0
+            )
+            _meas_err_count = len(_fba_anomalies) - _cross_border_count
             with st.expander(
-                f"⚠️ Overcharged Pick & Pack — {len(_fba_anomalies)} ASIN(s) may need remeasurement",
+                f"⚠️ Overcharged Pick & Pack — {len(_fba_anomalies)} ASIN(s)",
                 expanded=True,
             ):
                 st.caption(
                     "These ASINs are charged **more** than other products of the identical size "
-                    "(same W×L×H from your product catalog, same marketplace). "
-                    "Open an Amazon case to request remeasurement."
+                    "(same W×L×H from your product catalog, same marketplace).  \n"
+                    "**Cross-border** = no local inventory in that marketplace — send stock there or accept the higher fee.  \n"
+                    "**Possible measurement error** = open an Amazon case to request remeasurement."
                 )
                 _anom_display = _fba_anomalies.copy()
                 _anom_display.insert(0, "Image",
@@ -1725,15 +1731,16 @@ with _fba_tab:
                 )
                 st.dataframe(
                     _anom_display.rename(columns={
-                        "asin":             "ASIN",
-                        "marketplace":      "Marketplace",
-                        "dimensions":       "Dimensions (W×L×H)",
-                        "size_tier":        "Size Tier",
-                        "pick_pack_fee":    "Charged ($)",
-                        "expected_fee":     "Expected ($)",
-                        "currency":         "Currency",
-                        "same_size_asins":  "Same-size ASINs",
-                    }).drop(columns=["w", "l", "h"], errors="ignore"),
+                        "asin":                 "ASIN",
+                        "marketplace":          "Marketplace",
+                        "dimensions":           "Dimensions (W×L×H)",
+                        "size_tier":            "Size Tier",
+                        "pick_pack_fee":        "Charged ($)",
+                        "expected_fee":         "Expected ($)",
+                        "currency":             "Currency",
+                        "same_size_asins":      "Same-size ASINs",
+                        "reason":               "Reason",
+                    }).drop(columns=["w", "l", "h", "has_local_inventory"], errors="ignore"),
                     column_config={
                         "Image": st.column_config.ImageColumn("Image", width=60),
                     },

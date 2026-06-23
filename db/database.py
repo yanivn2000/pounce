@@ -540,10 +540,16 @@ def _migrate_fba_fees(conn: sqlite3.Connection):
             conn.commit()
         except Exception:
             pass
-    # Add size_tier to existing tables that predate this column
+    # Add columns to existing tables that predate them
     cols = [r[1] for r in conn.execute("PRAGMA table_info(fba_fees)").fetchall()]
     if "size_tier" not in cols:
         conn.execute("ALTER TABLE fba_fees ADD COLUMN size_tier TEXT DEFAULT ''")
+        conn.commit()
+    if "has_local_inventory" not in cols:
+        conn.execute("ALTER TABLE fba_fees ADD COLUMN has_local_inventory TEXT DEFAULT ''")
+        conn.commit()
+    if "remote_fulfillment_fee" not in cols:
+        conn.execute("ALTER TABLE fba_fees ADD COLUMN remote_fulfillment_fee REAL DEFAULT NULL")
         conn.commit()
 
 

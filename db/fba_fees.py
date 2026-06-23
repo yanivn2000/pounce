@@ -10,11 +10,16 @@ _PICK_PACK_COLS = [
     "expected-fulfillment-fee-per-unit",           # NA (US/CA)
     "expected-domestic-fulfilment-fee-per-unit",   # UK/EU
 ]
-_REFERRAL_COL   = "estimated-referral-fee-per-unit"
-_ASIN_COL       = "asin"
-_CURRENCY_COL   = "currency"
-_STORE_COL      = "amazon-store"   # e.g. "US", "CA", "UK"
-_SIZE_TIER_COL  = "product-size-tier"
+_REFERRAL_COL         = "estimated-referral-fee-per-unit"
+_ASIN_COL             = "asin"
+_CURRENCY_COL         = "currency"
+_STORE_COL            = "amazon-store"   # e.g. "US", "CA", "UK"
+_SIZE_TIER_COL        = "product-size-tier"
+_HAS_LOCAL_INV_COL    = "has-local-inventory"          # "Yes" / "No"
+_REMOTE_FEE_COLS      = [
+    "expected-remote-fulfillment-fee-per-unit",    # NARF (US→CA/MX)
+    "expected-efn-fulfillment-fee-per-unit",       # EFN (EU cross-border)
+]
 
 # Map amazon-store codes → internal marketplace strings
 _STORE_MAP = {
@@ -77,8 +82,10 @@ def import_fee_preview_csv(file_obj) -> tuple[int, list[str]]:
     if not pick_col:
         return 0, [f"Could not find pick & pack column. Available: {list(df.columns)}"]
 
-    referral_col_present = _REFERRAL_COL in df.columns
-    currency_col_present = _CURRENCY_COL in df.columns
+    referral_col_present   = _REFERRAL_COL in df.columns
+    currency_col_present   = _CURRENCY_COL in df.columns
+    has_local_inv_present  = _HAS_LOCAL_INV_COL in df.columns
+    remote_fee_col         = next((c for c in _REMOTE_FEE_COLS if c in df.columns), None)
 
     conn = get_conn()
     saved = 0
@@ -118,16 +125,33 @@ def import_fee_preview_csv(file_obj) -> tuple[int, list[str]]:
                 if _SIZE_TIER_COL in df.columns else ""
             )
 
+            has_local = (
+                str(row.get(_HAS_LOCAL_INV_COL, "")).strip()
+                if has_local_inv_present else ""
+            )
+
+            remote_fee = None
+            if remote_fee_col:
+                try:
+                    v = str(row.get(remote_fee_col, "")).replace(",", "").strip()
+                    remote_fee = float(v) if v else None
+                except ValueError:
+                    remote_fee = None
+
             conn.execute("""
-                INSERT INTO fba_fees (asin, marketplace, pick_pack_fee, referral_fee, currency, size_tier, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                INSERT INTO fba_fees (asin, marketplace, pick_pack_fee, referral_fee, currency,
+                                      size_tier, has_local_inventory, remote_fulfillment_fee, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(asin, marketplace) DO UPDATE SET
-                    pick_pack_fee = excluded.pick_pack_fee,
-                    referral_fee  = excluded.referral_fee,
-                    currency      = excluded.currency,
-                    size_tier     = excluded.size_tier,
-                    updated_at    = excluded.updated_at
-            """, (asin, marketplace, pick_pack, referral, currency, size_tier))
+                    pick_pack_fee        = excluded.pick_pack_fee,
+                    referral_fee         = excluded.referral_fee,
+                    currency             = excluded.currency,
+                    size_tier            = excluded.size_tier,
+                    has_local_inventory  = excluded.has_local_inventory,
+                    remote_fulfillment_fee = excluded.remote_fulfillment_fee,
+                    updated_at           = excluded.updated_at
+            """, (asin, marketplace, pick_pack, referral, currency, size_tier,
+                  has_local, remote_fee))
             saved += 1
 
     conn.close()
@@ -186,6 +210,7 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
             f.size_tier,
             f.pick_pack_fee,
             f.currency,
+            f.has_local_inventory,
             ROUND(p.width_cm,  1) AS w,
             ROUND(p.length_cm, 1) AS l,
             ROUND(p.height_cm, 1) AS h
@@ -212,6 +237,12 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
             continue
         outliers["expected_fee"] = expected_fee
         outliers["same_size_asins"] = len(grp)
+        # Reason: cross-border if has_local_inventory explicitly "No", else measurement error
+        def _reason(row):
+            if str(row.get("has_local_inventory", "")).strip().lower() == "no":
+                return "Cross-border (no local inventory)"
+            return "Possible measurement error → open case"
+        outliers["reason"] = outliers.apply(_reason, axis=1)
         anomalies.append(outliers)
 
     if not anomalies:
