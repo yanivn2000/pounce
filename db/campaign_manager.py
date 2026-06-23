@@ -145,11 +145,17 @@ def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
     if missing:
         return 0, 0, [f"Missing required columns: {missing}. Available: {list(df_raw.columns[:10])}"]
 
+    # Determine import_date from the report's max end date before inserting
+    _all_ends = []
+    for _dr in df.get("date_range", pd.Series(dtype=str)).dropna():
+        _, _end = _parse_date_range(str(_dr).strip())
+        if _end:
+            _all_ends.append(_end)
+    import_date = max(_all_ends) if _all_ends else datetime.utcnow().strftime("%Y-%m-%d")
+
     conn = get_conn()
     rows_saved = 0
-
     rows_for_detection: list[dict] = []
-    report_end_dates = []
 
     with conn:
         for _, row in df.iterrows():
@@ -162,9 +168,6 @@ def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
             dr_start, dr_end = _parse_date_range(date_range)
             if not dr_start:
                 continue
-
-            if dr_end:
-                report_end_dates.append(dr_end)
 
             country    = str(row.get("campaign_country", "")).strip().upper()
             marketplace = _COUNTRY_TO_MP.get(country, "")
@@ -219,82 +222,71 @@ def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
                     "currency":      currency,
                 })
 
-    # Determine import_date from the report's end date (max date_range_end in CSV)
-    import_date = max(report_end_dates) if report_end_dates else datetime.utcnow().strftime("%Y-%m-%d")
+    # ── Bid change detection across ALL consecutive import pairs ─────────────
+    # Run for every consecutive (older, newer) import pair so that adding a
+    # baseline retroactively triggers detection for already-stored newer imports.
+    all_dates = [r[0] for r in conn.execute(
+        "SELECT DISTINCT import_date FROM campaign_targets ORDER BY import_date"
+    ).fetchall()]
 
-    # ── Bid change detection ──────────────────────────────────────────────────
-    bid_changes_detected = _detect_bid_changes(rows_for_detection, conn, import_date)
+    bid_changes_detected = 0
+    with conn:
+        for i in range(1, len(all_dates)):
+            older, newer = all_dates[i - 1], all_dates[i]
+            bid_changes_detected += _detect_bid_changes_pair(older, newer, conn)
+
     conn.close()
     return rows_saved, bid_changes_detected, warnings
 
 
-def _detect_bid_changes(rows: list[dict], conn, import_date: str) -> int:
+def _detect_bid_changes_pair(older_date: str, newer_date: str, conn) -> int:
     """
-    Compare current import's bids against the most recent PREVIOUS import
-    for the same (campaign_id, target_id). A difference = bid change.
-
-    Returns number of new bid changes inserted.
+    Compare bids between two consecutive imports (older → newer).
+    Insert new rows into keyword_bid_changes where bid differs.
+    Skips pairs already fully processed (uses INSERT OR IGNORE).
+    Returns number of new changes inserted.
     """
-    if not rows:
-        return 0
+    older_bids = {
+        (r["campaign_id"], r["target_id"]): float(r["target_bid"])
+        for r in conn.execute("""
+            SELECT campaign_id, target_id, MAX(target_bid) AS target_bid
+            FROM campaign_targets
+            WHERE import_date = ? AND target_bid IS NOT NULL
+            GROUP BY campaign_id, target_id
+        """, (older_date,)).fetchall()
+    }
 
-    df = pd.DataFrame(rows)
-    inserted = 0
-
-    # Get the most recent previous import date (before today's import)
-    prev_import = conn.execute("""
-        SELECT MAX(import_date) FROM campaign_targets
-        WHERE import_date < ?
-    """, (import_date,)).fetchone()[0]
-
-    if not prev_import:
-        return 0  # first ever import — nothing to compare against
-
-    # Build previous-import bid map: (campaign_id, target_id) → bid
-    prev_rows = conn.execute("""
-        SELECT campaign_id, target_id, MAX(target_bid) AS target_bid
+    newer_rows = conn.execute("""
+        SELECT campaign_id, campaign_name, target_id, marketplace,
+               currency, ad_product, MAX(target_bid) AS target_bid
         FROM campaign_targets
         WHERE import_date = ? AND target_bid IS NOT NULL
         GROUP BY campaign_id, target_id
-    """, (prev_import,)).fetchall()
-    prev_bids = {(r["campaign_id"], r["target_id"]): float(r["target_bid"])
-                 for r in prev_rows}
+    """, (newer_date,)).fetchall()
 
-    # Current import: one bid per (campaign_id, target_id) — use MAX (all rows same bid)
-    current = df.groupby(["campaign_id", "target_id"]).agg(
-        campaign_name=("campaign_name", "first"),
-        marketplace=("marketplace", "first"),
-        currency=("currency", "first"),
-        ad_product=("ad_product", "first"),
-        target_bid=("target_bid", "max"),
-    ).reset_index()
+    inserted = 0
+    for r in newer_rows:
+        cid = r["campaign_id"]
+        tid = r["target_id"]
+        bid_after  = float(r["target_bid"])
+        bid_before = older_bids.get((cid, tid))
 
-    for _, row in current.iterrows():
-        cid = row["campaign_id"]
-        tid = row["target_id"]
-        bid_after = float(row["target_bid"]) if row["target_bid"] else None
-        if bid_after is None:
-            continue
-
-        bid_before = prev_bids.get((cid, tid))
         if bid_before is None:
-            continue  # new keyword — no baseline to compare
-
+            continue  # new keyword since older import
         if abs(bid_after - bid_before) < 0.001:
             continue  # unchanged
 
         try:
-            with conn:
-                conn.execute("""
-                    INSERT OR IGNORE INTO keyword_bid_changes
-                        (change_date, campaign_id, campaign_name, target_id,
-                         marketplace, bid_before, bid_after, currency, ad_product)
-                    VALUES (?,?,?,?,?,?,?,?,?)
-                """, (
-                    import_date, cid, row["campaign_name"], tid,
-                    row["marketplace"], round(bid_before, 3), round(bid_after, 3),
-                    row["currency"], row["ad_product"],
-                ))
+            conn.execute("""
+                INSERT OR IGNORE INTO keyword_bid_changes
+                    (change_date, campaign_id, campaign_name, target_id,
+                     marketplace, bid_before, bid_after, currency, ad_product)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (
+                newer_date, cid, r["campaign_name"], tid,
+                r["marketplace"], round(bid_before, 3), round(bid_after, 3),
+                r["currency"], r["ad_product"],
+            ))
             inserted += 1
         except Exception:
             pass

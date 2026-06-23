@@ -59,7 +59,7 @@ def generate_comments(
     results: list[CampaignResult],
     api_key: str,
     target_roas: float = TARGET_ROAS,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-6",
     progress_callback=None,
 ) -> list[CampaignResult]:
     """
