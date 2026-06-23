@@ -202,6 +202,17 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
 
     Only flags fee > expected (being charged less is fine).
     """
+    # Marketplace → FBA location code mapping for cross-border detection
+    _MP_TO_LOC = {
+        "amazon.ca":     "FBA_CA",
+        "amazon.com":    "FBA_US",
+        "amazon.co.uk":  "FBA_UK",
+        "amazon.de":     "FBA_UK",
+        "amazon.fr":     "FBA_UK",
+        "amazon.es":     "FBA_UK",
+        "amazon.it":     "FBA_UK",
+    }
+
     conn = get_conn()
     df = pd.read_sql_query("""
         SELECT
@@ -220,7 +231,22 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
           AND p.length_cm IS NOT NULL
           AND p.height_cm IS NOT NULL
     """, conn)
+
+    # Build a set of (asin_upper, location) that have stock in latest snapshot
+    inv_df = pd.read_sql_query("""
+        SELECT UPPER(asin) AS asin, location, SUM(units_available + units_inbound) AS total_units
+        FROM inventory_snapshots
+        WHERE snapshot_date = (
+            SELECT MAX(snapshot_date) FROM inventory_snapshots AS s2
+            WHERE s2.asin = inventory_snapshots.asin AND s2.location = inventory_snapshots.location
+        )
+        GROUP BY UPPER(asin), location
+    """, conn)
     conn.close()
+
+    has_stock = set(
+        zip(inv_df["asin"], inv_df["location"])
+    )
 
     if df.empty:
         return pd.DataFrame()
@@ -237,9 +263,12 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
             continue
         outliers["expected_fee"] = expected_fee
         outliers["same_size_asins"] = len(grp)
-        # Reason: cross-border if has_local_inventory explicitly "No", else measurement error
-        def _reason(row):
+        # Reason: cross-border if no local FBA stock (or Amazon CSV says No), else measurement error
+        loc = _MP_TO_LOC.get(mp, "")
+        def _reason(row, loc=loc):
             if str(row.get("has_local_inventory", "")).strip().lower() == "no":
+                return "Cross-border (no local inventory)"
+            if loc and (row["asin"].upper(), loc) not in has_stock:
                 return "Cross-border (no local inventory)"
             return "Possible measurement error → open case"
         outliers["reason"] = outliers.apply(_reason, axis=1)
