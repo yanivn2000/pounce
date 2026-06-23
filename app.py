@@ -5580,19 +5580,25 @@ with tab_ads:
                             lambda r: "⬆️ raised" if r["bid_after"] > r["bid_before"]
                             else "⬇️ lowered", axis=1
                         )
+                        _kw_df["notes"] = _kw_df["notes"].replace({None: "", "None": "", "nan": ""})
+                        _kw_df["currency"] = _kw_df["currency"].replace({None: "", "None": "", "nan": ""})
+                        _kw_display = _kw_df[[
+                            "change_date", "campaign_name", "target_id", "marketplace",
+                            "ad_product", "bid_before", "bid_after", "currency", "direction", "notes",
+                        ]].rename(columns={
+                            "change_date":   "Date",
+                            "campaign_name": "Campaign",
+                            "target_id":     "Target ID",
+                            "marketplace":   "Marketplace",
+                            "ad_product":    "Type",
+                            "bid_before":    "Bid Before",
+                            "bid_after":     "Bid After",
+                            "currency":      "Currency",
+                            "direction":     "Direction",
+                            "notes":         "Notes",
+                        })
                         st.dataframe(
-                            _kw_df.rename(columns={
-                                "change_date":   "Date",
-                                "campaign_name": "Campaign",
-                                "target_id":     "Target ID",
-                                "marketplace":   "Marketplace",
-                                "ad_product":    "Type",
-                                "bid_before":    "Bid Before",
-                                "bid_after":     "Bid After",
-                                "currency":      "Currency",
-                                "direction":     "Direction",
-                                "notes":         "Notes",
-                            }),
+                            _kw_display,
                             use_container_width=True,
                             hide_index=True,
                         )
