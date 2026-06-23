@@ -155,6 +155,11 @@ def import_campaign_manager_csv(file_obj, export_date: str = None) -> tuple[int,
     rows_for_detection: list[dict] = []
 
     with conn:
+        # Re-upload same date → replace existing data cleanly
+        conn.execute("DELETE FROM campaign_targets WHERE import_date = ?", (import_date,))
+        conn.execute("DELETE FROM keyword_bid_changes WHERE change_date = ?", (import_date,))
+
+    with conn:
         for _, row in df.iterrows():
             campaign_id   = _clean_id(row.get("campaign_id", ""))
             campaign_name = str(row.get("campaign_name", "")).strip()
