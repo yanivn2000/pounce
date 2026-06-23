@@ -285,7 +285,57 @@ def init_db():
     # Aged inventory surcharge
     from db.aged_inventory import init_aged_inventory_table
     init_aged_inventory_table(conn)
+    _migrate_campaign_manager(conn)
     conn.close()
+
+
+def _migrate_campaign_manager(conn: sqlite3.Connection):
+    """Create campaign_targets and keyword_bid_changes tables."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS campaign_targets (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            import_date       TEXT NOT NULL,
+            campaign_id       TEXT NOT NULL,
+            campaign_name     TEXT NOT NULL,
+            marketplace       TEXT NOT NULL,
+            ad_product        TEXT,
+            campaign_status   TEXT,
+            campaign_budget   REAL,
+            bid_strategy      TEXT,
+            target_id         TEXT NOT NULL,
+            target_bid        REAL,
+            date_range_start  TEXT,
+            date_range_end    TEXT,
+            impressions       INTEGER DEFAULT 0,
+            clicks            INTEGER DEFAULT 0,
+            spend             REAL DEFAULT 0,
+            purchases         INTEGER DEFAULT 0,
+            sales             REAL DEFAULT 0,
+            roas              REAL,
+            asin              TEXT,
+            currency          TEXT,
+            UNIQUE(campaign_id, target_id, date_range_start, date_range_end, import_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_camp_targets_camp
+            ON campaign_targets(campaign_name, marketplace, import_date);
+
+        CREATE TABLE IF NOT EXISTS keyword_bid_changes (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            change_date   TEXT NOT NULL,
+            campaign_id   TEXT,
+            campaign_name TEXT NOT NULL,
+            target_id     TEXT NOT NULL,
+            marketplace   TEXT NOT NULL,
+            bid_before    REAL,
+            bid_after     REAL NOT NULL,
+            currency      TEXT,
+            ad_product    TEXT,
+            notes         TEXT,
+            UNIQUE(campaign_id, target_id, change_date, bid_after)
+        );
+        CREATE INDEX IF NOT EXISTS idx_kw_bid_changes
+            ON keyword_bid_changes(campaign_name, marketplace, change_date);
+    """)
 
 
 def _migrate_bid_changes(conn: sqlite3.Connection):

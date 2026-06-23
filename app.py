@@ -45,6 +45,10 @@ from db.fba_fees import (
     get_pick_pack_anomalies,
     get_fx_rates, get_fx_rates_df, save_fx_rate,
 )
+from db.campaign_manager import (
+    import_campaign_manager_csv, get_campaign_overview,
+    get_keyword_bid_changes, get_campaign_manager_last_import,
+)
 from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
     get_change_log, get_marketplaces, get_order_date_range, count_orders,
@@ -92,7 +96,7 @@ if "session_id" not in st.session_state:
 
 # File-uploader key counters — incrementing resets the widget and breaks
 # the import→rerun→re-import infinite loop.
-for _k in ("items_import_key", "catalog_import_key", "fba_fees_import_key"):
+for _k in ("items_import_key", "catalog_import_key", "fba_fees_import_key", "cm_import_key"):
     if _k not in st.session_state:
         st.session_state[_k] = 0
 for _k in ("items_import_result", "catalog_import_result", "fba_fees_import_result", "catalog_delete_msg"):
@@ -4042,8 +4046,8 @@ with tab_ads:
     _placement_tab, = st.tabs(["📍 Placement"])
 
     with _placement_tab:
-        _recs_view, _scoreboard_view, _history_view, _alerts_view, _analysis_view = st.tabs(
-            ["🔧 Workbench", "💵 Scoreboard", "📜 History", "🔔 Alerts", "📤 Upload Reports"]
+        _recs_view, _scoreboard_view, _history_view, _alerts_view, _analysis_view, _campaigns_view = st.tabs(
+            ["🔧 Workbench", "💵 Scoreboard", "📜 History", "🔔 Alerts", "📤 Upload Reports", "📋 Campaigns"]
         )
 
         with _scoreboard_view:
@@ -5408,6 +5412,127 @@ with tab_ads:
                         type="primary",
                         use_container_width=True,
                     )
+
+        # ── Campaign Manager CSV upload ───────────────────────────────────────
+        with _analysis_view:
+            st.divider()
+            st.markdown("### 📥 Campaign Manager CSV")
+            st.markdown(
+                f"<p style='color:{T['text_secondary']};font-size:0.9rem;'>"
+                "Download from Amazon Ads → Campaign Manager → <b>Export all</b>. "
+                "Set date range to <b>Last 90 days</b>. "
+                "Pounce will auto-detect keyword bid changes from date-range splits.</p>",
+                unsafe_allow_html=True,
+            )
+            _last_cm = get_campaign_manager_last_import()
+            if _last_cm:
+                st.caption(f"Last import: {_last_cm}")
+
+            _cm_file = st.file_uploader(
+                "Campaign Manager CSV", type=["csv"],
+                key=f"cm_csv_{st.session_state.get('cm_import_key', 0)}",
+            )
+            if _cm_file:
+                if st.button("📥 Import Campaign Manager CSV", type="primary"):
+                    with st.spinner("Importing…"):
+                        _cm_rows, _cm_changes, _cm_warns = import_campaign_manager_csv(_cm_file)
+                    st.session_state["cm_import_key"] = st.session_state.get("cm_import_key", 0) + 1
+                    if _cm_warns:
+                        for w in _cm_warns[:3]:
+                            st.warning(w)
+                    st.success(
+                        f"✅ {_cm_rows:,} rows imported · "
+                        f"{_cm_changes} keyword bid change(s) detected"
+                    )
+                    st.rerun()
+
+        # ── Campaigns overview tab ────────────────────────────────────────────
+        with _campaigns_view:
+            st.markdown("### 📋 Campaigns")
+            _last_cm2 = get_campaign_manager_last_import()
+            if not _last_cm2:
+                st.info("No Campaign Manager CSV imported yet. Upload one in the **📤 Upload Reports** tab.")
+            else:
+                st.caption(f"Data from import: {_last_cm2}")
+
+                # marketplace filter
+                _camp_mp_options = ["All"]
+                try:
+                    from db.database import get_conn as _gcm
+                    _conn_cm = _gcm()
+                    _camp_mp_options += [
+                        r[0] for r in _conn_cm.execute(
+                            "SELECT DISTINCT marketplace FROM campaign_targets ORDER BY marketplace"
+                        ).fetchall()
+                    ]
+                    _conn_cm.close()
+                except Exception:
+                    pass
+
+                _camp_mp_sel = st.selectbox("Marketplace", _camp_mp_options, key="camp_mp_filter")
+                _camp_df = get_campaign_overview(
+                    None if _camp_mp_sel == "All" else _camp_mp_sel
+                )
+
+                if _camp_df.empty:
+                    st.info("No campaign data for this marketplace.")
+                else:
+                    # Status badge
+                    _camp_df["campaign_status"] = _camp_df["campaign_status"].apply(
+                        lambda s: "🟢 " + s if str(s).upper() == "ENABLED"
+                        else ("⏸️ " + s if str(s).upper() == "PAUSED" else str(s))
+                    )
+                    st.dataframe(
+                        _camp_df.rename(columns={
+                            "campaign_name":    "Campaign",
+                            "marketplace":      "Marketplace",
+                            "ad_product":       "Type",
+                            "campaign_status":  "Status",
+                            "bid_strategy":     "Bid Strategy",
+                            "campaign_budget":  "Daily Budget",
+                            "currency":         "Currency",
+                            "total_spend":      "Spend",
+                            "total_sales":      "Sales",
+                            "total_purchases":  "Orders",
+                            "roas":             "ROAS",
+                            "import_date":      "Imported",
+                        }).drop(columns=["import_date"], errors="ignore"),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    # Keyword bid changes
+                    st.divider()
+                    st.markdown("#### 🔑 Auto-detected Keyword Bid Changes")
+                    _kw_df = get_keyword_bid_changes(
+                        None if _camp_mp_sel == "All" else _camp_mp_sel
+                    )
+                    if _kw_df.empty:
+                        st.info(
+                            "No keyword bid changes detected yet. "
+                            "Upload a **Last 90 days** Campaign Manager CSV to see changes."
+                        )
+                    else:
+                        _kw_df["direction"] = _kw_df.apply(
+                            lambda r: "⬆️ raised" if r["bid_after"] > r["bid_before"]
+                            else "⬇️ lowered", axis=1
+                        )
+                        st.dataframe(
+                            _kw_df.rename(columns={
+                                "change_date":   "Date",
+                                "campaign_name": "Campaign",
+                                "target_id":     "Target ID",
+                                "marketplace":   "Marketplace",
+                                "ad_product":    "Type",
+                                "bid_before":    "Bid Before",
+                                "bid_after":     "Bid After",
+                                "currency":      "Currency",
+                                "direction":     "Direction",
+                                "notes":         "Notes",
+                            }),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — AMAZON TRANSACTIONS
