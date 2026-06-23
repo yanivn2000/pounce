@@ -187,8 +187,9 @@ def import_campaign_manager_csv(file_obj, export_date: str = None) -> tuple[int,
                 return "" if s.lower() in ("nan", "none") else s
 
             bid_strategy  = _str(row.get("bid_strategy"))
-            _cur = row.get("currency") or row.get("budget_currency")
-            currency      = _str(_cur)
+            # NaN is truthy in Python so `or` doesn't work; check explicitly
+            _cur = _str(row.get("currency")) or _str(row.get("budget_currency"))
+            currency      = _cur
             ad_product    = _str(row.get("ad_product"))
             asin          = _str(row.get("asin"))
             impressions   = _int(row.get("impressions"))
