@@ -54,6 +54,7 @@ _COL_MAP = {
     "campaign budget amount":       "campaign_budget",
     "campaign bid strategy":        "bid_strategy",
     "campaign currency code":       "currency",
+    "budget currency":              "budget_currency",
     "campaign country":             "campaign_country",
     "ad product":                   "ad_product",
     "target id":                    "target_id",
@@ -181,10 +182,15 @@ def import_campaign_manager_csv(file_obj, export_date: str = None) -> tuple[int,
             target_bid    = _float(row.get("target_bid"))
             campaign_status = str(row.get("campaign_status", "")).strip()
             campaign_budget = _float(row.get("campaign_budget"))
-            bid_strategy  = str(row.get("bid_strategy", "")).strip()
-            currency      = str(row.get("currency", "")).strip()
-            ad_product    = str(row.get("ad_product", "")).strip()
-            asin          = str(row.get("asin", "")).strip()
+            def _str(v):
+                s = str(v).strip() if v is not None else ""
+                return "" if s.lower() in ("nan", "none") else s
+
+            bid_strategy  = _str(row.get("bid_strategy"))
+            _cur = row.get("currency") or row.get("budget_currency")
+            currency      = _str(_cur)
+            ad_product    = _str(row.get("ad_product"))
+            asin          = _str(row.get("asin"))
             impressions   = _int(row.get("impressions"))
             clicks        = _int(row.get("clicks"))
             spend         = _float(row.get("spend")) or 0.0
