@@ -1723,6 +1723,11 @@ with _fba_tab:
                     "**Possible measurement error** = local stock exists but fee is still high — open an Amazon case to request remeasurement."
                 )
                 _anom_display = _fba_anomalies.copy()
+                if "reason" in _anom_display.columns:
+                    _anom_display["reason"] = _anom_display["reason"].apply(
+                        lambda r: r if "NARF" in r or "Cross-border" in r
+                        else f"🔴 {r}"
+                    )
                 _anom_display.insert(0, "Image",
                     _anom_display["asin"].str.upper().map(_fba_img_map).fillna(""))
                 _anom_display["dimensions"] = (
