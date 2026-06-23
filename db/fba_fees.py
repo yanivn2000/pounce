@@ -248,6 +248,23 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
         zip(inv_df["asin"], inv_df["location"])
     )
 
+    # Build CA→US mirrored-inventory set: ASINs where FBA_CA ≈ FBA_US (NARF/Remote Fulfillment)
+    # When enrolled in Remote Fulfillment with FBA, Amazon mirrors the US count into the CA
+    # inventory report — same physical stock, but fulfills cross-border. The tell is that
+    # CA and US unit counts are nearly identical (within 2% or 5 units, whichever is larger).
+    ca_units = inv_df[inv_df["location"] == "FBA_CA"].set_index("asin")["total_units"]
+    us_units = inv_df[inv_df["location"] == "FBA_US"].set_index("asin")["total_units"]
+    shared_asins = ca_units.index.intersection(us_units.index)
+    narf_asins = set()
+    for asin in shared_asins:
+        ca, us = ca_units[asin], us_units[asin]
+        if ca == 0 and us == 0:
+            continue
+        diff = abs(ca - us)
+        threshold = max(5, 0.02 * max(ca, us))
+        if diff <= threshold:
+            narf_asins.add(asin)
+
     if df.empty:
         return pd.DataFrame()
 
@@ -266,10 +283,13 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
         # Reason: cross-border if no local FBA stock (or Amazon CSV says No), else measurement error
         loc = _MP_TO_LOC.get(mp, "")
         def _reason(row, loc=loc):
+            asin_upper = row["asin"].upper()
             if str(row.get("has_local_inventory", "")).strip().lower() == "no":
-                return "Cross-border (no local inventory)"
-            if loc and (row["asin"].upper(), loc) not in has_stock:
-                return "Cross-border (no local inventory)"
+                return "Cross-border / Remote Fulfillment (NARF)"
+            if loc and (asin_upper, loc) not in has_stock:
+                return "Cross-border / Remote Fulfillment (NARF)"
+            if asin_upper in narf_asins:
+                return "Cross-border / Remote Fulfillment (NARF)"
             return "Possible measurement error → open case"
         outliers["reason"] = outliers.apply(_reason, axis=1)
         anomalies.append(outliers)

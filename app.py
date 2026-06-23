@@ -1718,8 +1718,9 @@ with _fba_tab:
                 st.caption(
                     "These ASINs are charged **more** than other products of the identical size "
                     "(same W×L×H from your product catalog, same marketplace).  \n"
-                    "**Cross-border** = no local inventory in that marketplace — send stock there or accept the higher fee.  \n"
-                    "**Possible measurement error** = open an Amazon case to request remeasurement."
+                    "**Cross-border / Remote Fulfillment (NARF)** = CA and US inventory counts are nearly identical — "
+                    "stock is physically in the US and ships cross-border. Send stock to local CA FBA to get the lower fee.  \n"
+                    "**Possible measurement error** = local stock exists but fee is still high — open an Amazon case to request remeasurement."
                 )
                 _anom_display = _fba_anomalies.copy()
                 _anom_display.insert(0, "Image",
