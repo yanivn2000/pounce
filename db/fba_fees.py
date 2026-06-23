@@ -245,7 +245,8 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
     conn.close()
 
     has_stock = set(
-        zip(inv_df["asin"], inv_df["location"])
+        zip(inv_df[inv_df["total_units"] > 0]["asin"],
+            inv_df[inv_df["total_units"] > 0]["location"])
     )
 
     # Build CA→US mirrored-inventory set: ASINs where FBA_CA ≈ FBA_US (NARF/Remote Fulfillment)
@@ -259,6 +260,7 @@ def get_pick_pack_anomalies() -> pd.DataFrame:
     for asin in shared_asins:
         ca, us = ca_units[asin], us_units[asin]
         if ca == 0 and us == 0:
+            narf_asins.add(asin)  # no stock in either — was NARF, now depleted
             continue
         diff = abs(ca - us)
         threshold = max(5, 0.02 * max(ca, us))
