@@ -4240,7 +4240,7 @@ with tab_ads:
                 )
                 _kw_attr = get_keyword_attribution(_sb_mkt)
                 if not _kw_attr:
-                    st.info("No keyword bid changes detected yet. Upload a Last 90 days Campaign Manager CSV in the Upload Reports tab.")
+                    st.info("No keyword bid changes detected yet. Upload two consecutive 90-day Campaign Manager CSVs in the Upload Reports tab.")
                 else:
                     _kw_summary = summarize_keyword_attribution(_kw_attr)
                     _kws1, _kws2, _kws3, _kws4, _kws5 = st.columns(5)
@@ -5473,12 +5473,13 @@ with tab_ads:
                 f"<p style='color:{T['text_secondary']};font-size:0.9rem;'>"
                 "Download from Amazon Ads → Campaign Manager → <b>Export all</b>. "
                 "Set date range to <b>Last 90 days</b>. "
-                "Pounce will auto-detect keyword bid changes from date-range splits.</p>",
+                "Upload two consecutive 90-day exports (e.g. ending Jun 14 then Jun 22). "
+                "Pounce will compare and auto-detect keyword bid changes.</p>",
                 unsafe_allow_html=True,
             )
             _last_cm = get_campaign_manager_last_import()
             if _last_cm:
-                st.caption(f"Last import: {_last_cm}")
+                st.caption(f"Latest report period: {_last_cm}")
 
             _cm_file = st.file_uploader(
                 "Campaign Manager CSV", type=["csv"],
@@ -5505,7 +5506,7 @@ with tab_ads:
             if not _last_cm2:
                 st.info("No Campaign Manager CSV imported yet. Upload one in the **📤 Upload Reports** tab.")
             else:
-                st.caption(f"Data from import: {_last_cm2}")
+                st.caption(f"Data from report period ending: {_last_cm2}")
 
                 # marketplace filter
                 _camp_mp_options = ["All"]
@@ -5562,7 +5563,7 @@ with tab_ads:
                     if _kw_df.empty:
                         st.info(
                             "No keyword bid changes detected yet. "
-                            "Upload a **Last 90 days** Campaign Manager CSV to see changes."
+                            "Upload two consecutive 90-day Campaign Manager CSVs (e.g. ending Jun 14 then Jun 22) to see changes."
                         )
                     else:
                         _kw_df["direction"] = _kw_df.apply(

@@ -145,11 +145,11 @@ def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
     if missing:
         return 0, 0, [f"Missing required columns: {missing}. Available: {list(df_raw.columns[:10])}"]
 
-    import_date = datetime.utcnow().strftime("%Y-%m-%d")
     conn = get_conn()
     rows_saved = 0
 
     rows_for_detection: list[dict] = []
+    report_end_dates = []
 
     with conn:
         for _, row in df.iterrows():
@@ -162,6 +162,9 @@ def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
             dr_start, dr_end = _parse_date_range(date_range)
             if not dr_start:
                 continue
+
+            if dr_end:
+                report_end_dates.append(dr_end)
 
             country    = str(row.get("campaign_country", "")).strip().upper()
             marketplace = _COUNTRY_TO_MP.get(country, "")
@@ -215,6 +218,9 @@ def import_campaign_manager_csv(file_obj) -> tuple[int, int, list[str]]:
                     "date_start":    dr_start,
                     "currency":      currency,
                 })
+
+    # Determine import_date from the report's end date (max date_range_end in CSV)
+    import_date = max(report_end_dates) if report_end_dates else datetime.utcnow().strftime("%Y-%m-%d")
 
     # ── Bid change detection ──────────────────────────────────────────────────
     bid_changes_detected = _detect_bid_changes(rows_for_detection, conn, import_date)
