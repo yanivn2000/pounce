@@ -408,17 +408,17 @@ def get_keyword_attribution(marketplace: str = None,
         mkt   = ch["marketplace"]
         cdate = str(ch["change_date"])[:10]
 
-        # P1: aggregate performance before change
+        # P1: most recent snapshot taken BEFORE the change
         p1 = conn.execute("""
             SELECT SUM(spend) AS spend, SUM(sales) AS sales,
                    SUM(purchases) AS purchases, SUM(impressions) AS impressions,
                    SUM(clicks) AS clicks, MAX(date_range_end) AS last_date
             FROM campaign_targets
             WHERE campaign_id=? AND target_id=? AND marketplace=?
-              AND date_range_end < ?
+              AND import_date < ?
         """, (cid, tid, mkt, cdate)).fetchone()
 
-        # P2: aggregate performance after change
+        # P2: snapshots taken ON OR AFTER the change (new bids are active)
         p2 = conn.execute("""
             SELECT SUM(spend) AS spend, SUM(sales) AS sales,
                    SUM(purchases) AS purchases, SUM(impressions) AS impressions,
@@ -427,7 +427,7 @@ def get_keyword_attribution(marketplace: str = None,
                    MAX(date_range_end)   AS last_date
             FROM campaign_targets
             WHERE campaign_id=? AND target_id=? AND marketplace=?
-              AND date_range_start >= ?
+              AND import_date >= ?
         """, (cid, tid, mkt, cdate)).fetchone()
 
         # ROAS
