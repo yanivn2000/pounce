@@ -59,6 +59,10 @@ _COL_MAP = {
     "ad product":                   "ad_product",
     "target id":                    "target_id",
     "target bid":                   "target_bid",
+    "targeting":                    "keyword_text",
+    "targeting match type":         "match_type",
+    "placement classification":     "placement",
+    "advertised product name":      "product_name",
     "advertised product id":        "asin",
     "impressions":                  "impressions",
     "clicks":                       "clicks",
@@ -187,11 +191,14 @@ def import_campaign_manager_csv(file_obj, export_date: str = None) -> tuple[int,
                 return "" if s.lower() in ("nan", "none") else s
 
             bid_strategy  = _str(row.get("bid_strategy"))
-            # NaN is truthy in Python so `or` doesn't work; check explicitly
             _cur = _str(row.get("currency")) or _str(row.get("budget_currency"))
             currency      = _cur
             ad_product    = _str(row.get("ad_product"))
             asin          = _str(row.get("asin"))
+            keyword_text  = _str(row.get("keyword_text"))
+            match_type    = _str(row.get("match_type"))
+            placement     = _str(row.get("placement"))
+            product_name  = _str(row.get("product_name"))[:120] if row.get("product_name") else ""
             impressions   = _int(row.get("impressions"))
             clicks        = _int(row.get("clicks"))
             spend         = _float(row.get("spend")) or 0.0
@@ -204,14 +211,16 @@ def import_campaign_manager_csv(file_obj, export_date: str = None) -> tuple[int,
                     INSERT OR IGNORE INTO campaign_targets
                         (import_date, campaign_id, campaign_name, marketplace,
                          ad_product, campaign_status, campaign_budget, bid_strategy,
-                         target_id, target_bid, date_range_start, date_range_end,
+                         target_id, target_bid, keyword_text, match_type, placement,
+                         product_name, date_range_start, date_range_end,
                          impressions, clicks, spend, purchases, sales, roas,
                          asin, currency)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     import_date, campaign_id, campaign_name, marketplace,
                     ad_product, campaign_status, campaign_budget, bid_strategy,
-                    target_id, target_bid, dr_start, dr_end,
+                    target_id, target_bid, keyword_text, match_type, placement,
+                    product_name, dr_start, dr_end,
                     impressions, clicks, spend, purchases, sales, roas,
                     asin, currency,
                 ))
@@ -267,7 +276,8 @@ def _detect_bid_changes_pair(older_date: str, newer_date: str, conn) -> int:
 
     newer_rows = conn.execute("""
         SELECT campaign_id, campaign_name, target_id, marketplace,
-               currency, ad_product, MAX(target_bid) AS target_bid
+               currency, ad_product, MAX(target_bid) AS target_bid,
+               MAX(keyword_text) AS keyword_text, MAX(match_type) AS match_type
         FROM campaign_targets
         WHERE import_date = ? AND target_bid IS NOT NULL
         GROUP BY campaign_id, target_id
@@ -289,10 +299,12 @@ def _detect_bid_changes_pair(older_date: str, newer_date: str, conn) -> int:
             conn.execute("""
                 INSERT OR IGNORE INTO keyword_bid_changes
                     (change_date, campaign_id, campaign_name, target_id,
+                     keyword_text, match_type,
                      marketplace, bid_before, bid_after, currency, ad_product)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 newer_date, cid, r["campaign_name"], tid,
+                r["keyword_text"] or None, r["match_type"] or None,
                 r["marketplace"], round(bid_before, 3), round(bid_after, 3),
                 r["currency"], r["ad_product"],
             ))
@@ -505,6 +517,46 @@ def summarize_keyword_attribution(rows: list[dict]) -> dict:
         "no_baseline": sum(1 for r in rows if r["verdict"] == "no_baseline"),
         "win_rate":    round(100 * len(wins) / decided, 0) if decided else None,
     }
+
+
+def get_wasted_spend(marketplace: str = None, min_spend: float = 3.0) -> pd.DataFrame:
+    """
+    Keywords with spend >= min_spend and 0 purchases in the latest import.
+    These are prime negative keyword candidates.
+    """
+    conn = get_conn()
+    latest = conn.execute("SELECT MAX(import_date) FROM campaign_targets").fetchone()[0]
+    if not latest:
+        conn.close()
+        return pd.DataFrame()
+
+    mp_filter = "AND marketplace = ?" if marketplace else ""
+    params = [latest, min_spend]
+    if marketplace:
+        params.insert(1, marketplace)
+
+    rows = conn.execute(f"""
+        SELECT campaign_name, keyword_text, match_type, marketplace,
+               ad_product, asin, product_name,
+               SUM(spend)     AS spend,
+               SUM(clicks)    AS clicks,
+               SUM(impressions) AS impressions,
+               SUM(purchases) AS purchases,
+               SUM(sales)     AS sales
+        FROM campaign_targets
+        WHERE import_date = ? {mp_filter}
+          AND spend >= ?
+        GROUP BY campaign_id, target_id
+        HAVING SUM(purchases) = 0
+        ORDER BY spend DESC
+    """, params).fetchall()
+    conn.close()
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame([dict(r) for r in rows])
+    df["spend"] = df["spend"].round(2)
+    return df
 
 
 def get_campaign_manager_last_import() -> str | None:

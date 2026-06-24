@@ -49,6 +49,7 @@ from db.campaign_manager import (
     import_campaign_manager_csv, get_campaign_overview,
     get_keyword_bid_changes, get_campaign_manager_last_import,
     get_keyword_attribution, summarize_keyword_attribution,
+    get_wasted_spend,
 )
 from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
@@ -5112,6 +5113,38 @@ with tab_ads:
                             )
                             st.caption("💡 Review placement bid or consider pausing this placement.")
 
+        # ── Wasted Spend alert (Campaign Manager data) ───────────────────────
+        with _alerts_view:
+            _ws_mp = _sb_mkt if "_sb_mkt" in dir() else None
+            _ws_df = get_wasted_spend(
+                marketplace=None if not _ws_mp or _ws_mp == "All" else _ws_mp,
+                min_spend=3.0,
+            )
+            if not _ws_df.empty:
+                st.divider()
+                st.markdown("### 🔥 Wasted Spend — Zero-Purchase Keywords")
+                st.markdown(
+                    f"<p style='color:{T['text_secondary']};font-size:0.9rem;'>"
+                    f"Keywords/targets with ≥$3 spend and 0 purchases in the latest Campaign Manager snapshot. "
+                    f"Prime candidates for negative keywords or bid reduction.</p>",
+                    unsafe_allow_html=True,
+                )
+                st.metric("Total wasted spend", f"${_ws_df['spend'].sum():,.2f}",
+                          help="Across all zero-purchase keywords in latest snapshot")
+                _ws_display = _ws_df[[
+                    "campaign_name", "keyword_text", "match_type",
+                    "marketplace", "spend", "clicks", "impressions",
+                ]].rename(columns={
+                    "campaign_name": "Campaign",
+                    "keyword_text":  "Keyword / Target",
+                    "match_type":    "Match Type",
+                    "marketplace":   "Marketplace",
+                    "spend":         "Spend",
+                    "clicks":        "Clicks",
+                    "impressions":   "Impressions",
+                })
+                st.dataframe(_ws_display, use_container_width=True, hide_index=True)
+
         with _analysis_view:
             # ── ANALYSIS content ──────────────────────────────────────────────
             st.markdown("# 📊 Amazon Ads Placement Analyzer")
@@ -5580,15 +5613,25 @@ with tab_ads:
                             lambda r: "⬆️ raised" if r["bid_after"] > r["bid_before"]
                             else "⬇️ lowered", axis=1
                         )
-                        _kw_df["notes"] = _kw_df["notes"].replace({None: "", "None": "", "nan": ""})
-                        _kw_df["currency"] = _kw_df["currency"].replace({None: "", "None": "", "nan": ""})
-                        _kw_display = _kw_df[[
-                            "change_date", "campaign_name", "target_id", "marketplace",
+                        for _col in ("notes", "currency", "keyword_text", "match_type"):
+                            if _col in _kw_df.columns:
+                                _kw_df[_col] = _kw_df[_col].replace({None: "", "None": "", "nan": ""})
+                        # Show keyword text when available, fall back to target_id
+                        _kw_df["keyword"] = _kw_df.apply(
+                            lambda r: (
+                                f"{r['keyword_text']} ({r['match_type']})"
+                                if r.get("keyword_text") and r.get("match_type")
+                                else r.get("keyword_text") or r.get("target_id", "")
+                            ), axis=1
+                        )
+                        _kw_display_cols = [
+                            "change_date", "campaign_name", "keyword", "marketplace",
                             "ad_product", "bid_before", "bid_after", "currency", "direction", "notes",
-                        ]].rename(columns={
+                        ]
+                        _kw_display = _kw_df[_kw_display_cols].rename(columns={
                             "change_date":   "Date",
                             "campaign_name": "Campaign",
-                            "target_id":     "Target ID",
+                            "keyword":       "Keyword / Target",
                             "marketplace":   "Marketplace",
                             "ad_product":    "Type",
                             "bid_before":    "Bid Before",

@@ -286,7 +286,29 @@ def init_db():
     from db.aged_inventory import init_aged_inventory_table
     init_aged_inventory_table(conn)
     _migrate_campaign_manager(conn)
+    _migrate_campaign_targets_v2(conn)
     conn.close()
+
+
+def _migrate_campaign_targets_v2(conn: sqlite3.Connection):
+    """Add keyword_text, match_type, placement, product_name columns (idempotent)."""
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(campaign_targets)").fetchall()}
+    for col, defn in [
+        ("keyword_text", "TEXT"),
+        ("match_type",   "TEXT"),
+        ("placement",    "TEXT"),
+        ("product_name", "TEXT"),
+    ]:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE campaign_targets ADD COLUMN {col} {defn}")
+    existing_kw = {r[1] for r in conn.execute("PRAGMA table_info(keyword_bid_changes)").fetchall()}
+    for col, defn in [
+        ("keyword_text", "TEXT"),
+        ("match_type",   "TEXT"),
+    ]:
+        if col not in existing_kw:
+            conn.execute(f"ALTER TABLE keyword_bid_changes ADD COLUMN {col} {defn}")
+    conn.commit()
 
 
 def _migrate_campaign_manager(conn: sqlite3.Connection):
@@ -304,6 +326,10 @@ def _migrate_campaign_manager(conn: sqlite3.Connection):
             bid_strategy      TEXT,
             target_id         TEXT NOT NULL,
             target_bid        REAL,
+            keyword_text      TEXT,
+            match_type        TEXT,
+            placement         TEXT,
+            product_name      TEXT,
             date_range_start  TEXT,
             date_range_end    TEXT,
             impressions       INTEGER DEFAULT 0,
@@ -325,6 +351,8 @@ def _migrate_campaign_manager(conn: sqlite3.Connection):
             campaign_id   TEXT,
             campaign_name TEXT NOT NULL,
             target_id     TEXT NOT NULL,
+            keyword_text  TEXT,
+            match_type    TEXT,
             marketplace   TEXT NOT NULL,
             bid_before    REAL,
             bid_after     REAL NOT NULL,
