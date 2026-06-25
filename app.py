@@ -6503,7 +6503,8 @@ with tab_cashflow:
         )
 
         # ── Single opening balance = all accounts converted to USD ────────
-        # Use the same ILS rate as the balance summary (fx_rates → monthly_fx_rates)
+        # Use the same ILS rate chain as the Accounts & Balances summary so
+        # opening balance always matches the grand total shown there.
         def _to_usd_display(amount, currency, rate):
             if currency == "USD":  return amount
             if currency == "ILS":  return amount / rate if rate else 0.0
@@ -6517,7 +6518,7 @@ with tab_cashflow:
             _ob_rate_row = _cf_conn.execute(
                 "SELECT rate FROM monthly_fx_rates WHERE currency='ILS' ORDER BY year DESC, month DESC LIMIT 1"
             ).fetchone()
-        _ob_ils_rate = float(_ob_rate_row[0]) if _ob_rate_row else _cf_usd_nis
+        _ob_ils_rate = float(_ob_rate_row[0]) if _ob_rate_row else 3.7
 
         _opening_usd = sum(
             _to_usd_display(a[4], a[3], _ob_ils_rate) for a in _cf_accounts
