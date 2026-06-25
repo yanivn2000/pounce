@@ -6734,7 +6734,7 @@ with tab_cashflow:
         # fallback: get ILS rate from monthly_fx_rates or hardcode ~3.7
         if not _ils_usd_rate:
             _ils_usd_rate = cf_conn.execute(
-                "SELECT rate FROM monthly_fx_rates WHERE currency='ILS' ORDER BY year_month DESC LIMIT 1"
+                "SELECT rate FROM monthly_fx_rates WHERE currency='ILS' ORDER BY year DESC, month DESC LIMIT 1"
             ).fetchone()
         _ils_rate = float(_ils_usd_rate[0]) if _ils_usd_rate else 3.7
         _sum_ils_in_usd = _sum_ils / _ils_rate
