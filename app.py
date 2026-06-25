@@ -6724,6 +6724,33 @@ with tab_cashflow:
             if alimit and abal < -alimit:
                 st.warning(f"⚠️ {aname} is below credit limit! {sym}{abal:,.0f} (limit {sym}{alimit:,.0f})")
 
+        # ── Balance summary ───────────────────────────────────────────────────
+        _sum_usd = sum(float(a[4]) for a in _cf_accs if a[3] == "USD")
+        _sum_ils = sum(float(a[4]) for a in _cf_accs if a[3] == "ILS")
+        _ils_usd_rate = cf_conn.execute(
+            "SELECT rate FROM fx_rates WHERE marketplace='amazon.co.il' "
+            "UNION SELECT rate FROM fx_rates WHERE marketplace LIKE '%il%' LIMIT 1"
+        ).fetchone()
+        # fallback: get ILS rate from monthly_fx_rates or hardcode ~3.7
+        if not _ils_usd_rate:
+            _ils_usd_rate = cf_conn.execute(
+                "SELECT rate FROM monthly_fx_rates WHERE currency='ILS' ORDER BY year_month DESC LIMIT 1"
+            ).fetchone()
+        _ils_rate = float(_ils_usd_rate[0]) if _ils_usd_rate else 3.7
+        _sum_ils_in_usd = _sum_ils / _ils_rate
+        _grand_total_usd = _sum_usd + _sum_ils_in_usd
+        _grand_total_ils = _sum_ils + (_sum_usd * _ils_rate)
+
+        st.divider()
+        st.markdown("#### 💰 Total Balance")
+        _sb1, _sb2, _sb3, _sb4 = st.columns(4)
+        _sb1.metric("USD accounts", f"${_sum_usd:,.0f}")
+        _sb2.metric("ILS accounts", f"₪{_sum_ils:,.0f}")
+        _sb3.metric("Grand total (USD)", f"${_grand_total_usd:,.0f}",
+                    help=f"ILS converted at ₪{_ils_rate:.2f}/$")
+        _sb4.metric("Grand total (NIS)", f"₪{_grand_total_ils:,.0f}",
+                    help=f"USD converted at ₪{_ils_rate:.2f}/$")
+
         st.divider()
         st.markdown("### Add Account")
         with st.form("cf_add_account"):
