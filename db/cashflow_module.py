@@ -77,6 +77,7 @@ def init_cashflow_tables(conn):
             credit_limit    REAL    DEFAULT 0,
             sort_order      INTEGER DEFAULT 99,
             updated_at      TEXT    DEFAULT CURRENT_TIMESTAMP,
+            balance_date    TEXT,
             is_active       INTEGER DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS cashflow_items (
@@ -110,11 +111,13 @@ def init_cashflow_tables(conn):
             UNIQUE(item_id, ym)
         );
     """)
-    # Migration: add company column to cashflow_items if it was created without it
+    # Migrations
     cols = [r[1] for r in conn.execute("PRAGMA table_info(cashflow_items)").fetchall()]
     if "company" not in cols:
         conn.execute("ALTER TABLE cashflow_items ADD COLUMN company TEXT NOT NULL DEFAULT 'LLC'")
-    # Migration: drop old account_id column isn't possible in SQLite, just ignore it
+    acc_cols = [r[1] for r in conn.execute("PRAGMA table_info(cashflow_accounts)").fetchall()]
+    if "balance_date" not in acc_cols:
+        conn.execute("ALTER TABLE cashflow_accounts ADD COLUMN balance_date TEXT")
     conn.commit()
     # Seed default accounts only if table is empty
     if not conn.execute("SELECT 1 FROM cashflow_accounts LIMIT 1").fetchone():
@@ -129,20 +132,22 @@ def init_cashflow_tables(conn):
 # ── CRUD helpers ──────────────────────────────────────────────────────────────
 def get_accounts(conn):
     return conn.execute(
-        "SELECT id,name,company,currency,current_balance,credit_limit,sort_order,updated_at "
+        "SELECT id,name,company,currency,current_balance,credit_limit,sort_order,updated_at,balance_date "
         "FROM cashflow_accounts WHERE is_active=1 ORDER BY sort_order,id"
     ).fetchall()
 
 
-def update_account_balance(conn, account_id: int, balance: float):
+def update_account_balance(conn, account_id: int, balance: float, balance_date: str = None):
     from datetime import date
+    today = date.today().isoformat()
+    bdate = balance_date or today
     conn.execute(
-        "UPDATE cashflow_accounts SET current_balance=?, updated_at=? WHERE id=?",
-        [balance, date.today().isoformat(), account_id]
+        "UPDATE cashflow_accounts SET current_balance=?, updated_at=?, balance_date=? WHERE id=?",
+        [balance, today, bdate, account_id]
     )
     conn.execute(
         "INSERT INTO cashflow_snapshots(account_id,snapshot_date,balance) VALUES(?,?,?)",
-        [account_id, date.today().isoformat(), balance]
+        [account_id, bdate, balance]
     )
     conn.commit()
 
@@ -313,7 +318,7 @@ def _to_usd(amount: float, currency: str, usd_nis: float) -> float:
 
 # ── Forecast engine ───────────────────────────────────────────────────────────
 def build_forecast(conn, months_ahead: int, usd_nis: float,
-                   amazon_growth: float) -> tuple:
+                   amazon_growth: float, balance_date: str = None) -> tuple:
     """
     Returns:
         accounts : list of account rows
@@ -325,8 +330,18 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
     The forecast distributes each item to the primary account for that
     company+currency combination.
     """
+    import calendar
     from datetime import date
     today = date.today()
+
+    # Parse balance_date for proration (default: today)
+    if balance_date:
+        try:
+            _bdate = date.fromisoformat(balance_date[:10])
+        except Exception:
+            _bdate = today
+    else:
+        _bdate = today
 
     accounts = get_accounts(conn)   # list of tuples
     items    = get_items(conn)
@@ -367,14 +382,32 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
         monthly_flows = []
 
         # ── Amazon payout ──────────────────────────────────────────────────
-        base       = prev_year_net.get(fm) or two_years_net.get(fm, 0.0)
-        amz_payout = max(base * (1 + amazon_growth), 0.0)
-        if amazon_acc_id and amz_payout:
-            running[amazon_acc_id] = running.get(amazon_acc_id, 0.0) + amz_payout
+        base           = prev_year_net.get(fm) or two_years_net.get(fm, 0.0)
+        amz_payout_full = max(base * (1 + amazon_growth), 0.0)
+
+        # Prorate for the month that contains balance_date
+        if _bdate.year == fy and _bdate.month == fm:
+            days_in_month = calendar.monthrange(fy, fm)[1]
+            days_left = max(days_in_month - _bdate.day, 0)
+            amz_payout_used = amz_payout_full * days_left / days_in_month
+        else:
+            amz_payout_used = amz_payout_full
+
+        if amazon_acc_id and amz_payout_full:
+            # Reference row (not counted in totals)
             monthly_flows.append({
                 "name": "Amazon Payout (auto)", "direction": "in",
-                "amount": amz_payout, "currency": "USD",
+                "amount": amz_payout_full, "currency": "USD",
                 "company": "LLC", "auto": True, "item_id": None,
+                "reference": True,
+            })
+            # Actual row used in calculation
+            running[amazon_acc_id] = running.get(amazon_acc_id, 0.0) + amz_payout_used
+            monthly_flows.append({
+                "name": "Amazon Payout (auto) Left", "direction": "in",
+                "amount": amz_payout_used, "currency": "USD",
+                "company": "LLC", "auto": True, "item_id": None,
+                "reference": False,
             })
 
         # ── Scheduled items ────────────────────────────────────────────────

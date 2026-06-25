@@ -6498,8 +6498,15 @@ with tab_cashflow:
     with _cf_tab_forecast:
         import pandas as _cf_pd
 
+        # Use the most recent balance_date across all accounts for proration
+        _all_accs_raw = _cf_conn.execute(
+            "SELECT balance_date FROM cashflow_accounts WHERE is_active=1 AND balance_date IS NOT NULL "
+            "ORDER BY balance_date DESC LIMIT 1"
+        ).fetchone()
+        _cf_balance_date = _all_accs_raw[0] if _all_accs_raw else None
+
         _cf_accounts, _cf_result = build_forecast(
-            _cf_conn, _cf_months, _cf_usd_nis, _cf_growth
+            _cf_conn, _cf_months, _cf_usd_nis, _cf_growth, _cf_balance_date
         )
 
         # ── Single opening balance = all accounts converted to USD ────────
@@ -6533,10 +6540,13 @@ with tab_cashflow:
             _income_names  = []
             _expense_names = []
             _expense_company = {}   # name → 'LLC' | 'IL'
+            _reference_names = set()  # income rows shown as reference only
             for r in _cf_result:
                 for f in r["flows"]:
                     if f["direction"] == "in"  and f["name"] not in _income_names:
                         _income_names.append(f["name"])
+                    if f.get("reference"):
+                        _reference_names.add(f["name"])
                     if f["direction"] == "out" and f["name"] not in _expense_names:
                         _expense_names.append(f["name"])
                     if f["direction"] == "out":
@@ -6600,7 +6610,9 @@ with tab_cashflow:
                     amt = _to_usd_display(f["amount"], f["currency"], _cf_usd_nis)
                     flow_usd[key] = flow_usd.get(key, 0.0) + amt
 
-                total_in  = sum(v for (d,_), v in flow_usd.items() if d == "in")
+                # Exclude reference rows (e.g. "Amazon Payout (auto)") from totals
+                total_in  = sum(v for (d, n), v in flow_usd.items()
+                                if d == "in" and n not in _reference_names)
                 us_out = sum(v for (d, n), v in flow_usd.items()
                              if d == "out" and _expense_company.get(n) != "IL")
                 il_out = sum(v for (d, n), v in flow_usd.items()
@@ -6650,6 +6662,11 @@ with tab_cashflow:
                             s.loc["💰 Closing Balance", col] = "font-weight:bold;background:#ffd7d7"
                         else:
                             s.loc["💰 Closing Balance", col] = "font-weight:bold;background:#d4edda"
+                    # Reference rows — grey italic
+                    for _rn in _reference_names:
+                        _rl = f"  ↑ {_rn}"
+                        if _rl in df.index:
+                            s.loc[_rl, col] = "color:#aaa;font-style:italic"
                     # Totals — slightly shaded
                     s.loc["= Total Income",    col] = "font-weight:bold;background:#f8fff8"
                     s.loc["= 🇺🇸 US Expenses (LLC)", col] = "background:#fffaf5"
@@ -6711,35 +6728,52 @@ with tab_cashflow:
     # ════════════════════════════════════════════════════════════════════════
     @st.fragment
     def _cf_accounts_fragment(cf_conn):
+        import datetime as _dt
         from db.cashflow_module import get_accounts, update_account_balance, add_account
 
         _cf_accs = get_accounts(cf_conn)
 
         st.markdown("### Current Balances")
-        st.caption("Update whenever you check your accounts (weekly recommended).")
+        st.caption("Enter all balances as of the same date, then Save All.")
 
-        for acc in _cf_accs:
-            aid, aname, acompany, acur, abal, alimit, asort, aupdated = acc
-            sym = "$" if acur == "USD" else "₪"
-            with st.form(f"cf_acc_form_{aid}", border=False):
-                col_name, col_bal, col_btn = st.columns([3, 2, 1])
+        with st.form("cf_all_accounts_form", border=False):
+            _new_bals = {}
+            for acc in _cf_accs:
+                aid, aname, acompany, acur, abal, alimit, asort, aupdated, abaldate = acc
+                sym = "$" if acur == "USD" else "₪"
+                _date_label = abaldate[:10] if abaldate else (aupdated[:10] if aupdated else "—")
+                col_name, col_bal = st.columns([3, 2])
                 col_name.markdown(
                     f"**{aname}** &nbsp; <span style='color:#888;font-size:0.8rem'>"
                     f"{acompany} · {acur}"
                     + (f" · limit {sym}{alimit:,.0f}" if alimit else "")
-                    + f" · updated {aupdated[:10]}</span>",
+                    + f" · as of {_date_label}</span>",
                     unsafe_allow_html=True
                 )
-                new_bal = col_bal.number_input(
+                _new_bals[aid] = col_bal.number_input(
                     f"Balance {aname}", value=float(abal),
                     step=100.0, label_visibility="collapsed",
                     key=f"cf_bal_{aid}", format="%.0f"
                 )
-                if col_btn.form_submit_button("Save"):
-                    update_account_balance(cf_conn, aid, new_bal)
-                    st.success(f"✅ {aname} updated to {sym}{new_bal:,.0f}")
-                    st.rerun(scope="fragment")
 
+            st.divider()
+            _save_col, _date_col = st.columns([1, 2])
+            _save_col.markdown("**Balance date**")
+            _today = _dt.date.today()
+            _bdate_input = _date_col.date_input(
+                "Balance date", value=_today,
+                label_visibility="collapsed", key="cf_balance_date"
+            )
+            if st.form_submit_button("💾 Save All", use_container_width=True, type="primary"):
+                _bdate_str = _bdate_input.isoformat()
+                for _aid, _nbal in _new_bals.items():
+                    update_account_balance(cf_conn, _aid, _nbal, _bdate_str)
+                st.success(f"✅ All balances saved as of {_bdate_str}")
+                st.rerun(scope="fragment")
+
+        for acc in _cf_accs:
+            aid, aname, acompany, acur, abal, alimit, asort, aupdated, abaldate = acc
+            sym = "$" if acur == "USD" else "₪"
             if alimit and abal < -alimit:
                 st.warning(f"⚠️ {aname} is below credit limit! {sym}{abal:,.0f} (limit {sym}{alimit:,.0f})")
 
