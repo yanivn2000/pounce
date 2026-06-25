@@ -6503,13 +6503,24 @@ with tab_cashflow:
         )
 
         # ── Single opening balance = all accounts converted to USD ────────
+        # Use the same ILS rate as the balance summary (fx_rates → monthly_fx_rates)
         def _to_usd_display(amount, currency, rate):
             if currency == "USD":  return amount
             if currency == "ILS":  return amount / rate if rate else 0.0
             return amount
 
+        _ob_rate_row = _cf_conn.execute(
+            "SELECT rate FROM fx_rates WHERE marketplace='amazon.co.il' "
+            "UNION SELECT rate FROM fx_rates WHERE marketplace LIKE '%il%' LIMIT 1"
+        ).fetchone()
+        if not _ob_rate_row:
+            _ob_rate_row = _cf_conn.execute(
+                "SELECT rate FROM monthly_fx_rates WHERE currency='ILS' ORDER BY year DESC, month DESC LIMIT 1"
+            ).fetchone()
+        _ob_ils_rate = float(_ob_rate_row[0]) if _ob_rate_row else _cf_usd_nis
+
         _opening_usd = sum(
-            _to_usd_display(a[4], a[3], _cf_usd_nis) for a in _cf_accounts
+            _to_usd_display(a[4], a[3], _ob_ils_rate) for a in _cf_accounts
         )
 
         if not _cf_result:
