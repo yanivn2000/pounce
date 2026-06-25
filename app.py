@@ -6602,12 +6602,18 @@ with tab_cashflow:
             _warn_cols = []
             opening    = _opening_usd
 
+            _paid_set = set()  # (name, ym) for strikethrough styling
             for r in _cf_result:
                 # Map flows to USD amounts by name+direction
+                # Paid items contribute 0 to totals; reference items are display-only
                 flow_usd: dict[tuple, float] = {}
                 for f in r["flows"]:
                     key = (f["direction"], f["name"])
-                    amt = _to_usd_display(f["amount"], f["currency"], _cf_usd_nis)
+                    if f.get("paid"):
+                        _paid_set.add((f["name"], r["ym"]))
+                        amt = 0.0
+                    else:
+                        amt = _to_usd_display(f["amount"], f["currency"], _cf_usd_nis)
                     flow_usd[key] = flow_usd.get(key, 0.0) + amt
 
                 # Exclude reference rows (e.g. "Amazon Payout (auto)") from totals
@@ -6667,6 +6673,12 @@ with tab_cashflow:
                         _rl = f"  ↑ {_rn}"
                         if _rl in df.index:
                             s.loc[_rl, col] = "color:#aaa;font-style:italic"
+                    # Paid income items — strikethrough + light green tint
+                    for (_pn, _pym) in _paid_set:
+                        _col_label = f"{CF_MONTHS[int(_pym[5:7])-1]} {_pym[:4]}"
+                        _rl = f"  ↑ {_pn}"
+                        if _rl in df.index and _col_label == col:
+                            s.loc[_rl, col] = "text-decoration:line-through;color:#888;background:#f0fdf0"
                     # Totals — slightly shaded
                     s.loc["= Total Income",    col] = "font-weight:bold;background:#f8fff8"
                     s.loc["= 🇺🇸 US Expenses (LLC)", col] = "background:#fffaf5"
@@ -6701,6 +6713,58 @@ with tab_cashflow:
                 _render_exp_detail(_us_exp_data, _us_exp_names, "US")
             with st.expander("🇮🇱 IL expense detail", expanded=False):
                 _render_exp_detail(_il_exp_data, _il_exp_names, "IL")
+
+            # ── Mark as Paid ───────────────────────────────────────────────
+            with st.expander("✅ Mark as Paid", expanded=True):
+                from db.cashflow_module import (
+                    get_items_for_month, mark_item_paid, unmark_item_paid
+                )
+                _ym_options = [r["ym"] for r in _cf_result]
+                _today_ym   = __import__("datetime").date.today().strftime("%Y-%m")
+                _default_idx = _ym_options.index(_today_ym) if _today_ym in _ym_options else 0
+                _sel_ym = st.selectbox(
+                    "Month", _ym_options,
+                    index=_default_idx,
+                    format_func=lambda ym: f"{CF_MONTHS[int(ym[5:7])-1]} {ym[:4]}",
+                    key="cf_paid_month"
+                )
+
+                _month_items = get_items_for_month(_cf_conn, _sel_ym)
+                _exp_items = [i for i in _month_items if i["direction"] == "out"]
+                _inc_items = [i for i in _month_items if i["direction"] == "in"]
+
+                if not _exp_items and not _inc_items:
+                    st.caption("No scheduled items for this month.")
+                else:
+                    with st.form("cf_mark_paid_form"):
+                        if _exp_items:
+                            st.markdown("**Expenses**")
+                            _p_cols = st.columns(3)
+                            _checks = {}
+                            for _idx, _itm in enumerate(_exp_items):
+                                _sym = "$" if _itm["currency"] == "USD" else "₪"
+                                _label = f"{_itm['name']}  {_sym}{_itm['amount']:,.0f}"
+                                _checks[_itm["item_id"]] = _p_cols[_idx % 3].checkbox(
+                                    _label, value=_itm["paid"],
+                                    key=f"paid_{_itm['item_id']}_{_sel_ym}"
+                                )
+                        if _inc_items:
+                            st.markdown("**Income**")
+                            _p_inc_cols = st.columns(3)
+                            for _idx, _itm in enumerate(_inc_items):
+                                _sym = "$" if _itm["currency"] == "USD" else "₪"
+                                _label = f"{_itm['name']}  {_sym}{_itm['amount']:,.0f}"
+                                _checks[_itm["item_id"]] = _p_inc_cols[_idx % 3].checkbox(
+                                    _label, value=_itm["paid"],
+                                    key=f"paid_{_itm['item_id']}_{_sel_ym}"
+                                )
+                        if st.form_submit_button("💾 Save Payments", type="primary"):
+                            for _iid, _is_paid in _checks.items():
+                                if _is_paid:
+                                    mark_item_paid(_cf_conn, _iid, _sel_ym)
+                                else:
+                                    unmark_item_paid(_cf_conn, _iid, _sel_ym)
+                            st.rerun()
 
             # ── Warnings ──────────────────────────────────────────────────
             if _warn_cols:

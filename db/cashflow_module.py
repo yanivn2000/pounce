@@ -223,6 +223,40 @@ def add_account(conn, name, company, currency, balance, credit_limit):
     conn.commit()
 
 
+# ── Items applicable to a given YM (for Mark-as-Paid UI) ─────────────────────
+def get_items_for_month(conn, ym: str) -> list:
+    """Return all active items that fire in the given 'YYYY-MM', with paid flag."""
+    fy, fm = int(ym[:4]), int(ym[5:7])
+    items       = get_items(conn)
+    completions = get_completions_set(conn)
+    result = []
+    for item in items:
+        iid, name, direction, category, amount, currency, frequency, \
+            company, start_ym, end_ym, notes = item
+        if start_ym and ym < start_ym:
+            continue
+        if end_ym and ym > end_ym:
+            continue
+        applies = False
+        if frequency == "monthly":
+            applies = True
+        elif frequency == "quarterly" and start_ym:
+            sy, sm = int(start_ym[:4]), int(start_ym[5:7])
+            months_elapsed = (fy - sy) * 12 + (fm - sm)
+            applies = months_elapsed >= 0 and months_elapsed % 3 == 0
+        elif frequency == "annual" and start_ym:
+            applies = int(start_ym[5:7]) == fm
+        elif frequency == "once":
+            applies = ym == start_ym
+        if applies:
+            result.append({
+                "item_id": iid, "name": name, "direction": direction,
+                "amount": amount, "currency": currency, "company": company,
+                "paid": (iid, ym) in completions,
+            })
+    return result
+
+
 # ── Completions (Mark as Paid) ────────────────────────────────────────────────
 def mark_item_paid(conn, item_id: int, ym: str):
     conn.execute(
@@ -343,8 +377,9 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
     else:
         _bdate = today
 
-    accounts = get_accounts(conn)   # list of tuples
-    items    = get_items(conn)
+    accounts    = get_accounts(conn)   # list of tuples
+    items       = get_items(conn)
+    completions = get_completions_set(conn)  # set of (item_id, ym)
 
     # Amazon payout history (previous year, fallback two years)
     prev_year_net = get_amazon_monthly_net(conn, today.year - 1, usd_nis)
@@ -440,6 +475,8 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
             if not applies:
                 continue
 
+            is_paid = (iid, ym) in completions
+
             sign = 1 if direction == "in" else -1
 
             # Route to primary account for this company+currency
@@ -448,13 +485,14 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
                 # Fallback: any account for this company
                 acc_id = next((a[0] for a in accounts if a[2] == company), None)
 
-            if acc_id is not None:
+            if acc_id is not None and not is_paid:
                 running[acc_id] = running.get(acc_id, 0.0) + sign * amount
 
             monthly_flows.append({
                 "name": name, "direction": direction, "category": category,
                 "amount": amount, "currency": currency,
                 "company": company, "auto": False, "item_id": iid,
+                "paid": is_paid,
             })
 
         result.append({
