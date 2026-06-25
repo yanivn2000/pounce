@@ -1791,6 +1791,70 @@ with _fba_tab:
             hide_index=True,
         )
 
+    # ── FBA Capacity Planner ──────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📦 FBA Capacity Planner")
+    st.markdown(
+        f"<p style='font-size:0.85rem;color:{T['text_secondary']};'>"
+        "Enter your available FBA capacity and how you want to split between singles and sets. "
+        "Dimensions are pulled automatically from your product catalog.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # Pull CBM per unit from catalog (average across SKUs of that type)
+    from db.database import get_conn as _cap_conn
+    _cap_db = _cap_conn()
+    _single_row = _cap_db.execute("""
+        SELECT AVG(carton_cbm / carton_units) AS cbm_per_unit
+        FROM products_catalog
+        WHERE product_type = 'single_mug' AND carton_cbm > 0 AND carton_units > 0
+    """).fetchone()
+    _couple_row = _cap_db.execute("""
+        SELECT AVG(carton_cbm / carton_units) AS cbm_per_unit
+        FROM products_catalog
+        WHERE product_type = 'set_two_mugs' AND carton_cbm > 0 AND carton_units > 0
+    """).fetchone()
+    _cap_db.close()
+
+    _cbm_single = float(_single_row["cbm_per_unit"]) if _single_row and _single_row["cbm_per_unit"] else 0.00188
+    _cbm_couple = float(_couple_row["cbm_per_unit"]) if _couple_row and _couple_row["cbm_per_unit"] else 0.00322
+    _CBF_PER_CBM = 35.3147
+
+    _cp1, _cp2, _cp3 = st.columns(3)
+    with _cp1:
+        _cap_unit = st.radio("Capacity unit", ["CBF", "CBM"], horizontal=True, key="cap_unit")
+    with _cp2:
+        _cap_value = st.number_input(
+            f"Available capacity ({_cap_unit})",
+            min_value=0.0, value=2127.0 if _cap_unit == "CBF" else 60.0,
+            step=10.0, key="cap_value"
+        )
+    with _cp3:
+        _pct_couples = st.slider("% Sets (2-mugs)", 0, 100, 90, step=5, key="cap_pct_couples")
+        _pct_singles = 100 - _pct_couples
+        st.caption(f"Singles: {_pct_singles}% · Sets: {_pct_couples}%")
+
+    # Convert input to CBM for calculation
+    _cap_cbm = _cap_value / _CBF_PER_CBM if _cap_unit == "CBF" else _cap_value
+
+    _cbm_for_couples = _cap_cbm * (_pct_couples / 100)
+    _cbm_for_singles = _cap_cbm * (_pct_singles / 100)
+
+    _units_couples = int(_cbm_for_couples / _cbm_couple) if _cbm_couple > 0 else 0
+    _units_singles = int(_cbm_for_singles / _cbm_single) if _cbm_single > 0 else 0
+    _units_total   = _units_couples + _units_singles
+
+    _cr1, _cr2, _cr3, _cr4 = st.columns(4)
+    _cr1.metric("Total units", f"{_units_total:,}")
+    _cr2.metric("Sets (2-mugs)", f"{_units_couples:,}")
+    _cr3.metric("Singles", f"{_units_singles:,}")
+    _cr4.metric("CBM per unit (set)", f"{_cbm_couple:.4f}")
+
+    st.caption(
+        f"Based on catalog averages: single = {_cbm_single:.4f} CBM/unit · "
+        f"set = {_cbm_couple:.4f} CBM/unit · 1 CBF = {1/_CBF_PER_CBM:.4f} CBM"
+    )
+
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTORY SUB-TAB — LONG STORAGE ALERTS
 # ══════════════════════════════════════════════════════════════════════════════
