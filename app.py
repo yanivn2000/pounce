@@ -6436,9 +6436,16 @@ with tab_cashflow:
     # ── Settings bar (persisted in DB) ───────────────────────────────────────
     _s1, _s2, _s3, _s4 = st.columns([1, 1, 1, 1])
     with _s1:
+        _saved_rate = get_setting(_cf_conn, "usd_nis")
+        if not _saved_rate or _saved_rate == "3.62":
+            _rate_row = _cf_conn.execute(
+                "SELECT rate FROM monthly_fx_rates WHERE currency='ILS' ORDER BY year DESC, month DESC LIMIT 1"
+            ).fetchone()
+            if _rate_row:
+                _saved_rate = str(round(float(_rate_row[0]), 2))
         _cf_usd_nis = st.number_input(
             "USD / NIS rate", min_value=2.0, max_value=6.0,
-            value=float(get_setting(_cf_conn, "usd_nis")),
+            value=float(_saved_rate),
             step=0.01, key="cf_usd_nis",
             help="Used to convert ILS ↔ USD in the merged total view"
         )
