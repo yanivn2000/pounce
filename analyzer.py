@@ -20,6 +20,20 @@ _CURRENCY_TO_MARKETPLACE = {
     "AUD": "amazon.com.au",
 }
 
+_COUNTRY_TO_MARKETPLACE = {
+    "United States": "amazon.com",
+    "Canada":        "amazon.ca",
+    "United Kingdom":"amazon.co.uk",
+    "Germany":       "amazon.de",
+    "Australia":     "amazon.com.au",
+    "France":        "amazon.fr",
+    "Italy":         "amazon.it",
+    "Spain":         "amazon.es",
+    "Mexico":        "amazon.com.mx",
+    "Japan":         "amazon.co.jp",
+    "India":         "amazon.in",
+}
+
 
 def detect_marketplace_from_xlsx(path: str) -> str:
     """
@@ -36,6 +50,38 @@ def detect_marketplace_from_xlsx(path: str) -> str:
     except Exception:
         pass
     return "amazon.com"
+
+
+def get_countries_from_report(path: str) -> dict[str, str]:
+    """
+    Returns {country_name: marketplace} for each unique country in the report.
+    Returns empty dict if there is no Country column (single-country report).
+    """
+    try:
+        df = pd.read_excel(path, nrows=5000)
+        df.columns = df.columns.str.strip()
+        col = next((c for c in df.columns if c.strip().lower() == "country"), None)
+        if col is None:
+            return {}
+        countries = df[col].dropna().unique()
+        result = {}
+        for c in countries:
+            c_str = str(c).strip()
+            mp = _COUNTRY_TO_MARKETPLACE.get(c_str)
+            if not mp:
+                # fallback: detect from currency rows for this country
+                sub = df[df[col] == c]
+                for cur_col in ("Currency", "currency"):
+                    if cur_col in df.columns:
+                        cur_val = sub[cur_col].dropna().iloc[0] if not sub[cur_col].dropna().empty else None
+                        if cur_val:
+                            mp = _CURRENCY_TO_MARKETPLACE.get(str(cur_val).strip().upper(), "amazon.com")
+                            break
+                mp = mp or "amazon.com"
+            result[c_str] = mp
+        return result
+    except Exception:
+        return {}
 
 
 PLACEMENT_MAP = {
@@ -101,9 +147,15 @@ _PAUSED_LAG_DAYS = 7   # campaigns whose last End Date is ≥ this many days bef
                         # report's overall End Date are considered paused/archived
 
 
-def load_and_aggregate(path: str, sales_col: str) -> pd.DataFrame:
+def load_and_aggregate(path: str, sales_col: str, country_filter: str = None) -> pd.DataFrame:
     df = pd.read_excel(path)
     df.columns = df.columns.str.strip()
+
+    # Filter to a single country when processing multi-country reports
+    if country_filter:
+        _ccol = next((c for c in df.columns if c.strip().lower() == "country"), None)
+        if _ccol:
+            df = df[df[_ccol].astype(str).str.strip() == country_filter]
 
     # Handle empty or missing Placement column gracefully
     if 'Placement' not in df.columns or df.empty:
@@ -736,7 +788,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
                            min_margin_pct: float = 0.25,
                            marketplace: str = 'amazon.com',
                            fba_fees_map: dict = None,
-                           fx_rate: float = 1.0) -> list[CampaignResult]:
+                           fx_rate: float = 1.0,
+                           country_filter: str = None) -> list[CampaignResult]:
     """
     Main entry point with per-ASIN product costs and new placement algorithm.
     cost_map = {asin: {product_cost, shipping_cost, customs_cost, fba_fee,
@@ -797,8 +850,8 @@ def analyze_with_products(sp_path: str, sb_path: str,
                     return be_roas, costs, debug_info
         return target_roas, None, {}
 
-    sp_grp = load_and_aggregate(sp_path, '7 Day Total Sales')
-    sb_grp = load_and_aggregate(sb_path, '14 Day Total Sales')
+    sp_grp = load_and_aggregate(sp_path, '7 Day Total Sales', country_filter=country_filter)
+    sb_grp = load_and_aggregate(sb_path, '14 Day Total Sales', country_filter=country_filter)
 
     # Campaign type lookup — derived from already-loaded sp_grp (no extra Excel read)
     sp_types = {

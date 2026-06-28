@@ -5309,30 +5309,61 @@ with tab_ads:
                         sb_path = os.path.join(SESSION_DIR, "sb_report.xlsx")
                         with open(sp_path, "wb") as f: f.write(sp_file.read())
                         with open(sb_path, "wb") as f: f.write(sb_file.read())
-                        detected_marketplace = detect_marketplace_from_xlsx(sp_path)
+
+                        _snap_date = (
+                            str(_snap_date_override)
+                            if _use_date_override and _snap_date_override
+                            else str(date.today())
+                        )
+
                         try:
                             _fx_rates = get_fx_rates()
-                            _fx_rate  = _fx_rates.get(detected_marketplace, 1.0)
-                            _fba_map  = get_fba_fees_map(detected_marketplace)
-                            results = analyze_with_products(
-                                sp_path, sb_path, target_roas, low_impr, cost_map, min_margin_pct,
-                                detected_marketplace,
-                                fba_fees_map=_fba_map,
-                                fx_rate=_fx_rate,
-                            )
+                            from analyzer import get_countries_from_report
+                            _countries = get_countries_from_report(sp_path)
+
+                            if len(_countries) > 1:
+                                # Multi-country report — analyse each country separately
+                                results = []
+                                _mp_list = []
+                                for _country, _mp in _countries.items():
+                                    _fx_rate = _fx_rates.get(_mp, 1.0)
+                                    _fba_map = get_fba_fees_map(_mp)
+                                    _r = analyze_with_products(
+                                        sp_path, sb_path, target_roas, low_impr, cost_map,
+                                        min_margin_pct, _mp,
+                                        fba_fees_map=_fba_map,
+                                        fx_rate=_fx_rate,
+                                        country_filter=_country,
+                                    )
+                                    for _res in _r:
+                                        _res.marketplace = _mp
+                                    results.extend(_r)
+                                    _mp_list.append(_mp)
+                                    save_performance_snapshot(_r, _snap_date, _mp)
+                                    record_placement_snapshots(_r, _snap_date, _mp)
+                                    record_bid_changes(_r, _snap_date, _mp)
+                                detected_marketplace = _mp_list[0] if _mp_list else "amazon.com"
+                                st.info(f"Multi-country report detected: {', '.join(_countries.keys())}")
+                            else:
+                                # Single-country report — existing behaviour
+                                detected_marketplace = detect_marketplace_from_xlsx(sp_path)
+                                _fx_rate  = _fx_rates.get(detected_marketplace, 1.0)
+                                _fba_map  = get_fba_fees_map(detected_marketplace)
+                                results = analyze_with_products(
+                                    sp_path, sb_path, target_roas, low_impr, cost_map,
+                                    min_margin_pct, detected_marketplace,
+                                    fba_fees_map=_fba_map,
+                                    fx_rate=_fx_rate,
+                                )
                         finally:
                             for p in [sp_path, sb_path]:
                                 if os.path.exists(p): os.unlink(p)
 
                     # ── Save performance snapshot for backfire detection ──────────────
-                    _snap_date = (
-                        str(_snap_date_override)
-                        if _use_date_override and _snap_date_override
-                        else str(date.today())
-                    )
-                    save_performance_snapshot(results, _snap_date, detected_marketplace)
-                    record_placement_snapshots(results, _snap_date, detected_marketplace)
-                    record_bid_changes(results, _snap_date, detected_marketplace)
+                    if len(_countries) <= 1:
+                        save_performance_snapshot(results, _snap_date, detected_marketplace)
+                        record_placement_snapshots(results, _snap_date, detected_marketplace)
+                        record_bid_changes(results, _snap_date, detected_marketplace)
 
                     # ── Auto-save recommendations to DB (batched) ────────────────────
                     today_str  = str(date.today())
