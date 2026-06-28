@@ -2841,7 +2841,7 @@ div:has(#ship-list-nav-marker) ~ div button {
 
             # ── Create Labels (always available) ──────────────────────────────
             st.divider()
-            _lbl_col, _csv_col, _wfs_col, _ = st.columns([2, 2, 2, 4])
+            _lbl_col, _csv_col, _cmkg_col, _wfs_col, _ = st.columns([2, 2, 2, 2, 2])
 
             # Shared lines for both buttons
             if _locked:
@@ -2897,6 +2897,36 @@ div:has(#ship-list-nav-marker) ~ div button {
                     file_name=f"{sel_ship['name']}_box_content.csv",
                     mime="text/csv",
                     key=f"ship_csv_{_ctx}",
+                    use_container_width=True,
+                )
+
+            with _cmkg_col:
+                # Box content CSV (cm + kg)
+                _cmkg_rows = []
+                for _lr in _export_lines:
+                    _lsku = (_lr.get("sku") or "").strip()
+                    _lnc  = int(_lr.get("num_cartons") or 0)
+                    if not _lsku or _lnc <= 0:
+                        continue
+                    _inf  = sku_info.get(_lsku, {})
+                    _cu   = int(_inf.get("carton_units") or 0)
+                    _cmkg_rows.append({
+                        "Merchant SKU":    _lsku,
+                        "Quantity":        _cu * _lnc,
+                        "Units per box":   _cu,
+                        "Number of boxes": _lnc,
+                        "Box length (cm)": round(_inf.get("length_cm") or 0.0, 2),
+                        "Box width (cm)":  round(_inf.get("width_cm")  or 0.0, 2),
+                        "Box height (cm)": round(_inf.get("height_cm") or 0.0, 2),
+                        "Box weight (kg)": round(_inf.get("gw_kg")     or 0.0, 2),
+                    })
+                _cmkg_bytes = pd.DataFrame(_cmkg_rows).to_csv(index=False).encode()
+                st.download_button(
+                    "📦 Box Content CSV (cm/kg)",
+                    data=_cmkg_bytes,
+                    file_name=f"{sel_ship['name']}_box_content_cmkg.csv",
+                    mime="text/csv",
+                    key=f"ship_cmkg_{_ctx}",
                     use_container_width=True,
                 )
 
