@@ -318,8 +318,16 @@ def parse_amazon_transactions(filepath: str) -> list:
     import pandas as pd
     import re as _re
 
-    with open(filepath, encoding="utf-8-sig") as f:
-        lines = f.readlines()
+    # Try common Amazon encodings — CA files often arrive as Windows-1252
+    for _enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            with open(filepath, encoding=_enc) as f:
+                lines = f.readlines()
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        return []  # could not decode with any encoding
 
     # Detect EU locale from preamble
     is_eu_file = False
@@ -786,12 +794,16 @@ def render_amazon_upload_ui(conn):
                 tmp_path = tmp.name
             try:
                 with st.spinner("מנתח קובץ..."):
-                    transactions = parse_amazon_transactions(tmp_path)
+                    try:
+                        transactions = parse_amazon_transactions(tmp_path)
+                    except Exception as _parse_err:
+                        st.error(f"❌ שגיאה בניתוח הקובץ: {_parse_err}")
+                        return
             finally:
                 os.unlink(tmp_path)
 
             if not transactions:
-                st.error("❌ לא נמצאו עסקאות — בדוק שהדוח הוא Transaction View")
+                st.error("❌ לא נמצאו עסקאות — בדוק שהדוח הוא Transaction View (CSV/TSV)")
                 return
 
             result = insert_transactions(conn, transactions)
