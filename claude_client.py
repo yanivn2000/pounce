@@ -33,6 +33,9 @@ You receive a JSON object with pre-computed, authoritative numbers:
   plus month-over-month (mom) and year-over-year (yoy) absolute and % changes, and
   flags ("good"/"bad"/null) marking changes the system already deemed dramatic.
 - product_movers: biggest gainers, losers, new and dropped products by sales.
+- theme_movers: curated gift-niche themes (e.g. Couples, Grandparents) with this
+  month's revenue vs last month, revenue-per-SKU, margin and YoY. These are across
+  ALL marketplaces regardless of scope.
 
 Hard rules:
 - Use ONLY the numbers provided. NEVER invent, estimate or recompute any figure.
@@ -41,6 +44,8 @@ Hard rules:
 - Lead with the headline: total income and profit direction vs last month and last year.
 - Call out every metric flagged "bad" as a concern, and flagged "good" as a positive.
 - Name the top 2-3 product movers (gainers and losers) with their sales change.
+- Add a short "Themes" note: the standout theme(s) by revenue and by revenue-per-SKU,
+  and any theme with a big month-over-month swing.
 - If cogs_available is false, say profit is shown before COGS (equals net payout) and
   do not describe it as final profit.
 - Be concise and scannable. Output GitHub-flavored markdown: a one-line headline in bold,
