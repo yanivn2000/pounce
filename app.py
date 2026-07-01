@@ -378,12 +378,19 @@ with st.sidebar:
     authenticator.logout("Sign out", location="sidebar")
     st.divider()
 
-    api_key = st.text_input(
+    _env_api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    _typed_api_key = st.text_input(
         "Anthropic API Key",
         type="password",
-        placeholder="sk-ant-...",
-        help="Required to generate AI comments. Leave blank to skip.",
+        placeholder="sk-ant-… (using shared server key)" if _env_api_key else "sk-ant-...",
+        help=("A shared server key is configured — leave blank to use it, or paste "
+              "a key here to override." if _env_api_key
+              else "Required to generate AI comments. Leave blank to skip."),
     )
+    # Typed key wins; otherwise fall back to the server-configured key.
+    api_key = _typed_api_key.strip() or _env_api_key
+    if _env_api_key and not _typed_api_key.strip():
+        st.caption("🔑 Using shared server key")
 
     st.divider()
     products_status = "✅ Loaded" if products_exist_db() else "⚠️ Not set up"
