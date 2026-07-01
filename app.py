@@ -6720,6 +6720,19 @@ with tab_summary:
                 _asin = it.get("asin", "")
                 _sku = it.get("sku", "")
                 _idlabel = _asin + (f" · {_sku}" if _sku else "")
+                # Where the change happened — per-marketplace breakdown.
+                _mps = [b for b in (it.get("mp_breakdown") or [])
+                        if b["now"] or b["prev"]]
+                if len(_mps) == 1:
+                    _mp_html = f"📍 {_mps[0]['mp']}"
+                elif len(_mps) > 1:
+                    _parts = [f"{b['mp']} {'+' if b['delta'] >= 0 else '−'}${abs(b['delta']):,.0f}"
+                              for b in _mps[:4]]
+                    _mp_html = "📍 " + " · ".join(_parts)
+                else:
+                    _mp_html = ""
+                _mp_line = (f"<br><span style='color:#999;font-size:0.72rem'>{_mp_html}</span>"
+                            if _mp_html else "")
                 st.markdown(
                     f"<div style='font-size:0.82rem;margin-bottom:5px;display:flex;align-items:center'>"
                     f"{_thumb}"
@@ -6729,6 +6742,7 @@ with tab_summary:
                     f"<span style='font-family:monospace;font-size:0.72rem;color:#2563eb'>{_idlabel}</span> "
                     f"{it['product']} "
                     f"<span style='color:#aaa'>· ${it['sales_prev']:,.0f}→${it['sales_now']:,.0f}</span>"
+                    f"{_mp_line}"
                     f"</span></div>", unsafe_allow_html=True,
                 )
 

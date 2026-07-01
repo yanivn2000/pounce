@@ -249,25 +249,51 @@ def _short(name: str, n: int = 55) -> str:
     return name if len(name) <= n else name[: n - 1] + "…"
 
 
+# orders.marketplace values → short label (US/CA/UK/…). Same product sells across
+# several marketplaces, so per-mover we break the change down by these.
+_ORDERS_MP_LABEL = {
+    "amazon.com": "US", "non-amazon us": "US",
+    "amazon.ca": "CA", "non-amazon ca": "CA",
+    "amazon.co.uk": "UK", "non-amazon uk": "UK",
+    "amazon.de": "DE", "non-amazon de": "DE",
+    "amazon.es": "ES", "amazon.fr": "FR", "amazon.it": "IT",
+    "amazon.nl": "NL", "amazon.pl": "PL", "amazon.se": "SE",
+    "amazon.ie": "IE", "amazon.ae": "AE", "amazon.sa": "SA",
+    "amazon.com.mx": "MX", "amazon.com.au": "AU", "amazon.co.jp": "JP",
+    "non-amazon": "Other",
+}
+
+
+def _mp_label(raw) -> str:
+    if not raw:
+        return "?"
+    key = str(raw).strip().lower()
+    return _ORDERS_MP_LABEL.get(key, str(raw).strip())
+
+
 def _orders_by_asin_detailed(conn, start, end, fx) -> dict:
-    """{ASIN: {sales_usd, units, orders, title, sku}} for [start, end)."""
+    """{ASIN: {sales_usd, units, orders, title, sku, by_mp}} for [start, end).
+    by_mp = {marketplace_label: sales_usd}."""
     rows = conn.execute("""
-        SELECT UPPER(asin) AS asin, currency,
+        SELECT UPPER(asin) AS asin, currency, marketplace,
                SUM(quantity) AS units, SUM(item_price) AS revenue,
                COUNT(*) AS cnt, MAX(sku) AS sku, MAX(title) AS title
         FROM orders
         WHERE substr(order_date,1,10) >= ? AND substr(order_date,1,10) < ?
           AND COALESCE(order_status,'') NOT IN ('Cancelled','Pending')
           AND asin IS NOT NULL AND asin != ''
-        GROUP BY UPPER(asin), currency
+        GROUP BY UPPER(asin), currency, marketplace
     """, (start, end)).fetchall()
     out: dict = {}
-    for asin, ccy, units, rev, cnt, sku, title in rows:
+    for asin, ccy, mp, units, rev, cnt, sku, title in rows:
         d = out.setdefault(asin, {"sales": 0.0, "units": 0, "orders": 0,
-                                  "title": "", "sku": ""})
-        d["sales"] += _to_usd(float(rev or 0), ccy, fx)
+                                  "title": "", "sku": "", "by_mp": {}})
+        usd = _to_usd(float(rev or 0), ccy, fx)
+        d["sales"] += usd
         d["units"] += int(units or 0)
         d["orders"] += int(cnt or 0)
+        lbl = _mp_label(mp)
+        d["by_mp"][lbl] = d["by_mp"].get(lbl, 0.0) + usd
         if not d["title"] and title:
             d["title"] = title
         if not d["sku"] and sku:
@@ -294,6 +320,21 @@ def _product_movers(conn, cur_s, cur_e, base_s, base_e, fx,
         pct = (delta / sales_prev) if sales_prev > 0 else None
         title = (a or b).get("title") or ""
         sku = (a or b).get("sku") or ""
+        # Per-marketplace breakdown of the change, so the team can see where it
+        # happened. Sorted by |delta|, largest first.
+        now_mp = (a or {}).get("by_mp", {})
+        base_mp = (b or {}).get("by_mp", {})
+        mp_breakdown = []
+        for mp in set(now_mp) | set(base_mp):
+            _n = now_mp.get(mp, 0.0)
+            _p = base_mp.get(mp, 0.0)
+            mp_breakdown.append({
+                "mp": mp,
+                "now": round(_n, 0),
+                "prev": round(_p, 0),
+                "delta": round(_n - _p, 0),
+            })
+        mp_breakdown.sort(key=lambda x: abs(x["delta"]), reverse=True)
         movers.append({
             "asin": asin,
             "sku": sku,
@@ -305,6 +346,7 @@ def _product_movers(conn, cur_s, cur_e, base_s, base_e, fx,
             "units_prev": b["units"] if b else 0,
             "delta_abs": round(delta, 2),
             "delta_pct": round(pct, 4) if pct is not None else None,
+            "mp_breakdown": mp_breakdown,
         })
 
     # Gainers/losers = EXISTING SKUs only (sold in both windows), so genuine

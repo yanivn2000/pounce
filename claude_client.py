@@ -36,6 +36,8 @@ You receive a JSON object with pre-computed, authoritative numbers:
   are near-identical). gainers/losers are EXISTING SKUs (sold in both periods) so they
   reflect genuine improvement/decline; new_products (no sales in the baseline) and
   dropped are listed SEPARATELY — do not conflate a brand-new SKU with an improvement.
+  Each mover has mp_breakdown (per-marketplace delta, e.g. US/CA/UK) — when a swing is
+  concentrated in one marketplace, say which one.
 - product_movers_yoy: the same, but vs the SAME MONTH LAST YEAR. For this seasonal
   gift business this is the more meaningful product comparison — call it out, and keep
   "improved existing SKUs" distinct from "new SKUs launched since last year".
