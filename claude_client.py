@@ -25,6 +25,48 @@ Rules:
 """
 
 
+MONTHLY_SUMMARY_SYSTEM = """You are an expert Amazon business analyst writing a monthly \
+executive summary for the brand owner.
+
+You receive a JSON object with pre-computed, authoritative numbers:
+- metrics: P&L lines with current month, previous month and same-month-last-year values,
+  plus month-over-month (mom) and year-over-year (yoy) absolute and % changes, and
+  flags ("good"/"bad"/null) marking changes the system already deemed dramatic.
+- product_movers: biggest gainers, losers, new and dropped products by sales.
+
+Hard rules:
+- Use ONLY the numbers provided. NEVER invent, estimate or recompute any figure.
+  All arithmetic is already done — quote the given values exactly.
+- All money values are in USD. Format as $ with thousands separators, no decimals.
+- Lead with the headline: total income and profit direction vs last month and last year.
+- Call out every metric flagged "bad" as a concern, and flagged "good" as a positive.
+- Name the top 2-3 product movers (gainers and losers) with their sales change.
+- If cogs_available is false, say profit is shown before COGS (equals net payout) and
+  do not describe it as final profit.
+- Be concise and scannable. Output GitHub-flavored markdown: a one-line headline in bold,
+  then short sections with bullet points. No preamble, no JSON, ~180 words max.
+- Write in English.
+"""
+
+
+def generate_monthly_summary(
+    stats: dict,
+    api_key: str,
+    model: str = "claude-opus-4-8",
+) -> str:
+    """Turn the deterministic monthly stats (see db.summary_module) into a
+    plain-English executive summary. All numbers come from `stats`; Claude
+    only writes the narrative."""
+    client = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model=model,
+        max_tokens=1000,
+        system=MONTHLY_SUMMARY_SYSTEM,
+        messages=[{"role": "user", "content": json.dumps(stats, ensure_ascii=False)}],
+    )
+    return message.content[0].text.strip()
+
+
 def _campaign_prompt(r: CampaignResult, target_roas: float) -> str:
     def fmt(m):
         return {

@@ -395,14 +395,14 @@ with st.sidebar:
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_occasions, tab_datahealth, tab_admin = st.tabs([
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_summary, tab_cashflow, tab_occasions, tab_datahealth, tab_admin = st.tabs([
         "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
-        "🛒 Amazon Transactions", "💰 Cash Forecast", "🎁 Occasions", "🔔 Data Health", "⚙️ Admin"
+        "🛒 Amazon Transactions", "📋 Monthly Summary", "💰 Cash Forecast", "🎁 Occasions", "🔔 Data Health", "⚙️ Admin"
     ])
 else:
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_cashflow, tab_occasions, tab_datahealth = st.tabs([
+    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_summary, tab_cashflow, tab_occasions, tab_datahealth = st.tabs([
         "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
-        "🛒 Amazon Transactions", "💰 Cash Forecast", "🎁 Occasions", "🔔 Data Health"
+        "🛒 Amazon Transactions", "📋 Monthly Summary", "💰 Cash Forecast", "🎁 Occasions", "🔔 Data Health"
     ])
     tab_admin = None
 
@@ -6466,6 +6466,207 @@ with tab_amazon:
             )
 
     _amz_conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB — MONTHLY SUMMARY (deterministic stats + cached AI narrative)
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_summary:
+    from db.database import get_conn as _sum_get_conn
+    from db.summary_module import (
+        build_summary_stats, available_months, all_marketplaces,
+        get_cached_summary, save_summary, MONTHS as _SUM_MONTHS,
+    )
+
+    st.markdown("# 📋 Monthly Summary")
+    st.markdown(
+        "<p style='color:#666;font-size:0.9rem'>Current month vs previous month vs "
+        "same month last year — with dramatic-change flags, product movers, and an "
+        "AI-written executive summary (generated once per month, then cached).</p>",
+        unsafe_allow_html=True,
+    )
+
+    _sum_conn = _sum_get_conn()
+    _sum_months = available_months(_sum_conn)
+
+    if not _sum_months:
+        st.info("No Amazon Order data yet — upload Transaction View files in the "
+                "🛒 Amazon Transactions tab first.")
+    else:
+        _sc1, _sc2, _sc3 = st.columns([1.3, 3, 1])
+        with _sc1:
+            _sum_pick = st.selectbox(
+                "Month", _sum_months,
+                format_func=lambda p: f"{p[1]} {p[0]}",
+                key="sum_month",
+            )
+        _sum_all_mps = all_marketplaces(_sum_conn)
+        with _sc2:
+            _sum_mps = st.multiselect(
+                "Marketplaces (default: all)", _sum_all_mps,
+                default=_sum_all_mps, key="sum_mps",
+                help="Combined and converted to USD.",
+            )
+        with _sc3:
+            _sum_thr = st.number_input(
+                "Flag %", min_value=10, max_value=200, value=40, step=5,
+                key="sum_threshold",
+                help="Flag a change as dramatic when it exceeds this %.",
+            ) / 100.0
+        if not _sum_mps:
+            _sum_mps = _sum_all_mps
+
+        _sum_y, _sum_mname = _sum_pick
+        _sum_ym = f"{_sum_y:04d}-{_SUM_MONTHS.index(_sum_mname)+1:02d}"
+
+        # Deterministic stats — always fresh, no LLM, cheap.
+        _stats = build_summary_stats(_sum_conn, _sum_ym, _sum_mps, threshold_pct=_sum_thr)
+
+        st.caption(
+            f"📅 **{_stats['month_label']}** vs {_stats['prev_label']} (MoM) "
+            f"vs {_stats['last_year_label']} (YoY) · "
+            f"{len(_sum_mps)}/{len(_sum_all_mps)} marketplaces"
+        )
+
+        # ── Headline KPIs ───────────────────────────────────────────────────────
+        def _mget(key):
+            return next(m for m in _stats["metrics"] if m["key"] == key)
+
+        def _pct_str(p):
+            if p is None:
+                return "—"
+            return f"{'+' if p >= 0 else ''}{p*100:.0f}%"
+
+        _kpi_keys = ["sales", "net_payout", "advertising", "orders"]
+        _kcols = st.columns(len(_kpi_keys))
+        for _kc, _kk in zip(_kcols, _kpi_keys):
+            _m = _mget(_kk)
+            _is_orders = _kk == "orders"
+            _val = f"{_m['current']:,.0f}" if _is_orders else f"${_m['current']:,.0f}"
+            _kc.metric(
+                _m["label"], _val,
+                _pct_str(_m["mom_pct"]) if _m["mom_pct"] is not None else None,
+                delta_color="inverse" if _m["is_cost"] else "normal",
+            )
+
+        # ── Comparison table ────────────────────────────────────────────────────
+        def _flag_cell(pct, flag):
+            txt = _pct_str(pct)
+            if flag == "bad":
+                return f"<span style='color:#c0392b;font-weight:600'>🔴 {txt}</span>"
+            if flag == "good":
+                return f"<span style='color:#1e8449;font-weight:600'>🟢 {txt}</span>"
+            return f"<span style='color:#666'>{txt}</span>"
+
+        def _money(v, key):
+            return f"{v:,.0f}" if key == "orders" else f"${v:,.0f}"
+
+        _rows_html = ""
+        for _m in _stats["metrics"]:
+            _rows_html += (
+                "<tr>"
+                f"<td style='text-align:left;padding:5px 8px'>{_m['label']}</td>"
+                f"<td style='text-align:right;padding:5px 8px;font-weight:600'>{_money(_m['current'],_m['key'])}</td>"
+                f"<td style='text-align:right;padding:5px 8px;color:#666'>{_money(_m['previous'],_m['key'])}</td>"
+                f"<td style='text-align:right;padding:5px 8px'>{_flag_cell(_m['mom_pct'],_m['flag_mom'])}</td>"
+                f"<td style='text-align:right;padding:5px 8px;color:#666'>{_money(_m['last_year'],_m['key'])}</td>"
+                f"<td style='text-align:right;padding:5px 8px'>{_flag_cell(_m['yoy_pct'],_m['flag_yoy'])}</td>"
+                "</tr>"
+            )
+        st.markdown(
+            "<table style='width:100%;border-collapse:collapse;font-size:0.86rem'>"
+            "<thead><tr style='border-bottom:2px solid #ddd'>"
+            "<th style='text-align:left;padding:5px 8px'>Metric</th>"
+            f"<th style='text-align:right;padding:5px 8px'>{_stats['month_label']}</th>"
+            f"<th style='text-align:right;padding:5px 8px'>{_stats['prev_label']}</th>"
+            "<th style='text-align:right;padding:5px 8px'>MoM</th>"
+            f"<th style='text-align:right;padding:5px 8px'>{_stats['last_year_label']}</th>"
+            "<th style='text-align:right;padding:5px 8px'>YoY</th>"
+            "</tr></thead><tbody>" + _rows_html + "</tbody></table>",
+            unsafe_allow_html=True,
+        )
+        if not _stats["cogs_available"]:
+            st.caption("ℹ️ COGS unavailable (no per-order units imported) — Profit shown "
+                       "equals Net Payout, before product cost.")
+
+        # ── Product movers ──────────────────────────────────────────────────────
+        st.markdown("#### 🚀 Product Movers (by sales, vs previous month)")
+        _pm = _stats["product_movers"]
+
+        def _mover_list(items, positive):
+            if not items:
+                st.caption("— none —")
+                return
+            for it in items:
+                _arrow = "▲" if positive else "▼"
+                _col = "#1e8449" if positive else "#c0392b"
+                _pctv = _pct_str(it["delta_pct"]) if it["delta_pct"] is not None else "new"
+                st.markdown(
+                    f"<div style='font-size:0.82rem;margin-bottom:3px'>"
+                    f"<span style='color:{_col};font-weight:600'>{_arrow} ${abs(it['delta_abs']):,.0f}</span> "
+                    f"<span style='color:#888'>({_pctv})</span> "
+                    f"{it['product']} "
+                    f"<span style='color:#aaa'>· ${it['sales_prev']:,.0f}→${it['sales_now']:,.0f}</span>"
+                    f"</div>", unsafe_allow_html=True,
+                )
+
+        _gcol, _lcol = st.columns(2)
+        with _gcol:
+            st.markdown("**Top gainers**")
+            _mover_list(_pm["gainers"], True)
+        with _lcol:
+            st.markdown("**Top losers**")
+            _mover_list(_pm["losers"], False)
+
+        if _pm["new_products"] or _pm["dropped_products"]:
+            with st.expander("🆕 New & dropped products"):
+                _ncol, _dcol = st.columns(2)
+                with _ncol:
+                    st.markdown("**New this month**")
+                    _mover_list(_pm["new_products"], True)
+                with _dcol:
+                    st.markdown("**Dropped (no sales this month)**")
+                    _mover_list(_pm["dropped_products"], False)
+
+        # ── AI narrative (cached once per month/scope) ──────────────────────────
+        st.divider()
+        st.markdown("### 🤖 AI Executive Summary")
+
+        _cached = get_cached_summary(_sum_conn, _sum_ym, _sum_mps)
+        _hcol, _bcol = st.columns([4, 1])
+
+        if _cached and _cached.get("summary_text"):
+            with _hcol:
+                st.caption(f"Generated {_cached['generated_at']} · {_cached.get('model','')}")
+            with _bcol:
+                _regen = st.button("🔄 Regenerate", key="sum_regen",
+                                   use_container_width=True)
+            st.markdown(_cached["summary_text"])
+        else:
+            _regen = False
+            with _hcol:
+                st.caption("Not generated yet for this month/scope.")
+            with _bcol:
+                _gen = st.button("✨ Generate", key="sum_gen",
+                                 type="primary", use_container_width=True,
+                                 disabled=not api_key)
+            if not api_key:
+                st.info("Enter your Anthropic API key in the sidebar to generate the summary.")
+            if _gen and api_key:
+                _regen = True
+
+        if (_regen and api_key):
+            from claude_client import generate_monthly_summary
+            with st.spinner("Writing summary…"):
+                try:
+                    _text = generate_monthly_summary(_stats, api_key)
+                    save_summary(_sum_conn, _sum_ym, _sum_mps, _stats, _text,
+                                 "claude-opus-4-8")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Summary generation failed: {_e}")
+
+    _sum_conn.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
