@@ -6694,31 +6694,36 @@ with tab_summary:
                     f"</span></div>", unsafe_allow_html=True,
                 )
 
-        def _render_product_movers(pm, positive_label="Top gainers"):
+        def _render_improved_declined(pm):
+            """Existing SKUs only — improvements vs declines."""
             _gcol, _lcol = st.columns(2)
             with _gcol:
-                st.markdown(f"**{positive_label}**")
+                st.markdown("**📈 Improved — existing SKUs**")
                 _mover_list(pm["gainers"], True)
             with _lcol:
-                st.markdown("**Top losers**")
+                st.markdown("**📉 Declined — existing SKUs**")
                 _mover_list(pm["losers"], False)
+
+        def _render_new_dropped(pm, new_label, dropped_label):
+            _ncol, _dcol = st.columns(2)
+            with _ncol:
+                st.markdown(f"**{new_label}**")
+                _mover_list(pm["new_products"], True)
+            with _dcol:
+                st.markdown(f"**{dropped_label}**")
+                _mover_list(pm["dropped_products"], False)
 
         # MoM
         st.markdown("#### 🚀 Product Movers (by sales, vs previous month)")
-        st.caption("Identified by **ASIN · SKU** (titles are near-identical) · "
-                   "all marketplaces.")
+        st.caption("Existing SKUs shown as improved/declined; brand-new SKUs are "
+                   "listed separately so they don't hide the real movers. "
+                   "ASIN · SKU · all marketplaces.")
         _pm = _stats["product_movers"]
-        _render_product_movers(_pm)
-
+        _render_improved_declined(_pm)
         if _pm["new_products"] or _pm["dropped_products"]:
-            with st.expander("🆕 New & dropped products (vs previous month)"):
-                _ncol, _dcol = st.columns(2)
-                with _ncol:
-                    st.markdown("**New this month**")
-                    _mover_list(_pm["new_products"], True)
-                with _dcol:
-                    st.markdown("**Dropped (no sales this month)**")
-                    _mover_list(_pm["dropped_products"], False)
+            with st.expander("🆕 New & 🛑 dropped SKUs (vs previous month)"):
+                _render_new_dropped(_pm, "🆕 New this month",
+                                    "🛑 Dropped (no sales this month)")
 
         # YoY — same month last year (seasonality-aware, key for gift/holiday sales)
         _pm_yoy = _stats.get("product_movers_yoy")
@@ -6726,17 +6731,17 @@ with tab_summary:
             st.markdown(
                 f"#### 🚀 Product Movers (by sales, vs {_stats['last_year_label']})")
             st.caption("Same month last year — the right lens for seasonal gifts "
-                       "(holidays recur in the same month). ASIN · SKU · all marketplaces.")
-            _render_product_movers(_pm_yoy)
-            if _pm_yoy["new_products"] or _pm_yoy["dropped_products"]:
-                with st.expander(f"🆕 New & dropped products (vs {_stats['last_year_label']})"):
-                    _ncol, _dcol = st.columns(2)
-                    with _ncol:
-                        st.markdown("**New vs last year**")
-                        _mover_list(_pm_yoy["new_products"], True)
-                    with _dcol:
-                        st.markdown("**Dropped vs last year**")
-                        _mover_list(_pm_yoy["dropped_products"], False)
+                       "(holidays recur in the same month). Existing SKUs (improved/"
+                       "declined) are separated from brand-new SKUs below. "
+                       "ASIN · SKU · all marketplaces.")
+            _render_improved_declined(_pm_yoy)
+            # New SKUs shown INLINE — the whole point: don't let new products bury
+            # the genuinely improved ones.
+            st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+            _render_new_dropped(
+                _pm_yoy,
+                f"🆕 New SKUs (no sales in {_stats['last_year_label']})",
+                f"🛑 Dropped since {_stats['last_year_label']}")
 
         # ── Theme movers ────────────────────────────────────────────────────────
         _tm = _stats.get("theme_movers") or {}

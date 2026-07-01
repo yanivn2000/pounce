@@ -32,10 +32,13 @@ You receive a JSON object with pre-computed, authoritative numbers:
 - metrics: P&L lines with current month, previous month and same-month-last-year values,
   plus month-over-month (mom) and year-over-year (yoy) absolute and % changes, and
   flags ("good"/"bad"/null) marking changes the system already deemed dramatic.
-- product_movers: biggest gainers, losers, new and dropped products by sales vs the
-  PREVIOUS month, each identified by asin/sku (titles are near-identical).
+- product_movers: vs the PREVIOUS month, each product identified by asin/sku (titles
+  are near-identical). gainers/losers are EXISTING SKUs (sold in both periods) so they
+  reflect genuine improvement/decline; new_products (no sales in the baseline) and
+  dropped are listed SEPARATELY — do not conflate a brand-new SKU with an improvement.
 - product_movers_yoy: the same, but vs the SAME MONTH LAST YEAR. For this seasonal
-  gift business this is the more meaningful product comparison — call it out.
+  gift business this is the more meaningful product comparison — call it out, and keep
+  "improved existing SKUs" distinct from "new SKUs launched since last year".
 - theme_movers: curated gift-niche themes (e.g. Couples, Grandparents) with this
   month's revenue vs last month, revenue-per-SKU, margin and YoY. These are across
   ALL marketplaces regardless of scope.

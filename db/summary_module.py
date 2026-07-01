@@ -307,9 +307,12 @@ def _product_movers(conn, cur_s, cur_e, base_s, base_e, fx,
             "delta_pct": round(pct, 4) if pct is not None else None,
         })
 
-    gainers = sorted([m for m in movers if m["delta_abs"] > 0],
+    # Gainers/losers = EXISTING SKUs only (sold in both windows), so genuine
+    # improvements/declines aren't drowned out by brand-new SKUs (0 → X), which
+    # get their own list.
+    gainers = sorted([m for m in movers if m["sales_prev"] > 0 and m["delta_abs"] > 0],
                      key=lambda m: m["delta_abs"], reverse=True)[:top_n]
-    losers = sorted([m for m in movers if m["delta_abs"] < 0],
+    losers = sorted([m for m in movers if m["sales_now"] > 0 and m["delta_abs"] < 0],
                     key=lambda m: m["delta_abs"])[:top_n]
     new_products = sorted(
         [m for m in movers if m["sales_prev"] == 0 and m["sales_now"] > 0],
