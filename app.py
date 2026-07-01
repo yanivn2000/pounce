@@ -5340,11 +5340,28 @@ with tab_ads:
 
             st.divider()
 
-            col1, col2 = st.columns(2)
-            with col1:
-                sp_file = st.file_uploader("📦 Sponsored Products — Placement Report (.xlsx)", type=["xlsx"], key="sp")
-            with col2:
-                sb_file = st.file_uploader("🏷️ Sponsored Brands — Campaign Placement Report (.xlsx)", type=["xlsx"], key="sb")
+            # Sponsored Products: ONE combined report covering all marketplaces
+            st.markdown("**📦 Sponsored Products** — one report for **all marketplaces**")
+            sp_file = st.file_uploader(
+                "Sponsored Products — Placement Report (all marketplaces in one .xlsx)",
+                type=["xlsx"], key="sp", label_visibility="collapsed",
+            )
+
+            # Sponsored Brands: one Campaign Placement report per marketplace
+            st.markdown("**🏷️ Sponsored Brands** — one Campaign Placement report "
+                        "per marketplace (optional)")
+            _SB_UPLOADERS = [
+                ("🇺🇸 US", "amazon.com",   "sb_us"),
+                ("🇨🇦 CA", "amazon.ca",    "sb_ca"),
+                ("🇬🇧 UK", "amazon.co.uk", "sb_uk"),
+            ]
+            sb_files = {}   # marketplace -> UploadedFile
+            _sb_cols = st.columns(len(_SB_UPLOADERS))
+            for _sbcol, (_lbl, _mp, _key) in zip(_sb_cols, _SB_UPLOADERS):
+                with _sbcol:
+                    _sbf = st.file_uploader(_lbl, type=["xlsx"], key=_key)
+                    if _sbf:
+                        sb_files[_mp] = _sbf
 
             # Optional: let the user back-date the snapshot when uploading old reports
             with st.expander("📅 Snapshot date (optional — set only when uploading old reports)", expanded=False):
@@ -5384,14 +5401,20 @@ with tab_ads:
                     help="Bid recommendations will never exceed this margin floor."
                 ) / 100
 
-            if sp_file and sb_file:
+            if sp_file:
                 if st.button("🚀 Run Analysis", type="primary", use_container_width=True):
 
                     with st.spinner("Loading and analyzing data..."):
                         sp_path = os.path.join(SESSION_DIR, "sp_report.xlsx")
-                        sb_path = os.path.join(SESSION_DIR, "sb_report.xlsx")
                         with open(sp_path, "wb") as f: f.write(sp_file.read())
-                        with open(sb_path, "wb") as f: f.write(sb_file.read())
+
+                        # One Sponsored Brands report per marketplace (optional)
+                        sb_paths = {}   # marketplace -> path
+                        for _mp, _sbf in sb_files.items():
+                            _sbp = os.path.join(
+                                SESSION_DIR, f"sb_{_mp.replace('.', '_')}.xlsx")
+                            with open(_sbp, "wb") as f: f.write(_sbf.read())
+                            sb_paths[_mp] = _sbp
 
                         _snap_date = (
                             str(_snap_date_override)
@@ -5405,14 +5428,16 @@ with tab_ads:
                             _countries = get_countries_from_report(sp_path)
 
                             if len(_countries) > 1:
-                                # Multi-country report — analyse each country separately
+                                # Multi-country SP report — analyse each country with
+                                # its own marketplace's Sponsored Brands file (if any).
                                 results = []
                                 _mp_list = []
                                 for _country, _mp in _countries.items():
                                     _fx_rate = _fx_rates.get(_mp, 1.0)
                                     _fba_map = get_fba_fees_map(_mp)
                                     _r = analyze_with_products(
-                                        sp_path, sb_path, target_roas, low_impr, cost_map,
+                                        sp_path, sb_paths.get(_mp),
+                                        target_roas, low_impr, cost_map,
                                         min_margin_pct, _mp,
                                         fba_fees_map=_fba_map,
                                         fx_rate=_fx_rate,
@@ -5426,20 +5451,26 @@ with tab_ads:
                                     record_placement_snapshots(_r, _snap_date, _mp)
                                     record_bid_changes(_r, _snap_date, _mp)
                                 detected_marketplace = _mp_list[0] if _mp_list else "amazon.com"
-                                st.info(f"Multi-country report detected: {', '.join(_countries.keys())}")
+                                _sb_note = (f" · SB for: {', '.join(sb_files.keys())}"
+                                            if sb_files else " · no SB files")
+                                st.info(f"Multi-country report detected: "
+                                        f"{', '.join(_countries.keys())}{_sb_note}")
                             else:
-                                # Single-country report — existing behaviour
+                                # Single-country SP report — use the matching SB file,
+                                # falling back to whichever single SB file was uploaded.
                                 detected_marketplace = detect_marketplace_from_xlsx(sp_path)
+                                _sb_single = sb_paths.get(detected_marketplace) or (
+                                    next(iter(sb_paths.values())) if sb_paths else None)
                                 _fx_rate  = _fx_rates.get(detected_marketplace, 1.0)
                                 _fba_map  = get_fba_fees_map(detected_marketplace)
                                 results = analyze_with_products(
-                                    sp_path, sb_path, target_roas, low_impr, cost_map,
+                                    sp_path, _sb_single, target_roas, low_impr, cost_map,
                                     min_margin_pct, detected_marketplace,
                                     fba_fees_map=_fba_map,
                                     fx_rate=_fx_rate,
                                 )
                         finally:
-                            for p in [sp_path, sb_path]:
+                            for p in [sp_path, *sb_paths.values()]:
                                 if os.path.exists(p): os.unlink(p)
 
                     # ── Save performance snapshot for backfire detection ──────────────

@@ -147,7 +147,16 @@ _PAUSED_LAG_DAYS = 7   # campaigns whose last End Date is ≥ this many days bef
                         # report's overall End Date are considered paused/archived
 
 
+_EMPTY_AGG_COLS = ['Campaign', 'PL', 'Impressions', 'Clicks', 'Spend', 'Sales',
+                   'Orders', 'CTR', 'CPC', 'ROAS', 'ACOS', 'BidAdj', 'is_paused']
+
+
 def load_and_aggregate(path: str, sales_col: str, country_filter: str = None) -> pd.DataFrame:
+    # No file supplied (e.g. no Sponsored Brands report for this marketplace) →
+    # return an empty aggregate so analysis proceeds on the other ad type.
+    if not path:
+        return pd.DataFrame(columns=_EMPTY_AGG_COLS)
+
     df = pd.read_excel(path)
     df.columns = df.columns.str.strip()
 
