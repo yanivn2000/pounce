@@ -400,6 +400,48 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
+# ── Reusable marketplace selector ─────────────────────────────────────────────
+def mp_quick_selector(all_mps, key, label="Marketplaces", show_label=False):
+    """Marketplace multiselect with one-click presets:
+    🌍 All · ⭐ Major 3 (US·CA·UK) · 🌎 NA (US·CA) · 🇪🇺 EU · 🧹 Clear.
+    Presets appear only when those markets exist in the data. An empty
+    selection is treated as 'all'. Returns the selected marketplace list."""
+    all_mps = list(all_mps)
+    # Init / prune session state (drop markets no longer present)
+    if key not in st.session_state:
+        st.session_state[key] = list(all_mps)
+    else:
+        st.session_state[key] = [m for m in st.session_state[key] if m in all_mps]
+
+    _major = [m for m in ("US", "CA", "UK") if m in all_mps]
+    _na    = [m for m in ("US", "CA") if m in all_mps]
+    _eu    = [m for m in ("UK", "DE", "FR", "ES", "IT", "NL", "BE", "IE", "PL", "SE")
+              if m in all_mps]
+
+    _presets = [("🌍 All", list(all_mps), "All marketplaces")]
+    if _major:
+        _presets.append(("⭐ Major 3", _major, "US · CA · UK"))
+    if _na:
+        _presets.append(("🌎 NA", _na, "US · CA"))
+    if _eu:
+        _presets.append(("🇪🇺 EU", _eu, "UK + EU marketplaces"))
+    _presets.append(("🧹 Clear", [], "Remove all — then pick your own"))
+
+    _cols = st.columns(len(_presets))
+    for _i, (_lbl, _val, _hlp) in enumerate(_presets):
+        # Setting session_state before the multiselect is created is safe; the
+        # button click already triggers the rerun that applies it.
+        if _cols[_i].button(_lbl, key=f"{key}__preset{_i}",
+                            use_container_width=True, help=_hlp):
+            st.session_state[key] = _val
+
+    sel = st.multiselect(
+        label, all_mps, key=key, placeholder="All marketplaces",
+        label_visibility="visible" if show_label else "collapsed",
+    )
+    return sel or list(all_mps)
+
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 if _current_role == "admin":
     tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_summary, tab_cashflow, tab_occasions, tab_datahealth, tab_admin = st.tabs([
@@ -5941,35 +5983,7 @@ with tab_amazon:
             _sel_year = st.selectbox("Year", _amz_years, key="amz_year")
         with _fa2:
             st.markdown("Marketplaces")
-            # Region presets (only shown when those markets exist in the data)
-            _NA = [m for m in _amz_all_mps if m in ("US", "CA", "MX")]
-            _EU = [m for m in _amz_all_mps
-                   if m in ("UK", "DE", "FR", "ES", "IT", "NL", "BE", "IE", "PL", "SE")]
-
-            # Initialise / prune the selection (drop markets no longer present)
-            if "amz_mps" not in st.session_state:
-                st.session_state["amz_mps"] = list(_amz_all_mps)
-            else:
-                st.session_state["amz_mps"] = [
-                    m for m in st.session_state["amz_mps"] if m in _amz_all_mps
-                ]
-
-            _qb = st.columns(4)
-            if _qb[0].button("🌍 All", key="mps_all", use_container_width=True):
-                st.session_state["amz_mps"] = list(_amz_all_mps)
-            if _qb[1].button("🧹 Clear", key="mps_clear", use_container_width=True):
-                st.session_state["amz_mps"] = []
-            if _NA and _qb[2].button("🌎 N. America", key="mps_na", use_container_width=True):
-                st.session_state["amz_mps"] = _NA
-            if _EU and _qb[3].button("🇪🇺 EU", key="mps_eu", use_container_width=True):
-                st.session_state["amz_mps"] = _EU
-
-            _sel_mps = st.multiselect(
-                "Marketplaces", _amz_all_mps, key="amz_mps",
-                placeholder="All marketplaces", label_visibility="collapsed",
-            )
-        if not _sel_mps:
-            _sel_mps = _amz_all_mps
+            _sel_mps = mp_quick_selector(_amz_all_mps, key="amz_mps")
 
         _mp_ph = ",".join("?" * len(_sel_mps))
         _amz_params = [_sel_year] + _sel_mps
@@ -6607,19 +6621,12 @@ with tab_summary:
         st.info("No Amazon Order data yet — upload Transaction View files in the "
                 "🛒 Amazon Transactions tab first.")
     else:
-        _sc1, _sc2, _sc3 = st.columns([1.3, 3, 1])
+        _sc1, _sc3 = st.columns([2, 1])
         with _sc1:
             _sum_pick = st.selectbox(
                 "Month", _sum_months,
                 format_func=lambda p: f"{p[1]} {p[0]}",
                 key="sum_month",
-            )
-        _sum_all_mps = all_marketplaces(_sum_conn)
-        with _sc2:
-            _sum_mps = st.multiselect(
-                "Marketplaces (default: all)", _sum_all_mps,
-                default=_sum_all_mps, key="sum_mps",
-                help="Combined and converted to USD.",
             )
         with _sc3:
             _sum_thr = st.number_input(
@@ -6627,8 +6634,10 @@ with tab_summary:
                 key="sum_threshold",
                 help="Flag a change as dramatic when it exceeds this %.",
             ) / 100.0
-        if not _sum_mps:
-            _sum_mps = _sum_all_mps
+        _sum_all_mps = all_marketplaces(_sum_conn)
+        st.markdown("Marketplaces &nbsp;<span style='color:#999;font-size:0.8rem'>"
+                    "(combined, converted to USD)</span>", unsafe_allow_html=True)
+        _sum_mps = mp_quick_selector(_sum_all_mps, key="sum_mps")
 
         _sum_y, _sum_mname = _sum_pick
         _sum_ym = f"{_sum_y:04d}-{_SUM_MONTHS.index(_sum_mname)+1:02d}"
