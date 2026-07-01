@@ -781,8 +781,7 @@ def render_amazon_upload_ui(conn):
     )
 
     uploaded = st.file_uploader(
-        "בחר קובץ CSV/TSV/TXT",
-        type=["csv", "tsv", "txt"],
+        "בחר קובץ CSV/TSV",
         key="amazon_tx_uploader"
     )
 
