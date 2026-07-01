@@ -217,11 +217,35 @@ def _orders_by_asin(conn, start: str, end: str) -> dict:
     return out
 
 
-def get_theme_performance(days: int = 365) -> list[dict]:
-    """Per-theme performance over the trailing `days`, with prior-period growth.
+def get_order_months() -> list[tuple[int, int]]:
+    """(year, month) pairs that have (non-cancelled) order rows, newest first."""
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT DISTINCT substr(order_date, 1, 7) AS ym
+        FROM orders
+        WHERE order_date IS NOT NULL AND asin IS NOT NULL AND asin != ''
+          AND COALESCE(order_status,'') NOT IN ('Cancelled','Pending')
+    """).fetchall()
+    conn.close()
+    out = set()
+    for (ym,) in rows:
+        try:
+            out.add((int(ym[:4]), int(ym[5:7])))
+        except (TypeError, ValueError):
+            continue
+    return sorted(out, reverse=True)
+
+
+def get_theme_performance(days: int = 365, start: str = None,
+                          end: str = None) -> list[dict]:
+    """Per-theme performance over a period, with year-over-year growth.
+
+    Period is either the trailing `days` (default) or an explicit [start, end)
+    date window (ISO 'YYYY-MM-DD') — used for a specific calendar month.
 
     Each dict: theme, label, n_skus, units, revenue, cogs, gross_profit,
-    margin_pct, rev_per_sku, profit_per_sku, prior_revenue, growth_pct.
+    margin_pct, rev_per_sku, profit_per_sku, units_per_sku, prior_revenue,
+    growth_pct.
 
     growth_pct is **year-over-year**: this period vs the SAME calendar window
     one year earlier. This removes seasonality (Q4 gift peak), which an adjacent
@@ -230,11 +254,18 @@ def get_theme_performance(days: int = 365) -> list[dict]:
     """
     conn = get_conn()
     today = _dt.date.today()
-    p_start = (today - _dt.timedelta(days=days)).isoformat()
-    p_end   = today.isoformat()
-    # Year-over-year baseline: same window, one year earlier
-    yoy_start = (today - _dt.timedelta(days=days + 365)).isoformat()
-    yoy_end   = (today - _dt.timedelta(days=365)).isoformat()
+    if start and end:
+        p_start, p_end = start, end
+        _s = _dt.date.fromisoformat(start[:10])
+        _e = _dt.date.fromisoformat(end[:10])
+        yoy_start = _s.replace(year=_s.year - 1).isoformat()
+        yoy_end   = _e.replace(year=_e.year - 1).isoformat()
+    else:
+        p_start = (today - _dt.timedelta(days=days)).isoformat()
+        p_end   = today.isoformat()
+        # Year-over-year baseline: same window, one year earlier
+        yoy_start = (today - _dt.timedelta(days=days + 365)).isoformat()
+        yoy_end   = (today - _dt.timedelta(days=365)).isoformat()
 
     init_theme_tables(conn)
     membership = get_theme_membership(conn)   # {theme_id: {name,label,asins}}
@@ -273,6 +304,7 @@ def get_theme_performance(days: int = 365) -> list[dict]:
             "margin_pct": round(100 * gp / a["revenue"], 1) if a["revenue"] else 0.0,
             "rev_per_sku": round(a["revenue"] / n, 0),
             "profit_per_sku": round(gp / n, 0),
+            "units_per_sku": round(a["units"] / n, 1),
             "prior_revenue": round(a["prior_revenue"], 0),
             "growth_pct": (round(100 * (a["revenue"] - a["prior_revenue"]) / a["prior_revenue"], 0)
                            if a["prior_revenue"] > 0 else None),

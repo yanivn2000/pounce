@@ -3331,6 +3331,7 @@ with tab_sales:
         from db.themes import (
             get_theme_performance, get_themes, get_all_products, get_theme_skus,
             create_theme, rename_theme, delete_theme, set_theme_skus,
+            get_order_months,
         )
 
         st.markdown(
@@ -3428,13 +3429,38 @@ with tab_sales:
                     delete_theme(_sel_id)
                     st.success(f"Deleted '{_sel['label']}'."); st.rerun()
 
-        _tc1, _tc2 = st.columns([1, 3])
+        import calendar as _cal
+        from datetime import date as _tdate
+        # Period options: trailing windows + each calendar month that has orders
+        _order_months = get_order_months()
+        _month_labels = {f"{_cal.month_name[_mo]} {_y}": (_y, _mo)
+                         for (_y, _mo) in _order_months}
+        _period_opts = ["Last 90 days", "Last 180 days", "Last 365 days"] \
+            + list(_month_labels.keys())
+
+        _tc1, _tc2, _tc3 = st.columns([1.5, 1.6, 1.9])
         with _tc1:
-            _theme_days = st.selectbox(
-                "Period", [90, 180, 365], index=2, key="theme_days",
-                format_func=lambda d: f"Last {d} days",
+            _sel_period = st.selectbox(
+                "Period", _period_opts, index=2, key="theme_period",
             )
-        _themes = get_theme_performance(int(_theme_days))
+        with _tc2:
+            _view_mode = st.radio(
+                "View", ["Totals", "Per SKU (avg)"], horizontal=True,
+                key="theme_view_mode",
+                help="Per-SKU divides each theme by its number of SKUs so themes "
+                     "with many vs few products can be compared fairly.",
+            )
+        _per_sku = _view_mode.startswith("Per SKU")
+
+        if _sel_period.startswith("Last "):
+            _theme_days = int(_sel_period.split()[1])
+            _themes = get_theme_performance(days=_theme_days)
+        else:
+            _py, _pmo = _month_labels[_sel_period]
+            _p_start = _tdate(_py, _pmo, 1)
+            _p_end = _tdate(_py + 1, 1, 1) if _pmo == 12 else _tdate(_py, _pmo + 1, 1)
+            _themes = get_theme_performance(
+                start=_p_start.isoformat(), end=_p_end.isoformat())
 
         if not _themes:
             st.info("No order data in this period yet.")
@@ -3461,30 +3487,69 @@ with tab_sales:
                       if t["n_skus"] <= 6 and (t["growth_pct"] is None or t["growth_pct"] >= 0)][:3]
             if _ideas:
                 _txt = " · ".join(
-                    f"**{t['label']}** (${t['rev_per_sku']:,.0f}/SKU, {t['n_skus']} SKUs"
+                    f"**{t['label']}** (\\${t['rev_per_sku']:,.0f}/SKU, {t['n_skus']} SKUs"
                     + (f", {t['growth_pct']:+.0f}%" if t['growth_pct'] is not None else "") + ")"
                     for t in _ideas
                 )
                 st.success(f"💡 **Develop next:** {_txt} — high revenue per product from few SKUs "
                            f"means room to add variations.")
 
-            # Full table
-            _rows = []
-            for t in _themes:
-                _rows.append({
-                    "Theme":      t["label"],
-                    "SKUs":       t["n_skus"],
-                    "Units":      t["units"],
-                    "Revenue":    t["revenue"],
-                    "% of sales": round(100 * t["revenue"] / _tot_rev, 1),
-                    "Gross profit": t["gross_profit"],
-                    "Margin %":   t["margin_pct"],
-                    "$ / SKU":    t["rev_per_sku"],
-                    "YoY %":      t["growth_pct"],
-                })
-            st.dataframe(
-                pd.DataFrame(_rows), use_container_width=True, hide_index=True,
-                column_config={
+            # Full table — Totals or Per-SKU average, depending on the view toggle
+            if _per_sku:
+                _rows = []
+                for t in _themes:
+                    _rows.append({
+                        "Theme":            t["label"],
+                        "SKUs":             t["n_skus"],
+                        "Units / SKU":      t["units_per_sku"],
+                        "Revenue / SKU":    t["rev_per_sku"],
+                        "Gross profit / SKU": t["profit_per_sku"],
+                        "Margin %":         t["margin_pct"],
+                        "YoY %":            t["growth_pct"],
+                    })
+                # Default sort: best revenue per SKU first (the fair comparison)
+                _rows.sort(key=lambda r: r["Revenue / SKU"], reverse=True)
+                _colcfg = {
+                    "Theme": st.column_config.TextColumn(
+                        help="Gift niche, inferred from product names. Themes overlap — a "
+                             "'Best Grandma' mug counts in both Grandparents and Grandma."),
+                    "SKUs": st.column_config.NumberColumn(
+                        help="Distinct products in this theme that sold during the period."),
+                    "Units / SKU": st.column_config.NumberColumn(
+                        format="%.1f",
+                        help="Units sold ÷ number of SKUs — average units per product."),
+                    "Revenue / SKU": st.column_config.NumberColumn(
+                        format="$%d",
+                        help="Revenue ÷ number of SKUs — average revenue per product. "
+                             "Normalizes themes with many vs few SKUs so they compare fairly."),
+                    "Gross profit / SKU": st.column_config.NumberColumn(
+                        format="$%d",
+                        help="Gross profit ÷ number of SKUs — average profit per product "
+                             "(Revenue − COGS, before Amazon fees/ads)."),
+                    "Margin %": st.column_config.NumberColumn(
+                        format="%.1f%%",
+                        help="Gross profit ÷ Revenue. A ratio, so it's the same in Totals and "
+                             "Per-SKU views. Excludes Amazon fees and ad spend."),
+                    "YoY %": st.column_config.NumberColumn(
+                        format="%+.0f%%",
+                        help="Year-over-year growth: this period vs the SAME window one year "
+                             "ago. '—' = no sales in that window a year ago."),
+                }
+            else:
+                _rows = []
+                for t in _themes:
+                    _rows.append({
+                        "Theme":      t["label"],
+                        "SKUs":       t["n_skus"],
+                        "Units":      t["units"],
+                        "Revenue":    t["revenue"],
+                        "% of sales": round(100 * t["revenue"] / _tot_rev, 1),
+                        "Gross profit": t["gross_profit"],
+                        "Margin %":   t["margin_pct"],
+                        "$ / SKU":    t["rev_per_sku"],
+                        "YoY %":      t["growth_pct"],
+                    })
+                _colcfg = {
                     "Theme": st.column_config.TextColumn(
                         help="Gift niche, inferred from product names. Themes overlap — a "
                              "'Best Grandma' mug counts in both Grandparents and Grandma."),
@@ -3517,14 +3582,25 @@ with tab_sales:
                         help="Year-over-year growth: revenue this period vs the SAME calendar "
                              "window one year ago. Removes seasonality (Q4 gift peak). '—' = no "
                              "sales in that window a year ago."),
-                },
+                }
+            st.dataframe(
+                pd.DataFrame(_rows), use_container_width=True, hide_index=True,
+                column_config=_colcfg,
             )
-            st.caption(
-                "Themes overlap on purpose (a 'Best Grandma' mug counts in both Grandparents "
-                "and Grandma), so columns sum to more than 100%. Gross profit = revenue − COGS, "
-                "**before** Amazon fees/ads (so the ~90% margins are not take-home). "
-                "YoY % compares to the same window one year ago to neutralise seasonality."
-            )
+            if _per_sku:
+                st.caption(
+                    "**Per-SKU view** — every $ column is divided by the theme's SKU count, "
+                    "so a 3-SKU theme and an 11-SKU theme compare fairly (which product "
+                    "*pulls its weight* best). Sorted by Revenue / SKU. Margin % is a ratio "
+                    "so it's unchanged. Gross profit is **before** Amazon fees/ads."
+                )
+            else:
+                st.caption(
+                    "Themes overlap on purpose (a 'Best Grandma' mug counts in both Grandparents "
+                    "and Grandma), so columns sum to more than 100%. Gross profit = revenue − COGS, "
+                    "**before** Amazon fees/ads (so the ~90% margins are not take-home). "
+                    "YoY % compares to the same window one year ago to neutralise seasonality."
+                )
 
     # ══════════════════════════════════════════════════════════════════════════
     # BUNDLES VIEW
