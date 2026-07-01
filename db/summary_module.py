@@ -341,51 +341,59 @@ def _month_window(year, mnum):
     return start.isoformat(), end.isoformat()
 
 
-def compute_theme_movers(ym: str, top_n=6) -> dict:
-    """Per-theme revenue this month vs previous month, with top movers.
-    All-marketplaces (orders table). Returns {} if themes/orders unavailable."""
+def _theme_movers_between(get_perf, cur_w, base_w, top_n) -> dict:
+    """Theme revenue movers: current window vs a baseline window."""
+    empty = {"all": [], "gainers": [], "losers": []}
     try:
-        from db.themes import get_theme_performance
+        cur = {t["theme"]: t for t in get_perf(start=cur_w[0], end=cur_w[1])}
+        base = {t["theme"]: t for t in get_perf(start=base_w[0], end=base_w[1])}
     except Exception:
-        return {"all": [], "gainers": [], "losers": []}
-
-    year, mnum = int(ym[:4]), int(ym[5:7])
-    prev_y, prev_num = (year - 1, 12) if mnum == 1 else (year, mnum - 1)
-    cur_s, cur_e = _month_window(year, mnum)
-    prev_s, prev_e = _month_window(prev_y, prev_num)
-
-    try:
-        cur = {t["theme"]: t for t in get_theme_performance(start=cur_s, end=cur_e)}
-        prev = {t["theme"]: t for t in get_theme_performance(start=prev_s, end=prev_e)}
-    except Exception:
-        return {"all": [], "gainers": [], "losers": []}
+        return empty
 
     rows = []
-    for key in set(cur) | set(prev):
+    for key in set(cur) | set(base):
         c = cur.get(key)
-        p = prev.get(key)
+        b = base.get(key)
         rev_now = float(c["revenue"]) if c else 0.0
-        rev_prev = float(p["revenue"]) if p else 0.0
+        rev_prev = float(b["revenue"]) if b else 0.0
         delta = rev_now - rev_prev
         pct = (delta / rev_prev) if rev_prev > 0 else None
         rows.append({
-            "theme": (c or p)["label"],
+            "theme": (c or b)["label"],
             "revenue_now": round(rev_now, 0),
             "revenue_prev": round(rev_prev, 0),
             "rev_per_sku": (c["rev_per_sku"] if c else 0),
             "n_skus": (c["n_skus"] if c else 0),
-            "margin_pct": (c["margin_pct"] if c else (p["margin_pct"] if p else 0)),
-            "yoy_pct": (c["growth_pct"] if c else None),
+            "margin_pct": (c["margin_pct"] if c else (b["margin_pct"] if b else 0)),
             "delta_abs": round(delta, 0),
             "delta_pct": round(pct, 4) if pct is not None else None,
         })
-
     rows.sort(key=lambda r: r["revenue_now"], reverse=True)
     gainers = sorted([r for r in rows if r["delta_abs"] > 0],
                      key=lambda r: r["delta_abs"], reverse=True)[:top_n]
     losers = sorted([r for r in rows if r["delta_abs"] < 0],
                     key=lambda r: r["delta_abs"])[:top_n]
     return {"all": rows, "gainers": gainers, "losers": losers}
+
+
+def compute_theme_movers(ym: str, top_n=6) -> dict:
+    """Per-theme revenue movers vs previous month (mom) AND same month last
+    year (yoy). All-marketplaces (orders table)."""
+    empty = {"all": [], "gainers": [], "losers": []}
+    try:
+        from db.themes import get_theme_performance
+    except Exception:
+        return {"mom": empty, "yoy": empty}
+
+    year, mnum = int(ym[:4]), int(ym[5:7])
+    prev_y, prev_num = (year - 1, 12) if mnum == 1 else (year, mnum - 1)
+    cur_w = _month_window(year, mnum)
+    prev_w = _month_window(prev_y, prev_num)
+    ly_w = _month_window(year - 1, mnum)   # same month, one year earlier
+    return {
+        "mom": _theme_movers_between(get_theme_performance, cur_w, prev_w, top_n),
+        "yoy": _theme_movers_between(get_theme_performance, cur_w, ly_w, top_n),
+    }
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

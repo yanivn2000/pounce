@@ -6752,59 +6752,49 @@ with tab_summary:
 
         # ── Theme movers ────────────────────────────────────────────────────────
         _tm = _stats.get("theme_movers") or {}
-        if _tm.get("all"):
-            st.markdown("#### 🎯 Theme Movers (revenue vs previous month)")
-            st.caption("Curated gift-niche themes, across **all marketplaces** "
-                       "(from the Themes tab) — regardless of the scope above.")
 
-            def _theme_list(items, positive):
-                if not items:
-                    st.caption("— none —")
-                    return
-                for it in items:
-                    _arrow = "▲" if positive else "▼"
-                    _col = "#1e8449" if positive else "#c0392b"
-                    _pctv = _pct_str(it["delta_pct"]) if it["delta_pct"] is not None else "new"
-                    st.markdown(
-                        f"<div style='font-size:0.82rem;margin-bottom:3px'>"
-                        f"<span style='color:{_col};font-weight:600'>{_arrow} ${abs(it['delta_abs']):,.0f}</span> "
-                        f"<span style='color:#888'>({_pctv})</span> "
-                        f"{it['theme']} "
-                        f"<span style='color:#aaa'>· ${it['revenue_prev']:,.0f}→${it['revenue_now']:,.0f}"
-                        f" · ${it['rev_per_sku']:,.0f}/SKU</span>"
-                        f"</div>", unsafe_allow_html=True,
-                    )
+        def _theme_list(items, positive):
+            if not items:
+                st.caption("— none —")
+                return
+            for it in items:
+                _arrow = "▲" if positive else "▼"
+                _col = "#1e8449" if positive else "#c0392b"
+                _pctv = _pct_str(it["delta_pct"]) if it["delta_pct"] is not None else "new"
+                st.markdown(
+                    f"<div style='font-size:0.82rem;margin-bottom:3px'>"
+                    f"<span style='color:{_col};font-weight:600'>{_arrow} ${abs(it['delta_abs']):,.0f}</span> "
+                    f"<span style='color:#888'>({_pctv})</span> "
+                    f"{it['theme']} "
+                    f"<span style='color:#aaa'>· ${it['revenue_prev']:,.0f}→${it['revenue_now']:,.0f}"
+                    f" · ${it['rev_per_sku']:,.0f}/SKU</span>"
+                    f"</div>", unsafe_allow_html=True,
+                )
 
+        def _render_theme_movers(block):
             _tgcol, _tlcol = st.columns(2)
             with _tgcol:
                 st.markdown("**Top gainers**")
-                _theme_list(_tm["gainers"], True)
+                _theme_list(block["gainers"], True)
             with _tlcol:
                 st.markdown("**Top losers**")
-                _theme_list(_tm["losers"], False)
+                _theme_list(block["losers"], False)
 
-            with st.expander("📊 All themes this month"):
-                _trows = [{
-                    "Theme": r["theme"],
-                    "SKUs": r["n_skus"],
-                    "Revenue": r["revenue_now"],
-                    "vs prev": r["delta_pct"] * 100 if r["delta_pct"] is not None else None,
-                    "$ / SKU": r["rev_per_sku"],
-                    "Margin %": r["margin_pct"],
-                    "YoY %": r["yoy_pct"],
-                } for r in _tm["all"]]
-                st.dataframe(
-                    pd.DataFrame(_trows), use_container_width=True, hide_index=True,
-                    column_config={
-                        "Revenue": st.column_config.NumberColumn(format="$%d"),
-                        "vs prev": st.column_config.NumberColumn(
-                            format="%+.0f%%", help="Revenue change vs previous month."),
-                        "$ / SKU": st.column_config.NumberColumn(format="$%d"),
-                        "Margin %": st.column_config.NumberColumn(format="%.1f%%"),
-                        "YoY %": st.column_config.NumberColumn(
-                            format="%+.0f%%", help="Revenue vs the same month last year."),
-                    },
-                )
+        _tm_mom = _tm.get("mom") or {}
+        _tm_yoy = _tm.get("yoy") or {}
+        if _tm_mom.get("all") or _tm_yoy.get("all"):
+            # MoM
+            st.markdown("#### 🎯 Theme Movers (revenue vs previous month)")
+            st.caption("Curated gift-niche themes, across **all marketplaces** "
+                       "(from the Themes tab) — regardless of the scope above.")
+            _render_theme_movers(_tm_mom)
+
+            # YoY — same month last year
+            st.markdown(
+                f"#### 🎯 Theme Movers (revenue vs {_stats['last_year_label']})")
+            st.caption("Same month last year — the seasonality-aware view for "
+                       "gift themes.")
+            _render_theme_movers(_tm_yoy)
 
         # ── AI narrative (cached once per month/scope) ──────────────────────────
         st.divider()

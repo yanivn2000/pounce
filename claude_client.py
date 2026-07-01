@@ -39,9 +39,10 @@ You receive a JSON object with pre-computed, authoritative numbers:
 - product_movers_yoy: the same, but vs the SAME MONTH LAST YEAR. For this seasonal
   gift business this is the more meaningful product comparison — call it out, and keep
   "improved existing SKUs" distinct from "new SKUs launched since last year".
-- theme_movers: curated gift-niche themes (e.g. Couples, Grandparents) with this
-  month's revenue vs last month, revenue-per-SKU, margin and YoY. These are across
-  ALL marketplaces regardless of scope.
+- theme_movers: curated gift-niche themes (e.g. Couples, Grandparents), split into
+  mom (revenue vs previous month) and yoy (vs the same month last year), each with
+  gainers/losers by revenue and revenue-per-SKU. Across ALL marketplaces regardless
+  of scope. Emphasize the yoy view for this seasonal business.
 
 Hard rules:
 - Use ONLY the numbers provided. NEVER invent, estimate or recompute any figure.
