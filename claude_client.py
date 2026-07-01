@@ -32,7 +32,10 @@ You receive a JSON object with pre-computed, authoritative numbers:
 - metrics: P&L lines with current month, previous month and same-month-last-year values,
   plus month-over-month (mom) and year-over-year (yoy) absolute and % changes, and
   flags ("good"/"bad"/null) marking changes the system already deemed dramatic.
-- product_movers: biggest gainers, losers, new and dropped products by sales.
+- product_movers: biggest gainers, losers, new and dropped products by sales vs the
+  PREVIOUS month, each identified by asin/sku (titles are near-identical).
+- product_movers_yoy: the same, but vs the SAME MONTH LAST YEAR. For this seasonal
+  gift business this is the more meaningful product comparison — call it out.
 - theme_movers: curated gift-niche themes (e.g. Couples, Grandparents) with this
   month's revenue vs last month, revenue-per-SKU, margin and YoY. These are across
   ALL marketplaces regardless of scope.
@@ -43,7 +46,9 @@ Hard rules:
 - All money values are in USD. Format as $ with thousands separators, no decimals.
 - Lead with the headline: total income and profit direction vs last month and last year.
 - Call out every metric flagged "bad" as a concern, and flagged "good" as a positive.
-- Name the top 2-3 product movers (gainers and losers) with their sales change.
+- Name the top 2-3 product movers (gainers and losers) with their sales change,
+  and separately highlight the year-over-year product movers (product_movers_yoy),
+  since holidays recur in the same month each year.
 - Add a short "Themes" note: the standout theme(s) by revenue and by revenue-per-SKU,
   and any theme with a big month-over-month swing.
 - If cogs_available is false, say profit is shown before COGS (equals net payout) and

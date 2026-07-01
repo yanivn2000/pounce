@@ -6666,9 +6666,6 @@ with tab_summary:
                        "equals Net Payout, before product cost.")
 
         # ── Product movers ──────────────────────────────────────────────────────
-        st.markdown("#### 🚀 Product Movers (by sales, vs previous month)")
-        _pm = _stats["product_movers"]
-
         def _mover_list(items, positive):
             if not items:
                 st.caption("— none —")
@@ -6677,25 +6674,44 @@ with tab_summary:
                 _arrow = "▲" if positive else "▼"
                 _col = "#1e8449" if positive else "#c0392b"
                 _pctv = _pct_str(it["delta_pct"]) if it["delta_pct"] is not None else "new"
+                _img = it.get("image") or ""
+                _thumb = (f"<img src='{_img}' style='height:30px;width:30px;object-fit:cover;"
+                          f"border-radius:4px;vertical-align:middle;margin-right:6px'>") if _img else \
+                         ("<span style='display:inline-block;width:30px;height:30px;"
+                          "background:#eee;border-radius:4px;vertical-align:middle;margin-right:6px'></span>")
+                _asin = it.get("asin", "")
+                _sku = it.get("sku", "")
+                _idlabel = _asin + (f" · {_sku}" if _sku else "")
                 st.markdown(
-                    f"<div style='font-size:0.82rem;margin-bottom:3px'>"
+                    f"<div style='font-size:0.82rem;margin-bottom:5px;display:flex;align-items:center'>"
+                    f"{_thumb}"
+                    f"<span>"
                     f"<span style='color:{_col};font-weight:600'>{_arrow} ${abs(it['delta_abs']):,.0f}</span> "
                     f"<span style='color:#888'>({_pctv})</span> "
+                    f"<span style='font-family:monospace;font-size:0.72rem;color:#2563eb'>{_idlabel}</span> "
                     f"{it['product']} "
                     f"<span style='color:#aaa'>· ${it['sales_prev']:,.0f}→${it['sales_now']:,.0f}</span>"
-                    f"</div>", unsafe_allow_html=True,
+                    f"</span></div>", unsafe_allow_html=True,
                 )
 
-        _gcol, _lcol = st.columns(2)
-        with _gcol:
-            st.markdown("**Top gainers**")
-            _mover_list(_pm["gainers"], True)
-        with _lcol:
-            st.markdown("**Top losers**")
-            _mover_list(_pm["losers"], False)
+        def _render_product_movers(pm, positive_label="Top gainers"):
+            _gcol, _lcol = st.columns(2)
+            with _gcol:
+                st.markdown(f"**{positive_label}**")
+                _mover_list(pm["gainers"], True)
+            with _lcol:
+                st.markdown("**Top losers**")
+                _mover_list(pm["losers"], False)
+
+        # MoM
+        st.markdown("#### 🚀 Product Movers (by sales, vs previous month)")
+        st.caption("Identified by **ASIN · SKU** (titles are near-identical) · "
+                   "all marketplaces.")
+        _pm = _stats["product_movers"]
+        _render_product_movers(_pm)
 
         if _pm["new_products"] or _pm["dropped_products"]:
-            with st.expander("🆕 New & dropped products"):
+            with st.expander("🆕 New & dropped products (vs previous month)"):
                 _ncol, _dcol = st.columns(2)
                 with _ncol:
                     st.markdown("**New this month**")
@@ -6703,6 +6719,24 @@ with tab_summary:
                 with _dcol:
                     st.markdown("**Dropped (no sales this month)**")
                     _mover_list(_pm["dropped_products"], False)
+
+        # YoY — same month last year (seasonality-aware, key for gift/holiday sales)
+        _pm_yoy = _stats.get("product_movers_yoy")
+        if _pm_yoy:
+            st.markdown(
+                f"#### 🚀 Product Movers (by sales, vs {_stats['last_year_label']})")
+            st.caption("Same month last year — the right lens for seasonal gifts "
+                       "(holidays recur in the same month). ASIN · SKU · all marketplaces.")
+            _render_product_movers(_pm_yoy)
+            if _pm_yoy["new_products"] or _pm_yoy["dropped_products"]:
+                with st.expander(f"🆕 New & dropped products (vs {_stats['last_year_label']})"):
+                    _ncol, _dcol = st.columns(2)
+                    with _ncol:
+                        st.markdown("**New vs last year**")
+                        _mover_list(_pm_yoy["new_products"], True)
+                    with _dcol:
+                        st.markdown("**Dropped vs last year**")
+                        _mover_list(_pm_yoy["dropped_products"], False)
 
         # ── Theme movers ────────────────────────────────────────────────────────
         _tm = _stats.get("theme_movers") or {}

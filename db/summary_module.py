@@ -241,51 +241,68 @@ def _cogs_for_month(conn, year, month_name, mps, fx) -> float:
 
 
 # ── Product movers ────────────────────────────────────────────────────────────
+# Sourced from the orders table and keyed by ASIN (not title) so near-identical
+# product titles are disambiguated. All-marketplaces (orders marketplace codes
+# differ from the P&L codes), consistent with theme movers.
 
-def _product_sales(conn, year, month_name, mps, fx) -> dict:
-    """{product_details: {'sales':usd, 'net':usd, 'orders':n}} for Order rows."""
-    ph = ",".join("?" * len(mps))
-    rows = conn.execute(
-        f"SELECT product_details, currency, "
-        f"SUM(gross_sales) AS g, SUM(net_total) AS n, COUNT(*) AS c "
-        f"FROM amazon_transactions "
-        f"WHERE year=? AND month=? AND tx_type='Order' AND marketplace IN ({ph}) "
-        f"GROUP BY product_details, currency",
-        [year, month_name, *mps]).fetchall()
-    out: dict = {}
-    for pd, cur, g, n, c in rows:
-        key = (pd or "").strip()
-        if not key:
-            continue
-        d = out.setdefault(key, {"sales": 0.0, "net": 0.0, "orders": 0})
-        d["sales"] += _to_usd(float(g or 0), cur, fx)
-        d["net"] += _to_usd(float(n or 0), cur, fx)
-        d["orders"] += int(c or 0)
-    return out
-
-
-def _short(name: str, n: int = 60) -> str:
+def _short(name: str, n: int = 55) -> str:
     return name if len(name) <= n else name[: n - 1] + "…"
 
 
-def _product_movers(conn, cur_y, cur_m, prev_y, prev_m, mps, fx, top_n=5) -> dict:
-    now = _product_sales(conn, cur_y, cur_m, mps, fx)
-    prev = _product_sales(conn, prev_y, prev_m, mps, fx)
+def _orders_by_asin_detailed(conn, start, end, fx) -> dict:
+    """{ASIN: {sales_usd, units, orders, title, sku}} for [start, end)."""
+    rows = conn.execute("""
+        SELECT UPPER(asin) AS asin, currency,
+               SUM(quantity) AS units, SUM(item_price) AS revenue,
+               COUNT(*) AS cnt, MAX(sku) AS sku, MAX(title) AS title
+        FROM orders
+        WHERE substr(order_date,1,10) >= ? AND substr(order_date,1,10) < ?
+          AND COALESCE(order_status,'') NOT IN ('Cancelled','Pending')
+          AND asin IS NOT NULL AND asin != ''
+        GROUP BY UPPER(asin), currency
+    """, (start, end)).fetchall()
+    out: dict = {}
+    for asin, ccy, units, rev, cnt, sku, title in rows:
+        d = out.setdefault(asin, {"sales": 0.0, "units": 0, "orders": 0,
+                                  "title": "", "sku": ""})
+        d["sales"] += _to_usd(float(rev or 0), ccy, fx)
+        d["units"] += int(units or 0)
+        d["orders"] += int(cnt or 0)
+        if not d["title"] and title:
+            d["title"] = title
+        if not d["sku"] and sku:
+            d["sku"] = sku
+    return out
+
+
+def _product_movers(conn, cur_s, cur_e, base_s, base_e, fx,
+                    img_map=None, top_n=5) -> dict:
+    """Per-ASIN sales change: current window [cur_s,cur_e) vs baseline
+    [base_s,base_e). Used for both MoM (prev month) and YoY (same month
+    last year)."""
+    img_map = img_map or {}
+    now = _orders_by_asin_detailed(conn, cur_s, cur_e, fx)
+    base = _orders_by_asin_detailed(conn, base_s, base_e, fx)
 
     movers = []
-    for name in set(now) | set(prev):
-        a = now.get(name, {"sales": 0.0, "net": 0.0, "orders": 0})
-        b = prev.get(name, {"sales": 0.0, "net": 0.0, "orders": 0})
-        delta = a["sales"] - b["sales"]
-        pct = (delta / b["sales"]) if b["sales"] > 0 else None
+    for asin in set(now) | set(base):
+        a = now.get(asin)
+        b = base.get(asin)
+        sales_now = a["sales"] if a else 0.0
+        sales_prev = b["sales"] if b else 0.0
+        delta = sales_now - sales_prev
+        pct = (delta / sales_prev) if sales_prev > 0 else None
+        title = (a or b).get("title") or ""
+        sku = (a or b).get("sku") or ""
         movers.append({
-            "product": _short(name),
-            "sales_now": round(a["sales"], 2),
-            "sales_prev": round(b["sales"], 2),
-            "net_now": round(a["net"], 2),
-            "net_prev": round(b["net"], 2),
-            "orders_now": a["orders"],
-            "orders_prev": b["orders"],
+            "asin": asin,
+            "sku": sku,
+            "product": _short(title),
+            "image": img_map.get(asin, ""),
+            "sales_now": round(sales_now, 2),
+            "sales_prev": round(sales_prev, 2),
+            "units_now": a["units"] if a else 0,
+            "units_prev": b["units"] if b else 0,
             "delta_abs": round(delta, 2),
             "delta_pct": round(pct, 4) if pct is not None else None,
         })
@@ -430,8 +447,18 @@ def build_summary_stats(conn, ym: str, mps: list[str], threshold_pct=0.40) -> di
             "flag_yoy": flag(yoy_pct),
         })
 
-    movers = _product_movers(conn, year, month_name, prev_y, prev_name,
-                             mps, fx, top_n=5)
+    # Product movers (ASIN-based, from orders, all-marketplaces).
+    img_map = {}
+    try:
+        from db.productions import get_asin_image_map
+        img_map = get_asin_image_map()
+    except Exception:
+        img_map = {}
+    cur_s, cur_e = _month_window(year, mnum)
+    prev_s, prev_e = _month_window(prev_y, prev_num)
+    ly_s, ly_e = _month_window(ly_y, mnum)   # same month, one year earlier
+    movers = _product_movers(conn, cur_s, cur_e, prev_s, prev_e, fx, img_map, top_n=5)
+    movers_yoy = _product_movers(conn, cur_s, cur_e, ly_s, ly_e, fx, img_map, top_n=5)
     theme_movers = compute_theme_movers(ym, top_n=6)
 
     return {
@@ -444,5 +471,6 @@ def build_summary_stats(conn, ym: str, mps: list[str], threshold_pct=0.40) -> di
         "cogs_available": cur["cogs"] > 0,
         "metrics": metrics,
         "product_movers": movers,
+        "product_movers_yoy": movers_yoy,
         "theme_movers": theme_movers,
     }
