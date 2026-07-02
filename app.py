@@ -3365,13 +3365,98 @@ with tab_sales:
     # ── View toggle: Orders vs Bundles ────────────────────────────────────────
     _sales_view = st.radio(
         "View",
-        ["📊 Orders", "📦 Bundles", "🎯 Themes"],
+        ["📊 Orders", "📦 Bundles", "🎯 Themes", "🗺️ Geography"],
         horizontal=True,
         key="sales_view_toggle",
         label_visibility="collapsed",
     )
 
     st.markdown("<div style='margin:4px 0 8px;'></div>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # GEOGRAPHY VIEW — sales by state / province / city (where are we strong?)
+    # ══════════════════════════════════════════════════════════════════════════
+    if _sales_view == "🗺️ Geography":
+        from db.geography import geo_sales_by_region, geo_sales_by_city, geo_coverage
+        from datetime import date as _gdate, timedelta as _gtd
+
+        st.markdown(
+            f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>🗺️ Sales by Geography &nbsp;"
+            f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
+            f"Where you're strong — and where there's room to grow.</span></p>",
+            unsafe_allow_html=True,
+        )
+
+        _gcc1, _gcc2 = st.columns([1.4, 1.4])
+        with _gcc1:
+            _geo_country_lbl = st.selectbox(
+                "Country", ["🇺🇸 United States", "🇨🇦 Canada", "🇬🇧 United Kingdom"],
+                key="geo_country",
+            )
+        with _gcc2:
+            _geo_period_lbl = st.selectbox(
+                "Period", ["Last 90 days", "Last 180 days", "Last 365 days", "All time"],
+                key="geo_period",
+            )
+        _geo_cc = {"🇺🇸 United States": "US", "🇨🇦 Canada": "CA",
+                   "🇬🇧 United Kingdom": "GB"}[_geo_country_lbl]
+        _lvl = {"US": "State", "CA": "Province", "GB": "City"}[_geo_cc]
+
+        if _geo_period_lbl == "All time":
+            _g_start = None
+        else:
+            _g_days = {"Last 90 days": 90, "Last 180 days": 180, "Last 365 days": 365}[_geo_period_lbl]
+            _g_start = (_gdate.today() - _gtd(days=_g_days)).isoformat()
+        _g_end = _gdate.today().isoformat()
+
+        _with_addr, _tot = geo_coverage(_geo_cc, _g_start, _g_end)
+        _cov_pct = (100 * _with_addr / _tot) if _tot else 0
+        st.caption(
+            f"📍 Based on **{_with_addr:,}** orders that carry a shipping address "
+            f"({_cov_pct:.0f}% of {_tot:,} in this period). Best for **relative** "
+            f"strength — absolute totals are a lower bound."
+        )
+
+        _regions = geo_sales_by_region(_geo_cc, _g_start, _g_end)
+        if not _regions:
+            st.info("No location data for this country/period yet.")
+        else:
+            _rdf = pd.DataFrame(_regions)
+            st.bar_chart(_rdf.head(15).set_index("region")["revenue"], height=280)
+
+            _tbl = _rdf[["region", "revenue", "share_pct", "units", "orders"]].rename(
+                columns={"region": _lvl, "revenue": "Revenue", "share_pct": "% of sales",
+                         "units": "Units", "orders": "Orders"})
+            _colcfg = {
+                "Revenue":    st.column_config.NumberColumn(format="$%d"),
+                "% of sales": st.column_config.NumberColumn(format="%.1f%%"),
+            }
+            if _geo_cc in ("US", "CA"):
+                st.caption(f"💡 Click a {_lvl.lower()} row to drill into its cities.")
+                _evt = st.dataframe(
+                    _tbl, use_container_width=True, hide_index=True,
+                    on_select="rerun", selection_mode="single-row",
+                    key=f"geo_tbl_{_geo_cc}", column_config=_colcfg,
+                )
+                _sel = _evt.selection.rows if (_evt and _evt.selection) else []
+                if _sel:
+                    _row = _regions[_sel[0]]
+                    _cities = geo_sales_by_city(_geo_cc, _row["key"], _g_start, _g_end)
+                    st.markdown(f"#### 🏙️ Cities in **{_row['region']}**")
+                    if not _cities:
+                        st.caption("No city data.")
+                    else:
+                        _cdf = pd.DataFrame(_cities).rename(columns={
+                            "region": "City", "revenue": "Revenue",
+                            "units": "Units", "orders": "Orders"})
+                        st.dataframe(
+                            _cdf[["City", "Revenue", "Units", "Orders"]],
+                            use_container_width=True, hide_index=True,
+                            column_config={"Revenue": st.column_config.NumberColumn(format="$%d")},
+                        )
+            else:
+                st.dataframe(_tbl, use_container_width=True, hide_index=True,
+                             column_config=_colcfg)
 
     # ══════════════════════════════════════════════════════════════════════════
     # THEMES VIEW — which product niche drives the business + what to develop next
