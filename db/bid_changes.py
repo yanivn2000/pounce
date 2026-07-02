@@ -68,15 +68,23 @@ def record_placement_snapshots(results: list, report_date: str, marketplace: str
 
 # ── Write ─────────────────────────────────────────────────────────────────────
 
-def record_bid_changes(results: list, report_date: str, marketplace: str):
+def record_bid_changes(results: list, report_date: str, marketplace: str,
+                       has_bid_adj: bool = False):
     """
     Called after every analysis run.
     results: list of CampaignResult dataclass instances.
 
-    For each placement, fetch the most recent bid_after stored for that
-    campaign/placement/marketplace.  If it differs from the current bid
-    adjustment, insert a new row.
+    Auto-detects a bid change by comparing the report's current placement bid %
+    to the last stored value. This ONLY works if the report actually contains a
+    bid-adjustment column. Amazon's placement reports do not, so `has_bid_adj`
+    defaults to False and this function is a no-op for them — otherwise it would
+    read every current bid as 0 and fabricate spurious "X→0" changes against
+    manually-logged entries. Placement bid changes are logged via
+    `log_manual_bid_change()` instead.
     """
+    if not has_bid_adj:
+        return  # report carries no bid-adjustment data — nothing reliable to detect
+
     conn = get_conn()
 
     _PL_MAP = {"Top": "Top of Search", "Rest": "Rest of Search", "Product": "Product Pages"}
@@ -129,8 +137,8 @@ def record_bid_changes(results: list, report_date: str, marketplace: str):
                     conn.execute("""
                         INSERT OR IGNORE INTO bid_changes
                             (campaign_name, placement_type, marketplace, report_date,
-                             bid_before, bid_after, roas, spend, purchases, profit)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                             bid_before, bid_after, roas, spend, purchases, profit, source)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,'auto')
                     """, (
                         r.campaign, placement_type, marketplace, report_date,
                         bid_before, current_bid,
@@ -188,8 +196,8 @@ def log_manual_bid_change(
             conn.execute("""
                 INSERT OR IGNORE INTO bid_changes
                     (campaign_name, placement_type, marketplace, report_date,
-                     bid_before, bid_after, roas, spend, purchases, profit, notes)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     bid_before, bid_after, roas, spend, purchases, profit, notes, source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,'manual')
             """, (
                 campaign_name, placement_type, marketplace, change_date,
                 bid_before, bid_after, roas, spend, purchases, profit, note_val,
@@ -424,6 +432,7 @@ def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
         SELECT bc.report_date AS change_date,
                bc.campaign_name, bc.placement_type, bc.marketplace,
                COALESCE(bc.notes, r.notes) AS notes,
+               COALESCE(bc.source, 'manual') AS source,
                bc.bid_before, bc.bid_after,
                bc.roas    AS roas_p1,
                bc.spend   AS spend_p1,
@@ -466,6 +475,7 @@ def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
             "placement":     ch["placement_type"],
             "marketplace":   ch["marketplace"],
             "notes":         ch["notes"],
+            "source":        ch["source"],
             "bid_before":    int(ch["bid_before"] or 0),
             "bid_after":     int(ch["bid_after"]  or 0),
             "roas_p1":       round(roas_p1, 2),
@@ -535,6 +545,7 @@ def get_all_bid_effectiveness(marketplace: str = None) -> pd.DataFrame:
             "placement":     pl,
             "marketplace":   mkt,
             "notes":         n["notes"],
+            "source":        "manual",
             "bid_before":    None,
             "bid_after":     None,
             "roas_p1":       roas_p1,

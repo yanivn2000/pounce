@@ -84,6 +84,17 @@ def get_countries_from_report(path: str) -> dict[str, str]:
         return {}
 
 
+def report_has_bid_adjustment(path: str) -> bool:
+    """True if the report contains a placement bid-adjustment column.
+    Amazon's placement performance reports do NOT — so auto bid-change
+    detection is skipped for them (see db.bid_changes.record_bid_changes)."""
+    try:
+        df = pd.read_excel(path, nrows=1)
+        return any('bid adjustment' in str(c).lower() for c in df.columns)
+    except Exception:
+        return False
+
+
 PLACEMENT_MAP = {
     'Top of Search on Amazon': 'Top',
     'Rest of search on Amazon': 'Rest',

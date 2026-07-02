@@ -279,6 +279,7 @@ def init_db():
     _migrate_orders_address_fields(conn)
     _migrate_bundle_sales(conn)
     _migrate_bid_changes_unique_constraint(conn)
+    _migrate_bid_changes_source(conn)
     # Amazon transactions module
     from db.amazon_module import init_amazon_tables
     init_amazon_tables(conn)
@@ -446,6 +447,37 @@ def _migrate_bid_changes_unique_constraint(conn: sqlite3.Connection):
             CREATE INDEX IF NOT EXISTS idx_bid_changes_camp
                 ON bid_changes(campaign_name, marketplace, report_date);
             PRAGMA foreign_keys=ON;
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _migrate_bid_changes_source(conn: sqlite3.Connection):
+    """
+    Add a `source` column to bid_changes ('manual' | 'auto') so entries logged
+    by hand are distinguishable from auto-detected ones.
+
+    Backfill of existing rows (no deletion):
+      • profit != 0  → 'auto'   (manual logging always stores profit = 0)
+      • otherwise    → 'manual' (real changes logged by the team)
+    Auto-detection could only ever produce "X→0" rows with a computed profit,
+    so profit != 0 is a reliable fingerprint for auto.
+    """
+    # 1) add column if missing
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(bid_changes)").fetchall()]
+        if "source" not in cols:
+            conn.execute("ALTER TABLE bid_changes ADD COLUMN source TEXT")
+            conn.commit()
+    except Exception:
+        return
+    # 2) backfill any untagged rows
+    try:
+        conn.execute("""
+            UPDATE bid_changes
+               SET source = CASE WHEN COALESCE(profit,0) != 0 THEN 'auto' ELSE 'manual' END
+             WHERE source IS NULL OR source = ''
         """)
         conn.commit()
     except Exception:

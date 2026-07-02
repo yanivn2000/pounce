@@ -5060,6 +5060,8 @@ with tab_ads:
                         "campaign":      st.column_config.TextColumn("Campaign",     width=230),
                         "placement":     st.column_config.TextColumn("Placement",    width=110),
                         "marketplace":   st.column_config.TextColumn("Marketplace",  width=100),
+                        "source":        st.column_config.TextColumn("Source",       width=75,
+                                            help="manual = logged by the team · auto = detected from a report (legacy)"),
                         "notes":         st.column_config.TextColumn("📝 Note",      width=180),
                         "bid_before":    st.column_config.NumberColumn("Was %",      format="%d%%", width=65),
                         "bid_after":     st.column_config.NumberColumn("Now %",      format="%d%%", width=65),
@@ -5466,8 +5468,11 @@ with tab_ads:
 
                         try:
                             _fx_rates = get_fx_rates()
-                            from analyzer import get_countries_from_report
+                            from analyzer import get_countries_from_report, report_has_bid_adjustment
                             _countries = get_countries_from_report(sp_path)
+                            # Amazon placement reports carry no bid-adjustment column,
+                            # so auto bid-change detection is skipped (manual logging only).
+                            _has_badj = report_has_bid_adjustment(sp_path)
 
                             if len(_countries) > 1:
                                 # Multi-country SP report — analyse each country with
@@ -5491,7 +5496,7 @@ with tab_ads:
                                     _mp_list.append(_mp)
                                     save_performance_snapshot(_r, _snap_date, _mp)
                                     record_placement_snapshots(_r, _snap_date, _mp)
-                                    record_bid_changes(_r, _snap_date, _mp)
+                                    record_bid_changes(_r, _snap_date, _mp, has_bid_adj=_has_badj)
                                 detected_marketplace = _mp_list[0] if _mp_list else "amazon.com"
                                 _sb_note = (f" · SB for: {', '.join(sb_files.keys())}"
                                             if sb_files else " · no SB files")
@@ -5519,7 +5524,7 @@ with tab_ads:
                     if len(_countries) <= 1:
                         save_performance_snapshot(results, _snap_date, detected_marketplace)
                         record_placement_snapshots(results, _snap_date, detected_marketplace)
-                        record_bid_changes(results, _snap_date, detected_marketplace)
+                        record_bid_changes(results, _snap_date, detected_marketplace, has_bid_adj=_has_badj)
 
                     # ── Auto-save recommendations to DB (batched) ────────────────────
                     today_str  = str(date.today())
