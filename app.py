@@ -5039,15 +5039,30 @@ with tab_ads:
 
                 st.markdown("<div style='margin:8px 0;'></div>", unsafe_allow_html=True)
 
-                # Result filter
-                _imp_filter = st.multiselect(
-                    "Filter by result",
-                    ["✅", "❌", "➡️", "⏳", "📝"],
-                    default=[],
-                    key="impact_filter",
-                    placeholder="All results",
-                )
-                _imp_show = _imp_df[_imp_df["result"].isin(_imp_filter)] if _imp_filter else _imp_df
+                # Filters: result + source
+                _f1, _f2 = st.columns([2, 1])
+                with _f1:
+                    _imp_filter = st.multiselect(
+                        "Filter by result",
+                        ["✅", "❌", "➡️", "⏳", "📝"],
+                        default=[],
+                        key="impact_filter",
+                        placeholder="All results",
+                    )
+                with _f2:
+                    _src_filter = st.radio(
+                        "Source",
+                        ["All", "✅ Manual", "🤖 Auto"],
+                        horizontal=True,
+                        key="impact_source_filter",
+                        help="Manual = logged by the team · Auto = detected from a report (legacy)",
+                    )
+                _imp_show = _imp_df
+                if _imp_filter:
+                    _imp_show = _imp_show[_imp_show["result"].isin(_imp_filter)]
+                if _src_filter != "All" and "source" in _imp_show.columns:
+                    _want = "manual" if _src_filter.endswith("Manual") else "auto"
+                    _imp_show = _imp_show[_imp_show["source"] == _want]
 
                 _cur_sym = "£" if (_bc_mp not in ("All", "amazon.com", None)) else "$"
 
