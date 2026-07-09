@@ -2633,6 +2633,7 @@ div:has(#ship-list-nav-marker) ~ div button {
                     _unit_cost = round((_r["mfg_per_unit"] or 0) + (_r["svc_per_unit"] or 0), 2)
                     _total_unit_cost = round((_r["total_mfg"] or 0) + (_r["total_svc"] or 0), 2)
                     _tbl_rows.append({
+                        "Part ID":     _r["part_id"] or "—",
                         "Item":        _r["item_name"] or "—",
                         "Product":     _r["product"],
                         "Ctns":        _r["num_cartons"],
@@ -2680,6 +2681,7 @@ div:has(#ship-list-nav-marker) ~ div button {
                     hide_index=True,
                     use_container_width=True,
                     column_config={
+                        "Part ID":       st.column_config.TextColumn("Part ID",     width=110),
                         "Item":          st.column_config.TextColumn("Item",        width=180),
                         "Product":       st.column_config.TextColumn("Product",     width=260),
                         "Ctns":          st.column_config.NumberColumn("Ctns",      format="%d",      width=65),
