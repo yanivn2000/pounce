@@ -2630,7 +2630,8 @@ div:has(#ship-list-nav-marker) ~ div button {
                 # NW is per-item: net_wt_g_per_unit × qty / 1000
                 _tbl_rows = []
                 for _r in _pl_rows:
-                    _unit_cost = round((_r["mfg_per_unit"] or 0) + (_r["svc_per_unit"] or 0), 2)
+                    _prod_price = round(_r["mfg_per_unit"] or 0, 2)
+                    _svc_price  = round(_r["svc_per_unit"] or 0, 2)
                     _total_unit_cost = round((_r["total_mfg"] or 0) + (_r["total_svc"] or 0), 2)
                     _tbl_rows.append({
                         "Part ID":     _r["part_id"] or "—",
@@ -2638,7 +2639,8 @@ div:has(#ship-list-nav-marker) ~ div button {
                         "Product":     _r["product"],
                         "Ctns":        _r["num_cartons"],
                         "Qty (pcs)":   _r["qty_total"],
-                        "Unit Cost":       _unit_cost,
+                        "Prod Price":      _prod_price,
+                        "Svc Price":       _svc_price,
                         "Total Unit Cost": _total_unit_cost,
                         "GW (kg)":     _r["total_gw_kg"],
                         "NW (kg)":     round(_r["net_wt_g_per_unit"] * _r["qty_total"] / 1000, 2),
@@ -2686,10 +2688,12 @@ div:has(#ship-list-nav-marker) ~ div button {
                         "Product":       st.column_config.TextColumn("Product",     width=260),
                         "Ctns":          st.column_config.NumberColumn("Ctns",      format="%d",      width=65),
                         "Qty (pcs)":     st.column_config.NumberColumn("Qty (pcs)", format="%d",      width=90),
-                        "Unit Cost":       st.column_config.NumberColumn("Unit Cost",       format="$%.2f", width=95,
-                                              help="Manufacturer + service cost per unit"),
+                        "Prod Price":      st.column_config.NumberColumn("Prod Price",      format="$%.2f", width=95,
+                                              help="Manufacturer cost per unit"),
+                        "Svc Price":       st.column_config.NumberColumn("Svc Price",       format="$%.2f", width=95,
+                                              help="Service cost per unit"),
                         "Total Unit Cost": st.column_config.NumberColumn("Total Unit Cost", format="$%.2f", width=115,
-                                              help="Unit Cost × Qty"),
+                                              help="(Prod + Svc) × Qty"),
                         "GW (kg)":       st.column_config.NumberColumn("GW (kg)",   format="%.2f",    width=90),
                         "NW (kg)":       st.column_config.NumberColumn("NW (kg)",   format="%.2f",    width=90),
                         "CBM":           st.column_config.NumberColumn("CBM",       format="%.3f",    width=75),
@@ -2702,7 +2706,8 @@ div:has(#ship-list-nav-marker) ~ div button {
                     "GW = gross weight per SKU (all cartons) · "
                     "NW = net item weight for customs declaration · "
                     "GW/NW repeat per row when a SKU has multiple items · "
-                    "Unit Cost = manufacturer + service cost per unit (item currency, usually USD)"
+                    "Prod Price = manufacturer cost/unit · Svc Price = service cost/unit "
+                    "(item currency, usually USD)"
                 )
 
                 # ── Download CSV ───────────────────────────────────────────────
