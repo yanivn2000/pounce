@@ -2630,11 +2630,15 @@ div:has(#ship-list-nav-marker) ~ div button {
                 # NW is per-item: net_wt_g_per_unit × qty / 1000
                 _tbl_rows = []
                 for _r in _pl_rows:
+                    _unit_cost = round((_r["mfg_per_unit"] or 0) + (_r["svc_per_unit"] or 0), 2)
+                    _total_unit_cost = round((_r["total_mfg"] or 0) + (_r["total_svc"] or 0), 2)
                     _tbl_rows.append({
                         "Item":        _r["item_name"] or "—",
                         "Product":     _r["product"],
                         "Ctns":        _r["num_cartons"],
                         "Qty (pcs)":   _r["qty_total"],
+                        "Unit Cost":       _unit_cost,
+                        "Total Unit Cost": _total_unit_cost,
                         "GW (kg)":     _r["total_gw_kg"],
                         "NW (kg)":     round(_r["net_wt_g_per_unit"] * _r["qty_total"] / 1000, 2),
                         "CBM":         _r["total_cbm"],
@@ -2647,7 +2651,7 @@ div:has(#ship-list-nav-marker) ~ div button {
                 # ── Grand totals (SKU-level values deduplicated) ───────────────
                 _seen = set()
                 _tot_ctns = _tot_gw = _tot_cbm = 0.0
-                _tot_qty = _tot_nw = 0.0
+                _tot_qty = _tot_nw = _tot_cost = 0.0
                 for _r in _pl_rows:
                     if _r["sku"] not in _seen:
                         _seen.add(_r["sku"])
@@ -2656,10 +2660,12 @@ div:has(#ship-list-nav-marker) ~ div button {
                         _tot_cbm  += _r["total_cbm"]
                     _tot_qty += _r["qty_total"]
                     _tot_nw  += round(_r["net_wt_g_per_unit"] * _r["qty_total"] / 1000, 2)
+                    _tot_cost += (_r["total_mfg"] or 0) + (_r["total_svc"] or 0)
 
                 st.markdown(
                     f"**{int(_tot_ctns)} Ctns · {int(_tot_qty)} pcs · "
-                    f"GW {_tot_gw:.2f} kg · NW {_tot_nw:.2f} kg · {_tot_cbm:.3f} CBM**"
+                    f"GW {_tot_gw:.2f} kg · NW {_tot_nw:.2f} kg · {_tot_cbm:.3f} CBM · "
+                    f"Total Cost ${_tot_cost:,.2f}**"
                 )
 
                 _no_items = [r["Item"] for r in _tbl_rows if r["Item"] == "—"]
@@ -2678,6 +2684,10 @@ div:has(#ship-list-nav-marker) ~ div button {
                         "Product":       st.column_config.TextColumn("Product",     width=260),
                         "Ctns":          st.column_config.NumberColumn("Ctns",      format="%d",      width=65),
                         "Qty (pcs)":     st.column_config.NumberColumn("Qty (pcs)", format="%d",      width=90),
+                        "Unit Cost":       st.column_config.NumberColumn("Unit Cost",       format="$%.2f", width=95,
+                                              help="Manufacturer + service cost per unit"),
+                        "Total Unit Cost": st.column_config.NumberColumn("Total Unit Cost", format="$%.2f", width=115,
+                                              help="Unit Cost × Qty"),
                         "GW (kg)":       st.column_config.NumberColumn("GW (kg)",   format="%.2f",    width=90),
                         "NW (kg)":       st.column_config.NumberColumn("NW (kg)",   format="%.2f",    width=90),
                         "CBM":           st.column_config.NumberColumn("CBM",       format="%.3f",    width=75),
@@ -2689,7 +2699,8 @@ div:has(#ship-list-nav-marker) ~ div button {
                 st.caption(
                     "GW = gross weight per SKU (all cartons) · "
                     "NW = net item weight for customs declaration · "
-                    "GW/NW repeat per row when a SKU has multiple items"
+                    "GW/NW repeat per row when a SKU has multiple items · "
+                    "Unit Cost = manufacturer + service cost per unit (item currency, usually USD)"
                 )
 
                 # ── Download CSV ───────────────────────────────────────────────
