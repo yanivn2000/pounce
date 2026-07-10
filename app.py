@@ -7151,8 +7151,8 @@ with tab_cashflow:
 
             # ── Collect all unique income / expense item names ─────────────
             _income_names  = []
-            _expense_names = []
-            _expense_company = {}   # name → 'LLC' | 'IL'
+            _expense_keys  = []   # (name, company) — keyed by BOTH so items that
+                                  # share a name across companies don't merge
             _reference_names = set()  # income rows shown as reference only
             for r in _cf_result:
                 for f in r["flows"]:
@@ -7160,14 +7160,14 @@ with tab_cashflow:
                         _income_names.append(f["name"])
                     if f.get("reference"):
                         _reference_names.add(f["name"])
-                    if f["direction"] == "out" and f["name"] not in _expense_names:
-                        _expense_names.append(f["name"])
                     if f["direction"] == "out":
-                        _expense_company[f["name"]] = f.get("company", "LLC")
+                        _ek = (f["name"], f.get("company", "LLC"))
+                        if _ek not in _expense_keys:
+                            _expense_keys.append(_ek)
 
             # Split expenses by company (US = LLC, IL = EOS TRADE LTD)
-            _us_exp_names = [n for n in _expense_names if _expense_company.get(n) != "IL"]
-            _il_exp_names = [n for n in _expense_names if _expense_company.get(n) == "IL"]
+            _us_exp_keys = [k for k in _expense_keys if k[1] != "IL"]
+            _il_exp_keys = [k for k in _expense_keys if k[1] == "IL"]
 
             # ── Inventory value depletion (COGS ≈ cash tied up in stock) ────
             _cogs_pct_val = int(get_setting(_cf_conn, "cogs_pct"))
@@ -7210,8 +7210,8 @@ with tab_cashflow:
                    if _has_inv else [])
             )
             _cf_data   = {lbl: [] for lbl in _cf_row_labels}
-            _us_exp_data = {n: [] for n in _us_exp_names}   # detail (US)
-            _il_exp_data = {n: [] for n in _il_exp_names}   # detail (IL)
+            _us_exp_data = {k: [] for k in _us_exp_keys}   # detail (US), keyed (name,company)
+            _il_exp_data = {k: [] for k in _il_exp_keys}   # detail (IL)
             _warn_cols = []
             opening    = _opening_usd
 
@@ -7221,7 +7221,12 @@ with tab_cashflow:
                 # Paid items contribute 0 to totals; reference items are display-only
                 flow_usd: dict[tuple, float] = {}
                 for f in r["flows"]:
-                    key = (f["direction"], f["name"])
+                    # Income keyed by name; expenses keyed by (name, company) so
+                    # same-named items in different companies stay separate.
+                    if f["direction"] == "in":
+                        key = ("in", f["name"])
+                    else:
+                        key = ("out", f["name"], f.get("company", "LLC"))
                     if f.get("paid"):
                         _paid_set.add((f["name"], r["ym"]))
                         amt = 0.0
@@ -7230,12 +7235,12 @@ with tab_cashflow:
                     flow_usd[key] = flow_usd.get(key, 0.0) + amt
 
                 # Exclude reference rows (e.g. "Amazon Payout (auto)") from totals
-                total_in  = sum(v for (d, n), v in flow_usd.items()
-                                if d == "in" and n not in _reference_names)
-                us_out = sum(v for (d, n), v in flow_usd.items()
-                             if d == "out" and _expense_company.get(n) != "IL")
-                il_out = sum(v for (d, n), v in flow_usd.items()
-                             if d == "out" and _expense_company.get(n) == "IL")
+                total_in  = sum(v for k, v in flow_usd.items()
+                                if k[0] == "in" and k[1] not in _reference_names)
+                us_out = sum(v for k, v in flow_usd.items()
+                             if k[0] == "out" and k[2] != "IL")
+                il_out = sum(v for k, v in flow_usd.items()
+                             if k[0] == "out" and k[2] == "IL")
                 total_out = us_out + il_out
                 closing   = opening + total_in - total_out
                 if closing < _cf_warn_usd:
@@ -7255,10 +7260,10 @@ with tab_cashflow:
                     _cf_data["📦 Inventory Value"].append(_inv_v)
                     _cf_data["💎 Cash + Inventory"].append(closing + _inv_v)
                 # Per-item detail (USD)
-                for n in _us_exp_names:
-                    _us_exp_data[n].append(flow_usd.get(("out", n), 0.0))
-                for n in _il_exp_names:
-                    _il_exp_data[n].append(flow_usd.get(("out", n), 0.0))
+                for k in _us_exp_keys:
+                    _us_exp_data[k].append(flow_usd.get(("out", k[0], k[1]), 0.0))
+                for k in _il_exp_keys:
+                    _il_exp_data[k].append(flow_usd.get(("out", k[0], k[1]), 0.0))
                 opening = closing
 
             _df_cf = _cf_pd.DataFrame(_cf_data, index=_col_labels).T
@@ -7311,21 +7316,23 @@ with tab_cashflow:
             )
 
             # ── Expense detail (grouped by company, collapsed by default) ──
-            def _render_exp_detail(data, names, label):
-                if not names:
+            def _render_exp_detail(data, keys, label):
+                if not keys:
                     st.caption(f"No {label} expenses.")
                     return
-                _dfd = _cf_pd.DataFrame(data, index=_col_labels).T
+                # Display rows by item name (company is fixed per side)
+                _named = {k[0]: data[k] for k in keys}
+                _dfd = _cf_pd.DataFrame(_named, index=_col_labels).T
                 st.dataframe(
                     _dfd.style.format(_fmt_usd),
                     use_container_width=True,
-                    height=min(80 + 35 * len(names), 600)
+                    height=min(80 + 35 * len(keys), 600)
                 )
 
             with st.expander("🇺🇸 US (LLC) expense detail", expanded=False):
-                _render_exp_detail(_us_exp_data, _us_exp_names, "US")
+                _render_exp_detail(_us_exp_data, _us_exp_keys, "US")
             with st.expander("🇮🇱 IL expense detail", expanded=False):
-                _render_exp_detail(_il_exp_data, _il_exp_names, "IL")
+                _render_exp_detail(_il_exp_data, _il_exp_keys, "IL")
 
             # ── Mark as Paid ───────────────────────────────────────────────
             with st.expander("✅ Mark as Paid", expanded=True):
