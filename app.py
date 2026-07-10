@@ -7446,7 +7446,7 @@ with tab_cashflow:
                 for _aid, _nbal in _new_bals.items():
                     update_account_balance(cf_conn, _aid, _nbal, _bdate_str)
                 st.success(f"✅ All balances saved as of {_bdate_str}")
-                st.rerun(scope="fragment")
+                st.rerun()  # full-app rerun so Forecast/balance summary reflect the change
 
         for acc in _cf_accs:
             aid, aname, acompany, acur, abal, alimit, asort, aupdated, abaldate = acc
@@ -7494,7 +7494,7 @@ with tab_cashflow:
                 if _new_aname:
                     add_account(cf_conn, _new_aname, _new_acomp, _new_acur, _new_abal, _new_alimit)
                     st.success(f"✅ Account '{_new_aname}' added.")
-                    st.rerun(scope="fragment")
+                    st.rerun()  # full-app rerun so Forecast/balance summary reflect the change
 
     with _cf_tab_accounts:
         _cf_accounts_fragment(_cf_conn)
@@ -7592,7 +7592,7 @@ with tab_cashflow:
                                         _eamt, _ecur, _efreq, _eco,
                                         _estart, _eend or None, _enotes or None)
                             st.success("✅ Item updated.")
-                            st.rerun(scope="fragment")
+                            st.rerun()  # full-app rerun so Forecast/balance summary reflect the change
 
                 # ── CHANGE FROM MONTH ─────────────────────────────────────
                 with _act_tab_change:
@@ -7622,7 +7622,7 @@ with tab_cashflow:
                             if _chg_from and _chg_amt > 0:
                                 change_from_month(cf_conn, _sel_id, _chg_from, _chg_amt)
                                 st.success(f"✅ Done — {_sname} split at {_chg_from}.")
-                                st.rerun(scope="fragment")
+                                st.rerun()  # full-app rerun so Forecast/balance summary reflect the change
                             else:
                                 st.error("Month and new amount are required.")
 
@@ -7635,7 +7635,7 @@ with tab_cashflow:
                     if st.button("🗑️ Confirm Delete", key="cf_confirm_del"):
                         delete_item(cf_conn, _sel_id)
                         st.success("Deleted.")
-                        st.rerun(scope="fragment")
+                        st.rerun()  # full-app rerun so Forecast/balance summary reflect the change
 
         st.divider()
         st.markdown("### ➕ Add Scheduled Item")
@@ -7665,7 +7665,7 @@ with tab_cashflow:
                     add_item(cf_conn, _iname, _idir, _icat, _iamount, _icur,
                              _ifreq, _ico, _istart, _iend or None, _inotes or None)
                     st.success(f"✅ '{_iname}' added.")
-                    st.rerun(scope="fragment")
+                    st.rerun()  # full-app rerun so Forecast/balance summary reflect the change
                 else:
                     st.error("Name, Amount and Start date are required.")
 
