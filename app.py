@@ -4108,9 +4108,13 @@ with tab_sales:
 
             # ── Units matrix ──────────────────────────────────────────────────────
             st.divider()
-            compare_label = ("vs same week LY" if yoy_mode else
-                             "vs prev week" if view_mode == "Weekly" else "vs prev day")
-            st.markdown(f"### Units Sold — color coded {compare_label}")
+            if yoy_mode:
+                st.markdown("### Units Sold — Δ vs same week LY "
+                            "<span style='font-size:0.8rem;color:#888;font-weight:400'>"
+                            "(this year − last year)</span>", unsafe_allow_html=True)
+            else:
+                compare_label = "vs prev week" if view_mode == "Weekly" else "vs prev day"
+                st.markdown(f"### Units Sold — color coded {compare_label}")
 
             ly_matrix = None
             if view_mode == "Daily":
@@ -4168,6 +4172,21 @@ with tab_sales:
 
                 pct_indexed = pct  # shares integer index with matrix
 
+                # ── YoY delta matrix (this year − same week last year) ────────────
+                # In YoY mode the cells (and totals) show the signed difference in
+                # units vs the same week last year, coloured by sign.
+                _delta = None
+                if yoy_mode and ly_matrix is not None and not ly_matrix.empty:
+                    _delta = pd.DataFrame(index=matrix.index, columns=date_cols, dtype=float)
+                    for col in date_cols:
+                        cur_vals = matrix[col].values.astype(float)
+                        if col in ly_matrix.columns:
+                            ly_by_asin = ly_matrix.groupby("asin")[col].sum()
+                            ly_vals = ly_by_asin.reindex(matrix["asin"].values).fillna(0).values
+                        else:
+                            ly_vals = 0.0
+                        _delta[col] = cur_vals - ly_vals
+
                 # ── Latest change log per ASIN ────────────────────────────────────
                 from db.database import get_conn as _gcl
                 _cl_conn = _gcl()
@@ -4205,14 +4224,17 @@ with tab_sales:
                 for col in date_cols:
                     col_idx = display_marked.columns.get_loc(col)
                     for pos, (asin, title) in enumerate(display_marked.index):
-                        val = display_marked.iloc[pos, col_idx]
+                        # YoY → show the signed delta; otherwise the absolute count
+                        val = _delta[col].iloc[pos] if _delta is not None \
+                            else display_marked.iloc[pos, col_idx]
                         try:
                             display_marked.iloc[pos, col_idx] = int(float(val)) if pd.notna(val) else 0
                         except (ValueError, TypeError):
                             display_marked.iloc[pos, col_idx] = 0
 
                 # ── Per-ASIN row totals — inserted right after "Last Change" ──────
-                asin_row_totals = matrix[date_cols].sum(axis=1).astype(int)
+                _totals_src = _delta if _delta is not None else matrix
+                asin_row_totals = _totals_src[date_cols].sum(axis=1).astype(int)
                 _lc_pos = display_marked.columns.get_loc("Last Change")
                 display_marked.insert(_lc_pos + 1, "Total", asin_row_totals.values)
 
@@ -4227,7 +4249,7 @@ with tab_sales:
                     col_cfg[_dc] = st.column_config.NumberColumn(_dc, width=80)
 
                 # ── Totals row — prepended as row 0 in the same dataframe ─────────
-                _col_sums    = {col: int(matrix[col].sum()) for col in date_cols}
+                _col_sums    = {col: int(_totals_src[col].sum()) for col in date_cols}
                 _grand_total = sum(_col_sums.values())
                 _totals_row  = pd.DataFrame(
                     [{
@@ -4255,16 +4277,29 @@ with tab_sales:
                             continue
                         for data_pos, idx in enumerate(matrix.index):
                             df_pos = data_pos + 1  # +1 because row 0 is totals
-                            p = pct_indexed.loc[idx, col]
-                            try:
-                                p = float(p)
-                            except (TypeError, ValueError):
-                                continue
                             col_loc = styles.columns.get_loc(col)
-                            if p >= threshold:
-                                styles.iloc[df_pos, col_loc] = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
-                            elif p <= -threshold:
-                                styles.iloc[df_pos, col_loc] = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                            _green = "background-color:#1a7f3733;color:#1a7f37;font-weight:600"
+                            _red   = "background-color:#cf222e22;color:#cf222e;font-weight:600"
+                            if _delta is not None:
+                                # YoY: colour by the sign of the unit difference
+                                try:
+                                    dv = float(_delta.loc[idx, col])
+                                except (TypeError, ValueError):
+                                    continue
+                                if dv > 0:
+                                    styles.iloc[df_pos, col_loc] = _green
+                                elif dv < 0:
+                                    styles.iloc[df_pos, col_loc] = _red
+                            else:
+                                p = pct_indexed.loc[idx, col]
+                                try:
+                                    p = float(p)
+                                except (TypeError, ValueError):
+                                    continue
+                                if p >= threshold:
+                                    styles.iloc[df_pos, col_loc] = _green
+                                elif p <= -threshold:
+                                    styles.iloc[df_pos, col_loc] = _red
                     # Change-set highlighting (skip totals row at pos 0)
                     if change_set:
                         for pos, (asin, _title) in enumerate(df.index):
@@ -4313,10 +4348,11 @@ with tab_sales:
                 if yoy_mode:
                     st.markdown(
                         "<p style='font-size:0.78rem;color:#888;margin-top:6px;'>"
-                        "🟢 Green = sold more than same week last year (&gt;+20%) &nbsp;·&nbsp; "
-                        "🔴 Red = sold less than same week last year (&gt;−20%) &nbsp;·&nbsp; "
-                        "⬜ White = within ±20% of last year &nbsp;·&nbsp; "
-                        "Colors compare vs same week shifted by exactly 364 days (52 weeks)"
+                        "Each cell = <b>units this year − same week last year</b>. &nbsp;·&nbsp; "
+                        "🟢 Green = sold more (e.g. <b>8</b> = 8 more) &nbsp;·&nbsp; "
+                        "🔴 Red = sold fewer (e.g. <b>−5</b> = 5 fewer) &nbsp;·&nbsp; "
+                        "⬜ White 0 = same as last year &nbsp;·&nbsp; "
+                        "Same week = shifted by exactly 364 days (52 weeks)"
                         "</p>",
                         unsafe_allow_html=True
                     )
