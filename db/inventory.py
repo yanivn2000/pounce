@@ -366,6 +366,18 @@ def get_inventory_overview(cost_map: dict, avg_daily_sales: dict) -> pd.DataFram
         if loc not in pivot_ib.columns:
             pivot_ib[loc] = 0
 
+    # AWD "Inbound to AWD (units)" is owned stock in transit to the AWD
+    # warehouse. Fold it into the AWD columns so it's counted in the column,
+    # Total and Value — otherwise these units are invisible once the matching
+    # manual shipment is (intentionally) excluded, and inventory is undercounted.
+    _ib_by_asin = pivot_ib.set_index("asin")
+    for _loc in AWD_LOCATIONS:
+        if _loc in pivot.columns and _loc in _ib_by_asin.columns:
+            pivot[_loc] = pivot.apply(
+                lambda r, L=_loc: int(r[L]) + int(_ib_by_asin[L].get(r["asin"], 0) or 0),
+                axis=1,
+            )
+
     # Attach title — prefer product_name from product_costs (user-defined),
     # fall back to title from inventory snapshots (Amazon CSV placeholder text)
     conn_t = get_conn()
