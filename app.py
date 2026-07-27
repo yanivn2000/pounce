@@ -3334,17 +3334,14 @@ div:has(#ship-list-nav-marker) ~ div button {
             _ret_img_map  = get_asin_image_map()
             _ret_display.insert(0, "Image",
                 _ret_display["ASIN"].str.upper().map(_ret_img_map).fillna(""))
-            _ret_display["Return Rate %"] = _ret_display["Return Rate %"].apply(
-                lambda x: f"{x:.1f}%" if x is not None else "N/A"
-            )
-            _ret_display["Units Sold"] = _ret_display["Units Sold"].apply(
-                lambda x: f"{x:,}" if x else "—"
-            )
+            # Keep Return Rate % and Units Sold NUMERIC so the table sorts them
+            # numerically — NumberColumn (below) formats the display. Storing them
+            # as strings made Streamlit sort "12.7%" below "2.x%" alphabetically.
 
             st.dataframe(
                 _ret_display.style.apply(
                     lambda _col: [_ret_rate_color(
-                        float(_v.replace("%", "")) if isinstance(_v, str) and _v.endswith("%") else None
+                        float(_v) if isinstance(_v, (int, float)) and pd.notna(_v) else None
                     ) for _v in _col]
                     if _col.name == "Return Rate %"
                     else [""] * len(_col),
@@ -3357,9 +3354,9 @@ div:has(#ship-list-nav-marker) ~ div button {
                     "Image":          st.column_config.ImageColumn("", width=55),
                     "ASIN":           st.column_config.TextColumn("ASIN",          width=110),
                     "Product":        st.column_config.TextColumn("Product",        width=200),
-                    "Units Sold":     st.column_config.TextColumn("Units Sold",     width=90),
+                    "Units Sold":     st.column_config.NumberColumn("Units Sold",   format="%d", width=90),
                     "Returns":        st.column_config.NumberColumn("Returns",      width=80),
-                    "Return Rate %":  st.column_config.TextColumn("Return Rate %",  width=105),
+                    "Return Rate %":  st.column_config.NumberColumn("Return Rate %", format="%.1f%%", width=105),
                     "Top Reason":     st.column_config.TextColumn("Top Reason",     width=160),
                     "Action":         st.column_config.TextColumn("Action",         width=185),
                     "🔴 Amazon":      st.column_config.NumberColumn("🔴 Amazon",    width=90),
