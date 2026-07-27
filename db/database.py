@@ -276,6 +276,7 @@ def init_db():
     _migrate_recommendations_notes(conn)
     _migrate_placement_snapshots(conn)
     _migrate_returns(conn)
+    _migrate_returns_lpn(conn)
     _migrate_orders_address_fields(conn)
     _migrate_bundle_sales(conn)
     _migrate_bid_changes_unique_constraint(conn)
@@ -1150,6 +1151,66 @@ def _migrate_shipments(conn: sqlite3.Connection):
         pass
 
 
+def _migrate_returns_lpn(conn: sqlite3.Connection):
+    """
+    Add license_plate_number to amazon_returns and widen the UNIQUE key to
+    include it. Amazon's FBA returns report has one row per returned UNIT
+    (each with a unique license-plate-number). The old UNIQUE(order_id, asin,
+    return_date, marketplace) collapsed every unit of the same order/ASIN/date
+    into one row (keeping quantity=1) — undercounting multi-unit returns.
+    Re-import the returns reports after this migration to correct historical
+    counts (Clear all returns → re-upload).
+    """
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(amazon_returns)").fetchall()]
+    except Exception:
+        return
+    if not cols or "license_plate_number" in cols:
+        return  # table absent (created fresh with new schema) or already migrated
+    try:
+        conn.executescript("""
+            PRAGMA foreign_keys=OFF;
+            CREATE TABLE amazon_returns_new (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                return_date       TEXT NOT NULL,
+                order_id          TEXT,
+                sku               TEXT,
+                asin              TEXT,
+                title             TEXT,
+                quantity          INTEGER DEFAULT 1,
+                reason            TEXT,
+                disposition       TEXT,
+                status            TEXT,
+                marketplace       TEXT NOT NULL,
+                region            TEXT NOT NULL DEFAULT 'NA',
+                country           TEXT,
+                fc_id             TEXT,
+                customer_comments TEXT,
+                license_plate_number TEXT,
+                created_at        TEXT DEFAULT (datetime('now')),
+                UNIQUE(order_id, asin, return_date, marketplace, license_plate_number)
+            );
+            INSERT INTO amazon_returns_new
+                (id, return_date, order_id, sku, asin, title, quantity, reason,
+                 disposition, status, marketplace, region, country, fc_id,
+                 customer_comments, created_at)
+                SELECT id, return_date, order_id, sku, asin, title, quantity, reason,
+                 disposition, status, marketplace, region, country, fc_id,
+                 customer_comments, created_at
+                FROM amazon_returns;
+            DROP TABLE amazon_returns;
+            ALTER TABLE amazon_returns_new RENAME TO amazon_returns;
+            CREATE INDEX IF NOT EXISTS idx_returns_asin    ON amazon_returns(asin);
+            CREATE INDEX IF NOT EXISTS idx_returns_date    ON amazon_returns(return_date);
+            CREATE INDEX IF NOT EXISTS idx_returns_region  ON amazon_returns(region);
+            CREATE INDEX IF NOT EXISTS idx_returns_country ON amazon_returns(country);
+            PRAGMA foreign_keys=ON;
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
+
 def _migrate_productions(conn: sqlite3.Connection):
     """Ensure productions and production_lines tables exist (safe no-op if already created)."""
     try:
@@ -1254,8 +1315,9 @@ def _migrate_returns(conn: sqlite3.Connection):
                 country           TEXT,
                 fc_id             TEXT,
                 customer_comments TEXT,
+                license_plate_number TEXT,
                 created_at        TEXT DEFAULT (datetime('now')),
-                UNIQUE(order_id, asin, return_date, marketplace)
+                UNIQUE(order_id, asin, return_date, marketplace, license_plate_number)
             );
             CREATE INDEX IF NOT EXISTS idx_returns_asin    ON amazon_returns(asin);
             CREATE INDEX IF NOT EXISTS idx_returns_date    ON amazon_returns(return_date);

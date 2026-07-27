@@ -206,6 +206,8 @@ _COL_MAP = {
     "fulfillment center id":  "fc_id",
     "customer-comments":      "customer_comments",
     "customer comments":      "customer_comments",
+    "license-plate-number":   "license_plate_number",
+    "license plate number":   "license_plate_number",
 }
 
 
@@ -245,6 +247,7 @@ def import_returns_csv(
         return 0, [f"Missing columns: {', '.join(missing)}"]
 
     unknown_fcs: set[str] = set()   # EU prefixes not in our map
+    _legacy_cleared: set = set()    # (order,asin,date,mkt) whose pre-LPN row was purged
 
     with conn:
         for _, row in df.iterrows():
@@ -270,15 +273,27 @@ def import_returns_csv(
             title    = str(row.get("title")        or "").strip()         or None
             sku      = str(row.get("sku")          or "").strip()         or None
             comments = str(row.get("customer_comments") or "").strip()    or None
+            lpn      = str(row.get("license_plate_number") or "").strip()  or None
+
+            # One row per returned unit (unique license-plate-number). Drop the
+            # legacy collapsed row (no LPN) for this order/ASIN/date so re-import
+            # replaces it with the correct per-unit rows instead of double-counting.
+            if lpn and (order_id, asin, ret_date, mkt) not in _legacy_cleared:
+                conn.execute(
+                    "DELETE FROM amazon_returns WHERE order_id=? AND asin=? "
+                    "AND return_date=? AND marketplace=? "
+                    "AND (license_plate_number IS NULL OR license_plate_number='')",
+                    (order_id, asin, ret_date, mkt))
+                _legacy_cleared.add((order_id, asin, ret_date, mkt))
 
             try:
                 conn.execute("""
                     INSERT INTO amazon_returns
                         (return_date, order_id, sku, asin, title, quantity,
                          reason, disposition, status, marketplace, region,
-                         country, fc_id, customer_comments)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(order_id, asin, return_date, marketplace) DO UPDATE SET
+                         country, fc_id, customer_comments, license_plate_number)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(order_id, asin, return_date, marketplace, license_plate_number) DO UPDATE SET
                         quantity=excluded.quantity,
                         reason=excluded.reason,
                         disposition=excluded.disposition,
@@ -289,7 +304,7 @@ def import_returns_csv(
                         customer_comments=excluded.customer_comments
                 """, (ret_date, order_id, sku, asin, title, qty,
                       reason, disp, status, mkt, region,
-                      country, fc_id, comments))
+                      country, fc_id, comments, lpn))
                 count += 1
             except Exception as e:
                 warns.append(str(e)[:120])
