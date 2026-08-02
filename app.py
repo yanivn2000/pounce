@@ -6212,6 +6212,16 @@ with tab_amazon:
                 "Tarifas de inventario de Logística de Amazon",
                 "Frais de stock Expédié par Amazon","Costo di stoccaggio Logistica di Amazon",
             ])
+            # Match old (dedicated tx_type) AND new (2026+) format where storage
+            # is tx_type "FBA Transaction Fees" with the name in the description.
+            _STORAGE_PRED = (
+                f"((tx_type IN ('{_ST}') AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%') "
+                f"OR LOWER(COALESCE(product_details,'')) LIKE '%inventory storage fee%')"
+            )
+            _LT_STORAGE_PRED = (
+                f"((tx_type IN ('{_ST}') AND LOWER(COALESCE(product_details,'')) LIKE '%long%') "
+                f"OR LOWER(COALESCE(product_details,'')) LIKE '%long term storage%')"
+            )
             _AV = ("LOWER(product_details) LIKE '%advertis%' OR product_details='Werbekosten' "
                    "OR product_details LIKE '%publicité%' OR product_details LIKE '%pubblicità%' "
                    "OR product_details='Koszt reklamy'")
@@ -6239,13 +6249,11 @@ with tab_amazon:
                     f"AND marketplace=? GROUP BY currency", p))
                 storage = _usd_sum(_q(
                     f"SELECT currency,SUM(ABS(net_total)) FROM amazon_transactions "
-                    f"WHERE year=? AND month=? AND tx_type IN ('{_ST}') "
-                    f"AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%' "
+                    f"WHERE year=? AND month=? AND {_STORAGE_PRED} "
                     f"AND marketplace=? GROUP BY currency", p))
                 lt_storage = _usd_sum(_q(
                     f"SELECT currency,SUM(ABS(net_total)) FROM amazon_transactions "
-                    f"WHERE year=? AND month=? AND tx_type IN ('{_ST}') "
-                    f"AND LOWER(COALESCE(product_details,'')) LIKE '%long%' "
+                    f"WHERE year=? AND month=? AND {_LT_STORAGE_PRED} "
                     f"AND marketplace=? GROUP BY currency", p))
                 coupons = _usd_sum(_q(
                     "SELECT currency,SUM(ABS(net_total)) FROM amazon_transactions "
@@ -6433,6 +6441,16 @@ with tab_amazon:
                 "FBA Inventory Fee - Correction",
                 "FBA Inventory Fee - Reversal",
             ])
+            # Also match the new (2026+) format: storage billed under tx_type
+            # "FBA Transaction Fees" with the name in the description.
+            _STORAGE_PRED = (
+                f"((tx_type IN ('{_STORAGE_TYPES}') AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%') "
+                f"OR LOWER(COALESCE(product_details,'')) LIKE '%inventory storage fee%')"
+            )
+            _LT_STORAGE_PRED = (
+                f"((tx_type IN ('{_STORAGE_TYPES}') AND LOWER(COALESCE(product_details,'')) LIKE '%long%') "
+                f"OR LOWER(COALESCE(product_details,'')) LIKE '%long term storage%')"
+            )
             # Transfer/Debt equivalents to exclude from net
             _TRANSFER_TYPES = "','".join([
                 "Transfer","Debt",
@@ -6467,8 +6485,8 @@ with tab_amazon:
                       )
                       AND marketplace IN ({ph})
                     GROUP BY month, currency""",
-                "storage":    f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND tx_type IN ('{_STORAGE_TYPES}') AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
-                "lt_storage": f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND tx_type IN ('{_STORAGE_TYPES}') AND LOWER(COALESCE(product_details,'')) LIKE '%long%' AND marketplace IN ({ph}) GROUP BY month, currency",
+                "storage":    f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND {_STORAGE_PRED} AND marketplace IN ({ph}) GROUP BY month, currency",
+                "lt_storage": f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions WHERE year=? AND {_LT_STORAGE_PRED} AND marketplace IN ({ph}) GROUP BY month, currency",
                 "vat":        f"SELECT month, currency, SUM(ABS(withheld_tax)) FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",
                 "net":        f"SELECT month, currency, SUM(net_total) FROM amazon_transactions WHERE year=? AND tx_type NOT IN ('{_TRANSFER_TYPES}') AND COALESCE(product_details,'') NOT IN ('{_FREIGHT_EXCLUDE}') AND marketplace IN ({ph}) GROUP BY month, currency",
                 "promos":     f"SELECT month, currency, SUM(ABS(promo_rebates)) FROM amazon_transactions WHERE year=? AND marketplace IN ({ph}) GROUP BY month, currency",

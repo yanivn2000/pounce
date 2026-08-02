@@ -47,6 +47,22 @@ _STORAGE_TYPES = [
 ]
 _STORAGE_IN = "','".join(_STORAGE_TYPES)
 
+# Storage detection matches TWO Amazon formats:
+#  • Old: a dedicated tx_type ("FBA Inventory Fee" / language variants).
+#  • New (2026+): tx_type "FBA Transaction Fees" with the storage name moved into
+#    the description ("FBA Inventory Storage Fee" / "FBA Long Term Storage Fee" /
+#    "Fulfilment by Amazon (FBA) Inventory Storage Fee").
+# Split long-term via "long". (AWD Storage Fee is deliberately excluded — it's a
+# separate AWD program cost, not FBA storage.)
+_STORAGE_PRED = (
+    f"((tx_type IN ('{_STORAGE_IN}') AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%') "
+    f"OR LOWER(COALESCE(product_details,'')) LIKE '%inventory storage fee%')"
+)
+_LT_STORAGE_PRED = (
+    f"((tx_type IN ('{_STORAGE_IN}') AND LOWER(COALESCE(product_details,'')) LIKE '%long%') "
+    f"OR LOWER(COALESCE(product_details,'')) LIKE '%long term storage%')"
+)
+
 # Transfer / debt equivalents excluded from net payout
 _TRANSFER_TYPES = [
     "Transfer", "Debt",
@@ -177,11 +193,9 @@ def _period_totals(conn, year, month_name, mps, fx) -> dict:
     advertising = usd_sum("SELECT currency,SUM(ABS(net_total)) " +
                           base.format(extra=f"AND tx_type='Service Fee' AND {_ADV_PRED}"))
     storage = usd_sum("SELECT currency,SUM(ABS(net_total)) " +
-                      base.format(extra=(f"AND tx_type IN ('{_STORAGE_IN}') "
-                                         f"AND LOWER(COALESCE(product_details,'')) NOT LIKE '%long%'")))
+                      base.format(extra=f"AND {_STORAGE_PRED}"))
     lt_storage = usd_sum("SELECT currency,SUM(ABS(net_total)) " +
-                         base.format(extra=(f"AND tx_type IN ('{_STORAGE_IN}') "
-                                            f"AND LOWER(COALESCE(product_details,'')) LIKE '%long%'")))
+                         base.format(extra=f"AND {_LT_STORAGE_PRED}"))
     coupons = usd_sum("SELECT currency,SUM(ABS(net_total)) " +
                       base.format(extra=("AND tx_type='Service Fee' "
                                          "AND LOWER(product_details) LIKE '%coupon%'")))
