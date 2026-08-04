@@ -7080,7 +7080,7 @@ with tab_summary:
 with tab_cashflow:
     from db.cashflow_module import (
         init_cashflow_tables, get_accounts, update_account_balance,
-        get_items, add_item, update_item, delete_item, change_from_month, add_account,
+        get_items as _cf_get_items, add_item, update_item, delete_item, change_from_month, add_account,
         build_forecast, _CATEGORIES, MONTHS as CF_MONTHS, COMPANY_LABELS,
         get_setting, set_setting,
         get_inventory_value_forecast, get_current_inventory_value,
@@ -7567,14 +7567,14 @@ with tab_cashflow:
     @st.fragment
     def _cf_items_fragment(cf_conn):
         from db.cashflow_module import (
-            get_items, add_item, update_item, delete_item,
+            get_items as _cf_get_items, add_item, update_item, delete_item,
             change_from_month, _CATEGORIES,
         )
         import pandas as _cf_pd2
 
         _co_opts  = {"LLC": "EOS ONLINE LLC", "IL": "EOS TRADE LTD"}
         _today_ym = __import__("datetime").date.today().strftime("%Y-%m")
-        _cf_items = get_items(cf_conn)
+        _cf_items = _cf_get_items(cf_conn)
 
         # ── Items table ───────────────────────────────────────────────────
         if _cf_items:
