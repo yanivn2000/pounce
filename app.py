@@ -845,6 +845,36 @@ with tab_inv:
         st.markdown("### 🏢 3PL UK — SPM")
         st.markdown(f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>Upload the SPM stock report CSV. SKUs are mapped to ASINs below.</p>", unsafe_allow_html=True)
         _spm_f = st.file_uploader("SPM Stock Report", type=["csv", "txt"], key="spm_upload")
+
+        # Pre-filled template: SPM's exact columns + the latest recorded on-hand,
+        # so the user can edit current values and re-upload.
+        try:
+            _spm_tconn = get_conn()
+            _spm_latest = _spm_tconn.execute(
+                "SELECT sku, title, units_available, units_inbound FROM inventory_snapshots "
+                "WHERE location='3PL_UK' AND snapshot_date=("
+                "  SELECT MAX(snapshot_date) FROM inventory_snapshots WHERE location='3PL_UK') "
+                "AND sku IS NOT NULL AND TRIM(sku)!='' ORDER BY sku"
+            ).fetchall()
+            _spm_tconn.close()
+            _spm_tmpl = [{"SKU": r["sku"], "Name": r["title"] or "",
+                          "OnHand": int(r["units_available"] or 0),
+                          "InTransit": int(r["units_inbound"] or 0), "OnOrder": 0}
+                         for r in _spm_latest] or [{"SKU": "", "Name": "", "OnHand": 0, "InTransit": 0, "OnOrder": 0}]
+            _spm_tmpl_csv = pd.DataFrame(
+                _spm_tmpl, columns=["SKU", "Name", "OnHand", "InTransit", "OnOrder"]
+            ).to_csv(index=False)
+            st.download_button(
+                "⬇️ Download SPM template (current stock)",
+                data=_spm_tmpl_csv,
+                file_name=f"spm_stock_template_{date.today()}.csv",
+                mime="text/csv",
+                key="spm_tmpl_dl",
+                help="SPM format (SKU, Name, OnHand, InTransit, OnOrder), pre-filled "
+                     "with the latest recorded SPM stock. Edit the quantities and re-upload.",
+            )
+        except Exception as _spm_te:
+            st.caption(f"Template unavailable: {_spm_te}")
         if _spm_f and st.button("Import SPM", key="btn_spm"):
             _n, _w, _unmapped = import_spm_csv(_spm_f, _snap_date_upload)
             if _n:
