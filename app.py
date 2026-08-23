@@ -3095,23 +3095,28 @@ div:has(#ship-list-nav-marker) ~ div button {
                 with _sb2:
                     if st.button("✅ Mark as Shipped", key=f"ship_mark_{_ctx}"):
                         st.session_state[f"ship_confirm_{_ctx}"] = True
+                        st.rerun()
 
                 with _sb3:
                     if st.button("🗑️ Delete", key=f"ship_del_{_ctx}"):
                         st.session_state[f"ship_del_confirm_{_ctx}"] = True
+                        st.rerun()
 
                 if st.session_state.get(f"ship_confirm_{_ctx}"):
                     st.warning("Mark as **Shipped**? This cannot be undone.")
                     _mc1, _mc2, _ = st.columns([2, 2, 6])
                     with _mc1:
                         if st.button("Yes, ship it", type="primary", key=f"ship_yes_{_ctx}"):
-                            save_shipment_lines(_sid, [r for r in _seff_rows() if r.get("SKU")])
-                            mark_shipped(_sid)
-                            st.session_state.pop(f"ship_confirm_{_ctx}", None)
-                            st.session_state.pop(_sstate_key, None)
-                            st.session_state.pop(_sek, None)
-                            st.success("🚢 Shipment marked as shipped.")
-                            st.rerun()
+                            try:
+                                save_shipment_lines(_sid, [r for r in _seff_rows() if r.get("SKU")])
+                                mark_shipped(_sid)
+                                st.session_state.pop(f"ship_confirm_{_ctx}", None)
+                                st.session_state.pop(_sstate_key, None)
+                                st.session_state.pop(_sek, None)
+                                st.success("🚢 Shipment marked as shipped.")
+                                st.rerun()
+                            except Exception as _me:
+                                st.error(f"Mark-as-shipped failed: {_me}")
                     with _mc2:
                         if st.button("Cancel", key=f"ship_cancel_{_ctx}"):
                             st.session_state.pop(f"ship_confirm_{_ctx}", None)
