@@ -7486,7 +7486,8 @@ with tab_cashflow:
                     f"📦 Starting value **${_current_inv:,.0f}** = "
                     f"${_onhand_inv:,.0f} on-hand (snapshot: available + inbound + reserved) "
                     f"+ ${_draft_inv:,.0f} in-production (draft shipments). "
-                    f"Depleted each month by 🏭 Monthly COGS (last-year sales × growth × {_cogs_pct}%). "
+                    f"The current month shows this on-hand value; it is then depleted each "
+                    f"following month by 🏭 Monthly COGS (last-year sales × growth × {_cogs_pct}%). "
                     f"**💎 Cash + Inventory** = closing balance + stock value."
                 )
                 _zero_months = [r["label"] for r in _inv_forecast if r["inventory_value"] <= 0]

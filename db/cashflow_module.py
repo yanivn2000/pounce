@@ -508,27 +508,51 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
 
 # ── Inventory Value Forecast ──────────────────────────────────────────────────
 def get_current_inventory_value(conn) -> float:
-    """Return total inventory value in USD from latest snapshot × sellerboard_cogs.
+    """Return total inventory value in USD from the latest snapshot.
 
     Counts all owned units: available + inbound + reserved across every location
-    (FBA, AWD, 3PL). Does NOT include draft/unshipped shipments (tracked in
-    cartons separately) — see get_unshipped_inventory_value().
+    (FBA, AWD, 3PL). Each unit is priced at its Sellerboard COGS; for ASINs that
+    have no ``sellerboard_cogs`` row the value falls back to the BOM cost
+    (manufacturer + service) from ``get_asin_cost_map()`` so stock is never
+    silently dropped — previously an INNER JOIN removed those ASINs entirely.
+    Does NOT include draft/unshipped shipments (tracked in cartons separately) —
+    see get_unshipped_inventory_value().
     """
     try:
-        row = conn.execute("""
-            SELECT SUM(s.qty * c.cost_usd)
-            FROM (
-                SELECT UPPER(asin) AS asin,
-                       SUM(COALESCE(units_available, 0)
-                         + COALESCE(units_inbound, 0)
-                         + COALESCE(units_reserved, 0)) AS qty
-                FROM inventory_snapshots
-                WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM inventory_snapshots)
-                GROUP BY UPPER(asin)
-            ) s
-            JOIN sellerboard_cogs c ON s.asin = UPPER(c.asin)
-        """).fetchone()
-        return float(row[0] or 0) if row else 0.0
+        qty_rows = conn.execute("""
+            SELECT UPPER(asin) AS asin,
+                   SUM(COALESCE(units_available, 0)
+                     + COALESCE(units_inbound, 0)
+                     + COALESCE(units_reserved, 0)) AS qty
+            FROM inventory_snapshots
+            WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM inventory_snapshots)
+            GROUP BY UPPER(asin)
+        """).fetchall()
+        if not qty_rows:
+            return 0.0
+
+        sb_cost = {
+            str(r[0]).upper(): float(r[1] or 0)
+            for r in conn.execute("SELECT UPPER(asin), cost_usd FROM sellerboard_cogs")
+        }
+
+        # BOM fallback only if some in-stock ASIN is missing a Sellerboard COGS.
+        bom_cost: dict = {}
+        if any(str(a).upper() not in sb_cost for a, _q in qty_rows):
+            try:
+                from db.productions import get_asin_cost_map
+                bom_cost = {k.upper(): v for k, v in get_asin_cost_map().items()}
+            except Exception:
+                bom_cost = {}
+
+        total = 0.0
+        for asin, qty in qty_rows:
+            a = str(asin).upper()
+            unit = sb_cost.get(a)
+            if unit is None:
+                unit = bom_cost.get(a, 0.0)
+            total += float(qty or 0) * float(unit or 0)
+        return total
     except Exception:
         return 0.0
 
@@ -601,12 +625,17 @@ def get_inventory_value_forecast(conn, months_ahead: int, amazon_growth: float,
     result = []
     inv_value = current_value
 
-    for _ in range(months_ahead):
+    for _i in range(months_ahead):
         ym    = f"{fy}-{fm:02d}"
         label = f"{MONTHS[fm - 1]} {fy}"
         base  = prev_year_sales.get(fm) or two_years_sales.get(fm, 0.0)
         cogs  = base * (1 + amazon_growth) * cogs_pct
-        inv_value = max(0.0, inv_value - cogs)
+        # The current (first) month shows the actual on-hand value so it matches
+        # the snapshot / Inventory Overview instead of being net-of-COGS. The
+        # snapshot already reflects sales made so far this month, so depletion
+        # only begins from the next month forward.
+        if _i > 0:
+            inv_value = max(0.0, inv_value - cogs)
         result.append({"ym": ym, "label": label,
                        "cogs": cogs, "inventory_value": inv_value})
         fm += 1
