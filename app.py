@@ -85,6 +85,10 @@ from db.shipments import (
     get_overview_shipment_data,
 )
 from labels import generate_carton_labels_pdf
+from db.storage_fees import (
+    import_storage_fees_csv, get_storage_fee_audit,
+    get_storage_fee_months, get_storage_fee_marketplaces, MP_LABELS as _STORAGE_MP_LABELS,
+)
 from db.returns import (
     import_returns_csv, get_return_rate_report, get_returns_date_range,
     get_return_country_breakdown, get_available_countries, clear_all_returns,
@@ -561,8 +565,8 @@ with tab_occasions:
 # TAB — INVENTORY
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_inv:
-    _inv_overview_tab, _inv_aged_tab, _inv_upload_tab, _inv_manual_tab, _inv_prod_tab, _inv_stock_tab, _inv_ship_tab, _inv_returns_tab = st.tabs([
-        "📊 Overview", "📦 Long Storage", "📤 Upload Data", "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns"
+    _inv_overview_tab, _inv_aged_tab, _inv_storage_tab, _inv_upload_tab, _inv_manual_tab, _inv_prod_tab, _inv_stock_tab, _inv_ship_tab, _inv_returns_tab = st.tabs([
+        "📊 Overview", "📦 Long Storage", "🔍 Storage Audit", "📤 Upload Data", "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns"
     ])
 
     # ── OVERVIEW ─────────────────────────────────────────────────────────────
@@ -2040,6 +2044,132 @@ with _inv_aged_tab:
             _render_aged_table(_warn_df)
         else:
             st.success("✅ No products approaching 365-day threshold.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INVENTORY SUB-TAB — STORAGE FEE AUDIT
+# ══════════════════════════════════════════════════════════════════════════════
+with _inv_storage_tab:
+    st.markdown("# 🔍 Storage Fee Audit")
+    st.caption(
+        "Compare Amazon's **Monthly Storage Fees** against the fee re-derived from "
+        "our own product dimensions. Flags SKUs Amazon measures larger than we know "
+        "them to be — those are the disputable overcharges."
+    )
+
+    # ── Upload ────────────────────────────────────────────────────────────────
+    with st.expander("📤 Upload Monthly Storage Fees report(s)", expanded=False):
+        st.markdown(
+            "Seller Central → **Reports → Fulfilment → Monthly Storage Fees**. "
+            "One file may cover several countries (US+CA, or all of EU/UK) — upload "
+            "any number; each row is routed by its own `country_code`."
+        )
+        _sf_files = st.file_uploader(
+            "Storage fee CSV(s)", type=["csv"], accept_multiple_files=True,
+            key="sf_upload",
+        )
+        if _sf_files and st.button("Import", key="sf_import_btn", type="primary"):
+            import tempfile, os as _os
+            _imp_conn = get_conn()
+            _imp_summary: dict = {}
+            for _uf in _sf_files:
+                with tempfile.NamedTemporaryFile("wb", suffix=".csv", delete=False) as _tmp:
+                    _tmp.write(_uf.getvalue())
+                    _tmp_path = _tmp.name
+                try:
+                    _s = import_storage_fees_csv(_tmp_path, _imp_conn)
+                    for _mp, _v in _s.items():
+                        _agg = _imp_summary.setdefault(
+                            _mp, {"asins": 0, "fee": 0.0, "currency": _v["currency"], "month": _v["month"]})
+                        _agg["asins"] += _v["asins"]
+                        _agg["fee"] += _v["fee"]
+                finally:
+                    _os.unlink(_tmp_path)
+            _imp_conn.close()
+            _lines = [f"**{_STORAGE_MP_LABELS.get(m, m)}** {v['month']}: {v['asins']} ASINs, "
+                      f"{v['fee']:,.2f} {v['currency']}" for m, v in _imp_summary.items()]
+            st.success("✅ Imported — " + " · ".join(_lines))
+            st.rerun()
+
+    _sf_conn = get_conn()
+    _sf_months = get_storage_fee_months(_sf_conn)
+    if not _sf_months:
+        _sf_conn.close()
+        st.info("No storage fee reports imported yet. Use the upload box above.")
+    else:
+        _c1, _c2, _c3 = st.columns(3)
+        with _c1:
+            _sf_month = st.selectbox("Month", _sf_months, key="sf_month")
+        _sf_mps = ["(All)"] + get_storage_fee_marketplaces(_sf_conn, _sf_month)
+        with _c2:
+            _sf_mp_sel = st.selectbox(
+                "Marketplace", _sf_mps,
+                format_func=lambda m: "🌐 All" if m == "(All)" else _STORAGE_MP_LABELS.get(m, m),
+                key="sf_mp")
+        with _c3:
+            _sf_tol = st.number_input(
+                "Packaging tolerance %", min_value=0, max_value=100, value=20, step=5,
+                help="Amazon measures the packaged unit, so a small gap over our raw "
+                     "dimensions is normal. SKUs measured larger than this are flagged "
+                     "as disputable.", key="sf_tol")
+
+        _audit = get_storage_fee_audit(
+            _sf_conn, month=_sf_month,
+            marketplace=None if _sf_mp_sel == "(All)" else _sf_mp_sel,
+            tolerance_pct=float(_sf_tol),
+        )
+        _sf_conn.close()
+
+        # ── Summary per marketplace ───────────────────────────────────────────
+        _tot = _audit["totals"]
+        if _tot:
+            st.markdown("#### Summary")
+            _tcols = st.columns(len(_tot))
+            for _i, (_mp, _t) in enumerate(_tot.items()):
+                with _tcols[_i]:
+                    st.metric(f"{_t['mp_label']} charged", f"{_t['fee']:,.2f} {_t['currency']}")
+                    if _t["disputable"] > 0:
+                        st.caption(f"🚩 **{_t['disputable']:,.2f} {_t['currency']}** disputable "
+                                   f"· {_t['n_disputable']}/{_t['n']} SKUs")
+                    else:
+                        st.caption(f"✓ within tolerance · {_t['n']} SKUs")
+                    if _t["n_unmatched"]:
+                        st.caption(f"❓ {_t['n_unmatched']} unmatched (no dims)")
+
+        # ── Detail ────────────────────────────────────────────────────────────
+        _only_disp = st.checkbox("Show disputable only", value=False, key="sf_only_disp")
+        _rows = [r for r in _audit["rows"] if (not _only_disp or r["disputable"])]
+        if not _rows:
+            st.info("Nothing to show for this filter.")
+        else:
+            _sf_df = pd.DataFrame([{
+                " ": "🚩" if r["disputable"] else ("" if r["matched"] else "❓"),
+                "MP": r["mp_label"], "ASIN": r["asin"],
+                "Product": (r["product_name"] or "")[:45],
+                "Avg Qty": r["avg_qty"],
+                "Amazon vol (L)": r["amz_vol_l"], "Our vol (L)": r["our_vol_l"],
+                "Δ vol %": r["delta_pct"], "Rate": r["base_rate"],
+                "Charged": r["fee"], "Expected": r["expected_fee"],
+                "Overcharge": r["overcharge"], "Cur": r["currency"],
+            } for r in _rows])
+            st.dataframe(
+                _sf_df, use_container_width=True, hide_index=True,
+                column_config={
+                    "Avg Qty": st.column_config.NumberColumn(format="%.1f"),
+                    "Amazon vol (L)": st.column_config.NumberColumn(format="%.2f"),
+                    "Our vol (L)": st.column_config.NumberColumn(format="%.2f"),
+                    "Δ vol %": st.column_config.NumberColumn(format="%.0f%%"),
+                    "Rate": st.column_config.NumberColumn(format="%.2f"),
+                    "Charged": st.column_config.NumberColumn(format="%.2f"),
+                    "Expected": st.column_config.NumberColumn(format="%.2f"),
+                    "Overcharge": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+            st.caption(
+                "🚩 Amazon's measured volume exceeds ours beyond tolerance (disputable). "
+                "❓ ASIN not matched to our catalog — add its dimensions to audit it. "
+                "**Δ vol %** = how much larger Amazon's measurement is vs ours. "
+                "**Expected** = our volume × avg qty × Amazon's own rate."
+            )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — PRODUCTION

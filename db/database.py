@@ -287,6 +287,9 @@ def init_db():
     # Aged inventory surcharge
     from db.aged_inventory import init_aged_inventory_table
     init_aged_inventory_table(conn)
+    # FBA monthly storage fees (overcharge audit)
+    from db.storage_fees import init_storage_fees_table
+    init_storage_fees_table(conn)
     _migrate_campaign_manager(conn)
     _migrate_campaign_targets_v2(conn)
     conn.close()
