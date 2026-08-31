@@ -511,12 +511,12 @@ def get_current_inventory_value(conn) -> float:
     """Return total inventory value in USD from the latest snapshot.
 
     Counts all owned units: available + inbound + reserved across every location
-    (FBA, AWD, 3PL). Each unit is priced at its Sellerboard COGS; for ASINs that
-    have no ``sellerboard_cogs`` row the value falls back to the BOM cost
-    (manufacturer + service) from ``get_asin_cost_map()`` so stock is never
-    silently dropped — previously an INNER JOIN removed those ASINs entirely.
-    Does NOT include draft/unshipped shipments (tracked in cartons separately) —
-    see get_unshipped_inventory_value().
+    (FBA, AWD, 3PL). Each unit is priced with the app-wide unified cost map
+    (``get_unified_unit_cost_map()``) — the same per-ASIN cost the Inventory
+    Overview uses — so both views price stock identically (BOM cost, with a
+    product_costs landed-cost override and a Sellerboard COGS fallback). Does NOT
+    include draft/unshipped shipments (tracked in cartons separately) — see
+    get_unshipped_inventory_value().
     """
     try:
         qty_rows = conn.execute("""
@@ -531,28 +531,12 @@ def get_current_inventory_value(conn) -> float:
         if not qty_rows:
             return 0.0
 
-        sb_cost = {
-            str(r[0]).upper(): float(r[1] or 0)
-            for r in conn.execute("SELECT UPPER(asin), cost_usd FROM sellerboard_cogs")
-        }
-
-        # BOM fallback only if some in-stock ASIN is missing a Sellerboard COGS.
-        bom_cost: dict = {}
-        if any(str(a).upper() not in sb_cost for a, _q in qty_rows):
-            try:
-                from db.productions import get_asin_cost_map
-                bom_cost = {k.upper(): v for k, v in get_asin_cost_map().items()}
-            except Exception:
-                bom_cost = {}
-
-        total = 0.0
-        for asin, qty in qty_rows:
-            a = str(asin).upper()
-            unit = sb_cost.get(a)
-            if unit is None:
-                unit = bom_cost.get(a, 0.0)
-            total += float(qty or 0) * float(unit or 0)
-        return total
+        from db.productions import get_unified_unit_cost_map
+        cost = get_unified_unit_cost_map()
+        return sum(
+            float(qty or 0) * float(cost.get(str(asin).upper(), 0) or 0)
+            for asin, qty in qty_rows
+        )
     except Exception:
         return 0.0
 
@@ -567,16 +551,25 @@ def get_unshipped_inventory_value(conn) -> float:
     so it is not double-counted.
     """
     try:
-        row = conn.execute("""
-            SELECT SUM(sl.num_cartons * COALESCE(pc.carton_units, 0)
-                                      * COALESCE(c.cost_usd, 0))
+        rows = conn.execute("""
+            SELECT UPPER(pc.asin) AS asin,
+                   SUM(sl.num_cartons * COALESCE(pc.carton_units, 0)) AS units
             FROM shipments sh
             JOIN shipment_lines sl   ON sl.shipment_id = sh.id
-            LEFT JOIN products_catalog pc ON UPPER(pc.sku)  = UPPER(sl.sku)
-            LEFT JOIN sellerboard_cogs c  ON UPPER(c.asin)  = UPPER(pc.asin)
+            LEFT JOIN products_catalog pc ON UPPER(pc.sku) = UPPER(sl.sku)
             WHERE sh.status = 'draft'
-        """).fetchone()
-        return float(row[0] or 0) if row else 0.0
+            GROUP BY UPPER(pc.asin)
+        """).fetchall()
+        if not rows:
+            return 0.0
+
+        # Same unified per-ASIN cost as on-hand value / Inventory Overview.
+        from db.productions import get_unified_unit_cost_map
+        cost = get_unified_unit_cost_map()
+        return sum(
+            float(u or 0) * float(cost.get(str(a).upper(), 0) or 0)
+            for a, u in rows
+        )
     except Exception:
         return 0.0
 

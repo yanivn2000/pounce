@@ -442,3 +442,44 @@ def get_asin_cost_map() -> dict[str, float]:
         if cost > 0:
             result[asin] = max(result.get(asin, 0.0), cost)
     return result
+
+
+def get_unified_unit_cost_map() -> dict[str, float]:
+    """Single per-ASIN unit-cost source used across the whole app so every view
+    (Inventory Overview + Cash Flow inventory value) prices stock identically.
+
+    Precedence, lowest → highest:
+      1. Sellerboard COGS (``sellerboard_cogs.cost_usd``) — last-resort fallback
+         so an ASIN with no BOM is still valued and never silently dropped.
+      2. BOM cost (manufacturer + service) from ``get_asin_cost_map()`` — the
+         user's own maintained production cost (the Packing List Prod/Svc price).
+      3. ``product_costs.landed_cost`` — explicit landed-cost override, wins.
+    """
+    m: dict[str, float] = {}
+
+    # 1) Sellerboard COGS fallback (base layer)
+    try:
+        conn = get_conn()
+        for asin, cost in conn.execute("SELECT UPPER(asin), cost_usd FROM sellerboard_cogs"):
+            if asin:
+                m[str(asin).upper()] = float(cost or 0)
+        conn.close()
+    except Exception:
+        pass
+
+    # 2) BOM cost (manufacturer + service) — overrides Sellerboard
+    for asin, cost in get_asin_cost_map().items():
+        if cost:
+            m[str(asin).upper()] = float(cost)
+
+    # 3) product_costs landed_cost — highest priority override
+    try:
+        from products import get_cost_map_db
+        for asin, entry in get_cost_map_db().items():
+            landed = entry.get("landed_cost")
+            if landed:
+                m[str(asin).upper()] = float(landed)
+    except Exception:
+        pass
+
+    return m

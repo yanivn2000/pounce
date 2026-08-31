@@ -75,7 +75,7 @@ from db.productions import (
     get_production_lines, save_production_lines,
     get_production_summary, get_catalog_skus, get_sku_catalog_info,
     get_sku_supplier_map, get_sku_supplier_cost_map, get_asin_cost_map,
-    get_asin_image_map, fetch_and_store_all_images,
+    get_asin_image_map, fetch_and_store_all_images, get_unified_unit_cost_map,
 )
 from db.shipments import (
     get_shipments, get_shipment, save_shipment, delete_shipment, mark_shipped,
@@ -740,12 +740,10 @@ with tab_inv:
             _asin_img_map  = get_asin_image_map()
             _overview["Image"] = _overview["asin"].str.upper().map(_asin_img_map).fillna("")
 
-            # Value $: build cost map from products_catalog (primary) +
-            # product_costs landed_cost (override if available).
-            _cat_cost_map  = get_asin_cost_map()                      # {ASIN: unit_cost}
-            _prod_cost_map = {k.upper(): v.get("landed_cost", 0)
-                              for k, v in _cost_map_raw.items() if v.get("landed_cost")}
-            _unit_cost_map = {**_cat_cost_map, **_prod_cost_map}      # product_costs wins
+            # Value $: app-wide unified per-ASIN cost (BOM + landed override +
+            # Sellerboard fallback). Same map the Cash Flow inventory value uses,
+            # so both views price stock identically.
+            _unit_cost_map = get_unified_unit_cost_map()
             _overview["Value $"] = (
                 _overview["asin"].str.upper().map(_unit_cost_map).fillna(0)
                 * _overview["Total"]
