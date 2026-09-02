@@ -3,6 +3,29 @@ cashflow_module.py — Cash flow forecasting for EOS ONLINE LLC + EOS TRADE LTD
 """
 from __future__ import annotations
 
+import streamlit as st
+
+from db.database import get_conn as _get_conn_cf
+
+
+def _amztx_fp() -> tuple:
+    """Change token for amazon_transactions — bumps on insert/delete/value
+    change so cached transaction aggregates refresh immediately."""
+    conn = _get_conn_cf()
+    try:
+        r = conn.execute(
+            "SELECT COUNT(*), COALESCE(MAX(rowid),0), "
+            "COALESCE(SUM(net_total),0), COALESCE(SUM(gross_sales),0) "
+            "FROM amazon_transactions"
+        ).fetchone()
+        return (int(r[0] or 0), int(r[1] or 0),
+                round(float(r[2] or 0), 2), round(float(r[3] or 0), 2))
+    except Exception:
+        return (0, 0, 0.0, 0.0)
+    finally:
+        conn.close()
+
+
 COMPANY_LABELS = {
     "LLC": "EOS ONLINE LLC",
     "IL":  "EOS TRADE LTD",
@@ -300,11 +323,16 @@ def get_amazon_monthly_net(conn, year: int, usd_nis: float,
                            exclude_agl: bool = True) -> dict[int, float]:
     """Return {month_index: net_payout_usd} for a given year.
 
-    When exclude_agl=True (default for forecasting), FBA International Freight
-    charges are added back to net_total so the base reflects the pure Amazon
-    payout before AGL deductions. The user then plans AGL costs separately
-    via Scheduled Items.
+    Cached on the amazon_transactions fingerprint (balance-independent), so the
+    forecast doesn't re-query the whole year on every rerun / balance save.
     """
+    return _amazon_monthly_net_cached(year, usd_nis, exclude_agl, _amztx_fp())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _amazon_monthly_net_cached(year: int, usd_nis: float,
+                               exclude_agl: bool, fp: tuple) -> dict[int, float]:
+    conn = _get_conn_cf()
     tt = "','".join(_TRANSFER_TYPES)
 
     # Base net (includes AGL deductions)
@@ -337,6 +365,7 @@ def get_amazon_monthly_net(conn, year: int, usd_nis: float,
             usd = _to_usd(float(val or 0), currency or "USD", usd_nis)
             result[idx] = result.get(idx, 0.0) + usd  # add back
 
+    conn.close()
     return result
 
 
@@ -575,7 +604,15 @@ def get_unshipped_inventory_value(conn) -> float:
 
 
 def get_monthly_gross_sales(conn, year: int, usd_nis: float) -> dict[int, float]:
-    """Return {month_index: gross_sales_usd} for a given calendar year."""
+    """Return {month_index: gross_sales_usd} for a given calendar year.
+
+    Cached on the amazon_transactions fingerprint (balance-independent)."""
+    return _monthly_gross_sales_cached(year, usd_nis, _amztx_fp())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _monthly_gross_sales_cached(year: int, usd_nis: float, fp: tuple) -> dict[int, float]:
+    conn = _get_conn_cf()
     try:
         rows = conn.execute(
             "SELECT month, currency, SUM(gross_sales) FROM amazon_transactions "
@@ -583,7 +620,9 @@ def get_monthly_gross_sales(conn, year: int, usd_nis: float) -> dict[int, float]
             [year]
         ).fetchall()
     except Exception:
+        conn.close()
         return {}
+    conn.close()
     result: dict[int, float] = {}
     for month_name, currency, val in rows:
         if month_name not in MONTHS:
