@@ -7551,57 +7551,67 @@ with tab_cashflow:
             with st.expander("🇮🇱 IL expense detail", expanded=False):
                 _render_exp_detail(_il_exp_data, _il_exp_keys, "IL")
 
-            # ── Mark as Paid ───────────────────────────────────────────────
-            with st.expander("✅ Mark as Paid", expanded=True):
+            # ── Mark as Paid (isolated fragment: switching month only reruns
+            #    this block, not the whole app — keeps it snappy) ─────────────
+            @st.fragment
+            def _mark_as_paid_fragment(_ym_options):
                 from db.cashflow_module import (
                     get_items_for_month, mark_item_paid, unmark_item_paid
                 )
-                _ym_options = [r["ym"] for r in _cf_result]
-                _today_ym   = __import__("datetime").date.today().strftime("%Y-%m")
-                _default_idx = _ym_options.index(_today_ym) if _today_ym in _ym_options else 0
-                _sel_ym = st.selectbox(
-                    "Month", _ym_options,
-                    index=_default_idx,
-                    format_func=lambda ym: f"{CF_MONTHS[int(ym[5:7])-1]} {ym[:4]}",
-                    key="cf_paid_month"
-                )
+                with st.expander("✅ Mark as Paid", expanded=True):
+                    _today_ym   = __import__("datetime").date.today().strftime("%Y-%m")
+                    _default_idx = _ym_options.index(_today_ym) if _today_ym in _ym_options else 0
+                    _sel_ym = st.selectbox(
+                        "Month", _ym_options,
+                        index=_default_idx,
+                        format_func=lambda ym: f"{CF_MONTHS[int(ym[5:7])-1]} {ym[:4]}",
+                        key="cf_paid_month"
+                    )
 
-                _month_items = get_items_for_month(_cf_conn, _sel_ym)
-                _exp_items = [i for i in _month_items if i["direction"] == "out"]
-                _inc_items = [i for i in _month_items if i["direction"] == "in"]
+                    _mp_conn = get_conn()
+                    try:
+                        _month_items = get_items_for_month(_mp_conn, _sel_ym)
+                        _exp_items = [i for i in _month_items if i["direction"] == "out"]
+                        _inc_items = [i for i in _month_items if i["direction"] == "in"]
 
-                if not _exp_items and not _inc_items:
-                    st.caption("No scheduled items for this month.")
-                else:
-                    with st.form("cf_mark_paid_form"):
-                        if _exp_items:
-                            st.markdown("**Expenses**")
-                            _p_cols = st.columns(3)
-                            _checks = {}
-                            for _idx, _itm in enumerate(_exp_items):
-                                _sym = "$" if _itm["currency"] == "USD" else "₪"
-                                _label = f"{_itm['name']}  {_sym}{_itm['amount']:,.0f}"
-                                _checks[_itm["item_id"]] = _p_cols[_idx % 3].checkbox(
-                                    _label, value=_itm["paid"],
-                                    key=f"paid_{_itm['item_id']}_{_sel_ym}"
-                                )
-                        if _inc_items:
-                            st.markdown("**Income**")
-                            _p_inc_cols = st.columns(3)
-                            for _idx, _itm in enumerate(_inc_items):
-                                _sym = "$" if _itm["currency"] == "USD" else "₪"
-                                _label = f"{_itm['name']}  {_sym}{_itm['amount']:,.0f}"
-                                _checks[_itm["item_id"]] = _p_inc_cols[_idx % 3].checkbox(
-                                    _label, value=_itm["paid"],
-                                    key=f"paid_{_itm['item_id']}_{_sel_ym}"
-                                )
-                        if st.form_submit_button("💾 Save Payments", type="primary"):
-                            for _iid, _is_paid in _checks.items():
-                                if _is_paid:
-                                    mark_item_paid(_cf_conn, _iid, _sel_ym)
-                                else:
-                                    unmark_item_paid(_cf_conn, _iid, _sel_ym)
-                            st.rerun()
+                        if not _exp_items and not _inc_items:
+                            st.caption("No scheduled items for this month.")
+                        else:
+                            with st.form("cf_mark_paid_form"):
+                                _checks = {}
+                                if _exp_items:
+                                    st.markdown("**Expenses**")
+                                    _p_cols = st.columns(3)
+                                    for _idx, _itm in enumerate(_exp_items):
+                                        _sym = "$" if _itm["currency"] == "USD" else "₪"
+                                        _label = f"{_itm['name']}  {_sym}{_itm['amount']:,.0f}"
+                                        _checks[_itm["item_id"]] = _p_cols[_idx % 3].checkbox(
+                                            _label, value=_itm["paid"],
+                                            key=f"paid_{_itm['item_id']}_{_sel_ym}"
+                                        )
+                                if _inc_items:
+                                    st.markdown("**Income**")
+                                    _p_inc_cols = st.columns(3)
+                                    for _idx, _itm in enumerate(_inc_items):
+                                        _sym = "$" if _itm["currency"] == "USD" else "₪"
+                                        _label = f"{_itm['name']}  {_sym}{_itm['amount']:,.0f}"
+                                        _checks[_itm["item_id"]] = _p_inc_cols[_idx % 3].checkbox(
+                                            _label, value=_itm["paid"],
+                                            key=f"paid_{_itm['item_id']}_{_sel_ym}"
+                                        )
+                                if st.form_submit_button("💾 Save Payments", type="primary"):
+                                    for _iid, _is_paid in _checks.items():
+                                        if _is_paid:
+                                            mark_item_paid(_mp_conn, _iid, _sel_ym)
+                                        else:
+                                            unmark_item_paid(_mp_conn, _iid, _sel_ym)
+                                    # Full rerun so the forecast table reflects
+                                    # the new paid state.
+                                    st.rerun()
+                    finally:
+                        _mp_conn.close()
+
+            _mark_as_paid_fragment([r["ym"] for r in _cf_result])
 
             # ── Warnings ──────────────────────────────────────────────────
             if _warn_cols:

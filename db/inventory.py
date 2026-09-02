@@ -4,8 +4,22 @@ db/inventory.py — Inventory import, query and manual-entry helpers.
 import io
 import math
 import pandas as pd
+import streamlit as st
 from datetime import date, timedelta
 from db.database import get_conn
+
+
+def _orders_fingerprint() -> tuple:
+    """Cheap change token for the (append-only) orders table — bumps on any
+    insert/delete so cached derivations refresh immediately."""
+    conn = get_conn()
+    try:
+        r = conn.execute("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM orders").fetchone()
+        return (int(r[0] or 0), int(r[1] or 0))
+    except Exception:
+        return (0, 0)
+    finally:
+        conn.close()
 
 # ── Encoding-safe CSV reader ─────────────────────────────────────────────────
 def _read_csv_bytes(file_obj) -> str:
@@ -425,13 +439,12 @@ def get_inventory_overview(cost_map: dict, avg_daily_sales: dict) -> pd.DataFram
     return pivot
 
 
-def get_avg_daily_sales(days: int = 30) -> dict:
-    """
-    Compute avg daily units sold per (asin, marketplace) from orders table.
-    Returns {(asin, marketplace): avg_units_per_day}
-    """
+@st.cache_data(ttl=300, show_spinner=False)
+def _avg_daily_sales_cached(days: int, fp: tuple, today: str) -> dict:
+    # fp/today are part of the cache key (no leading underscore, or Streamlit
+    # would drop them from the key and never invalidate).
     conn = get_conn()
-    cutoff = str(date.today() - timedelta(days=days))
+    cutoff = str(date.fromisoformat(today) - timedelta(days=days))
     rows = conn.execute("""
         SELECT asin, marketplace, SUM(quantity) as total_qty
         FROM orders
@@ -440,6 +453,17 @@ def get_avg_daily_sales(days: int = 30) -> dict:
     """, (cutoff,)).fetchall()
     conn.close()
     return {(r["asin"], r["marketplace"]): r["total_qty"] / days for r in rows}
+
+
+def get_avg_daily_sales(days: int = 30) -> dict:
+    """
+    Compute avg daily units sold per (asin, marketplace) from orders table.
+    Returns {(asin, marketplace): avg_units_per_day}
+
+    Cached (keyed on the orders fingerprint + today) so it isn't recomputed on
+    every Streamlit rerun; refreshes the instant new orders are imported.
+    """
+    return _avg_daily_sales_cached(days, _orders_fingerprint(), date.today().isoformat())
 
 
 def get_sold_units(marketplace: str, start_date: str, end_date: str) -> dict[str, int]:

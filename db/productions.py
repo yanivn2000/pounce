@@ -2,8 +2,36 @@
 db/productions.py — CRUD and summary helpers for the Productions feature.
 """
 
+import streamlit as st
+
 from .database import get_conn
 from .products_catalog import calc_product_cost
+
+
+def _cost_fingerprint() -> tuple:
+    """Cheap change token for everything the per-ASIN cost maps depend on.
+
+    Uses row counts + SUMs of the cost-driving columns so it bumps on any
+    edit — including in-place changes to an item's cost or a component's
+    quantity — letting the cached cost maps refresh immediately."""
+    conn = get_conn()
+
+    def _probe(sql: str) -> tuple:
+        try:
+            r = conn.execute(sql).fetchone()
+            return (int(r[0] or 0), round(float(r[1] or 0), 2))
+        except Exception:
+            return (0, 0.0)
+
+    try:
+        return (
+            _probe("SELECT COUNT(*), COALESCE(SUM(COALESCE(manufacturer_cost,0)+COALESCE(service_cost,0)),0) FROM items"),
+            _probe("SELECT COUNT(*), COALESCE(SUM(quantity),0) FROM product_components"),
+            _probe("SELECT COUNT(*), COALESCE(MAX(id),0) FROM products_catalog"),
+            _probe("SELECT COUNT(*), COALESCE(SUM(cost_usd),0) FROM sellerboard_cogs"),
+        )
+    finally:
+        conn.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -418,13 +446,10 @@ def fetch_and_store_all_images() -> dict[str, str]:
     return report
 
 
-def get_asin_cost_map() -> dict[str, float]:
-    """
-    Return {ASIN (uppercase): unit_cost} derived from products_catalog.
-    unit_cost = total_manufacturer + total_service per unit.
-    Used as fallback when product_costs table is not populated.
-    If multiple SKUs share the same ASIN, the highest cost wins.
-    """
+@st.cache_data(ttl=300, show_spinner=False)
+def _asin_cost_map_cached(fp: tuple) -> dict[str, float]:
+    # `fp` must NOT start with "_" — Streamlit drops underscore-prefixed args
+    # from the cache key, which would stop the cache ever refreshing.
     conn = get_conn()
     rows = conn.execute(
         "SELECT id, asin FROM products_catalog "
@@ -444,7 +469,21 @@ def get_asin_cost_map() -> dict[str, float]:
     return result
 
 
-def get_unified_unit_cost_map() -> dict[str, float]:
+def get_asin_cost_map() -> dict[str, float]:
+    """
+    Return {ASIN (uppercase): unit_cost} derived from products_catalog.
+    unit_cost = total_manufacturer + total_service per unit.
+    Used as fallback when product_costs table is not populated.
+    If multiple SKUs share the same ASIN, the highest cost wins.
+
+    Cached (keyed on the cost fingerprint) — recomputes only when a product,
+    item cost or component actually changes, not on every Streamlit rerun.
+    """
+    return _asin_cost_map_cached(_cost_fingerprint())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _unified_unit_cost_map_cached(fp: tuple) -> dict[str, float]:
     """Single per-ASIN unit-cost source used across the whole app so every view
     (Inventory Overview + Cash Flow inventory value) prices stock identically.
 
@@ -483,3 +522,8 @@ def get_unified_unit_cost_map() -> dict[str, float]:
         pass
 
     return m
+
+
+def get_unified_unit_cost_map() -> dict[str, float]:
+    """Public, cached entry point — see _unified_unit_cost_map_cached."""
+    return _unified_unit_cost_map_cached(_cost_fingerprint())
