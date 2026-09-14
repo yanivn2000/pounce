@@ -447,24 +447,31 @@ def mp_quick_selector(all_mps, key, label="Marketplaces", show_label=False):
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
+# ── Navigation (lazy: only the active section renders each rerun) ─────────────
+_NAV_LABELS = [
+    "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
+    "🛒 Amazon Transactions", "📋 Monthly Summary", "💰 Cash Forecast",
+    "🎁 Occasions", "🔔 Data Health",
+]
 if _current_role == "admin":
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_summary, tab_cashflow, tab_occasions, tab_datahealth, tab_admin = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
-        "🛒 Amazon Transactions", "📋 Monthly Summary", "💰 Cash Forecast", "🎁 Occasions", "🔔 Data Health", "⚙️ Admin"
-    ])
-else:
-    tab_ads, tab_sales, tab_inv, tab_profit, tab_amazon, tab_summary, tab_cashflow, tab_occasions, tab_datahealth = st.tabs([
-        "📣 Ads", "📈 Sales Dashboard", "📦 Inventory", "📦 Products",
-        "🛒 Amazon Transactions", "📋 Monthly Summary", "💰 Cash Forecast", "🎁 Occasions", "🔔 Data Health"
-    ])
-    tab_admin = None
+    _NAV_LABELS.append("⚙️ Admin")
+tab_admin = "⚙️ Admin" if _current_role == "admin" else None
+
+if st.session_state.get("_main_nav") not in _NAV_LABELS:
+    st.session_state["_main_nav"] = _NAV_LABELS[0]
+_nav = st.radio(
+    "Section", _NAV_LABELS, key="_main_nav",
+    horizontal=True, label_visibility="collapsed",
+)
+if not _nav:
+    _nav = st.session_state.get("_main_nav") or _NAV_LABELS[0]
 
 # Analysis content moved into Ads tab below
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — OCCASIONS (Occasion Runway)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_occasions:
+if _nav == "🎁 Occasions":
     from db.occasions import build_occasion_runway, _REGION_FLAG
 
     st.markdown("# 🎁 Occasion Runway")
@@ -564,13 +571,18 @@ with tab_occasions:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — INVENTORY
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_inv:
-    _inv_overview_tab, _inv_aged_tab, _inv_storage_tab, _inv_upload_tab, _inv_manual_tab, _inv_prod_tab, _inv_stock_tab, _inv_ship_tab, _inv_returns_tab = st.tabs([
-        "📊 Overview", "📦 Long Storage", "🔍 Storage Audit", "📤 Upload Data", "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns"
-    ])
+if _nav == "📦 Inventory":
+    _INV_SUBTABS = ["📊 Overview", "📦 Long Storage", "🔍 Storage Audit", "📤 Upload Data",
+                    "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns"]
+    if st.session_state.get("_inv_nav") not in _INV_SUBTABS:
+        st.session_state["_inv_nav"] = _INV_SUBTABS[0]
+    _inv_nav = st.radio("Inventory section", _INV_SUBTABS, key="_inv_nav",
+                        horizontal=True, label_visibility="collapsed")
+    if not _inv_nav:
+        _inv_nav = st.session_state.get("_inv_nav") or _INV_SUBTABS[0]
 
     # ── OVERVIEW ─────────────────────────────────────────────────────────────
-    with _inv_overview_tab:
+    if _inv_nav == "📊 Overview":
         st.markdown("# 📦 Inventory Overview")
         _cost_map_raw = get_cost_map_db()
         # get_inventory_overview expects {asin: landed_cost} not the full cost dict
@@ -811,7 +823,7 @@ with tab_inv:
                          })
 
     # ── UPLOAD DATA ───────────────────────────────────────────────────────────
-    with _inv_upload_tab:
+    if _inv_nav == "📤 Upload Data":
         st.markdown("# 📤 Upload Inventory Data")
         _snap_date_upload = str(st.date_input("Snapshot date", value=date.today(), key="inv_snap_date"))
         st.divider()
@@ -955,7 +967,7 @@ with tab_inv:
                 st.rerun()
 
     # ── MANUAL ENTRY ──────────────────────────────────────────────────────────
-    with _inv_manual_tab:
+    if _inv_nav == "✏️ Manual Entry":
         st.markdown("# ✏️ Manual Inventory Entry")
         st.markdown(f"<p style='color:{T['text_secondary']};font-size:0.85rem;'>For Production (unallocated units) and any ad-hoc corrections.</p>", unsafe_allow_html=True)
         st.divider()
@@ -990,7 +1002,7 @@ with tab_inv:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — PROFIT
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_profit:
+if _nav == "📦 Products":
     _suppliers_tab, _items_tab, _catalog_tab, _fba_tab = st.tabs([
         "🏭 Suppliers", "🧩 Items", "📋 Products Catalog", "💰 FBA Fees"
     ])
@@ -1939,7 +1951,7 @@ with _fba_tab:
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTORY SUB-TAB — LONG STORAGE ALERTS
 # ══════════════════════════════════════════════════════════════════════════════
-with _inv_aged_tab:
+if _nav == "📦 Inventory" and _inv_nav == "📦 Long Storage":
     from db.aged_inventory import (
         import_aged_inventory_csv, get_aged_inventory_alerts,
         get_aged_inventory_snapshot_date, clear_aged_inventory,
@@ -2048,7 +2060,7 @@ with _inv_aged_tab:
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTORY SUB-TAB — STORAGE FEE AUDIT
 # ══════════════════════════════════════════════════════════════════════════════
-with _inv_storage_tab:
+if _nav == "📦 Inventory" and _inv_nav == "🔍 Storage Audit":
     st.markdown("# 🔍 Storage Fee Audit")
     st.caption(
         "Compare Amazon's **Monthly Storage Fees** against the fee re-derived from "
@@ -2177,7 +2189,7 @@ with _inv_storage_tab:
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTORY SUB-TAB — PRODUCTIONS
 # ══════════════════════════════════════════════════════════════════════════════
-with _inv_prod_tab:
+if _nav == "📦 Inventory" and _inv_nav == "📦 Productions":
     st.markdown(
         f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>🏭 Productions &nbsp;"
         f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
@@ -2610,7 +2622,7 @@ with _inv_prod_tab:
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTORY SUB-TAB 2 — STOCK TO BE SHIPPED
 # ══════════════════════════════════════════════════════════════════════════════
-with _inv_stock_tab:
+if _nav == "📦 Inventory" and _inv_nav == "🗂️ Stock to be Shipped":
     st.markdown(
         f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>🗂️ Stock to be Shipped &nbsp;"
         f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
@@ -2663,7 +2675,7 @@ with _inv_stock_tab:
 # ══════════════════════════════════════════════════════════════════════════════
 # INVENTORY SUB-TAB 3 — SHIPMENTS
 # ══════════════════════════════════════════════════════════════════════════════
-with _inv_ship_tab:
+if _nav == "📦 Inventory" and _inv_nav == "🚢 Shipments":
     st.markdown(
         f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>🚢 Shipments &nbsp;"
         f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
@@ -3300,255 +3312,255 @@ div:has(#ship-list-nav-marker) ~ div button {
 
 
     # ── RETURNS ───────────────────────────────────────────────────────────────
-    with _inv_returns_tab:
-        st.markdown("# ↩️ Amazon FBA Returns")
+if _nav == "📦 Inventory" and _inv_nav == "↩️ Returns":
+    st.markdown("# ↩️ Amazon FBA Returns")
 
-        # ── Upload ────────────────────────────────────────────────────────────
-        with st.expander("📤 Upload Returns CSV", expanded=False):
-            st.markdown(
-                "Download the **FBA Customer Returns** report from Seller Central "
-                "(*Reports → Fulfillment → Customer Concessions → FBA Customer Returns*).  \n"
-                "The country is **auto-detected** from the Fulfillment Center ID — "
-                "just pick the region (NA or EU) as a fallback for unrecognised FCs."
-            )
-            _ru1, _ru2, _ru3, _ru4 = st.columns([2, 2, 2, 1])
-            with _ru4:
-                _ret_upload_region = st.selectbox(
-                    "Region",
-                    options=["NA", "EU"],
-                    key="ret_region_hint",
-                    help="Only used as a fallback when the FC code cannot be mapped to a country.",
-                )
-            with _ru2:
-                _ret_rpt_from = st.date_input(
-                    "Report from",
-                    value=date.today().replace(day=1),
-                    key="ret_rpt_from",
-                    help="Start date of the report period you downloaded from Seller Central.",
-                )
-            with _ru3:
-                _ret_rpt_to = st.date_input(
-                    "Report to",
-                    value=date.today(),
-                    key="ret_rpt_to",
-                    help="End date of the report period you downloaded from Seller Central.",
-                )
-            with _ru1:
-                _ret_file = st.file_uploader(
-                    "Choose CSV file",
-                    type=["csv", "txt"],
-                    key=f"ret_upload_{st.session_state.get('ret_upload_key', 0)}",
-                )
-            if _ret_file is not None:
-                if st.button("⬆️ Import Returns", key="ret_import_btn", type="primary"):
-                    try:
-                        _ret_df = pd.read_csv(_ret_file, sep=None, engine="python",
-                                              encoding_errors="replace")
-                        _ret_imported, _ret_warns = import_returns_csv(
-                            _ret_df, _ret_upload_region,
-                            report_from=str(_ret_rpt_from),
-                            report_to=str(_ret_rpt_to),
-                        )
-                        if _ret_warns:
-                            st.warning(f"⚠️ {'; '.join(_ret_warns[:5])}")
-                        if _ret_imported:
-                            st.success(
-                                f"✅ Imported {_ret_imported} return records "
-                                f"({_ret_upload_region} · {_ret_rpt_from} → {_ret_rpt_to})."
-                            )
-                        else:
-                            st.info("No new records imported (all may be duplicates).")
-                        st.session_state["ret_upload_key"] = st.session_state.get("ret_upload_key", 0) + 1
-                        st.rerun()
-                    except Exception as _re:
-                        st.error(f"Import failed: {_re}")
-
-            st.divider()
-            st.markdown("**🗑️ Danger Zone**")
-            if st.button("Delete All Returns Data", key="ret_del_all_btn",
-                         help="Permanently removes every return record from the database."):
-                st.session_state["ret_del_all_confirm"] = True
-
-            if st.session_state.get("ret_del_all_confirm"):
-                st.warning("This will permanently delete **all** returns records. Are you sure?")
-                _rd1, _rd2, _ = st.columns([2, 2, 6])
-                with _rd1:
-                    if st.button("Yes, delete all", type="primary", key="ret_del_all_yes"):
-                        _deleted = clear_all_returns()
-                        st.session_state.pop("ret_del_all_confirm", None)
-                        st.success(f"✅ Deleted {_deleted:,} records.")
-                        st.rerun()
-                with _rd2:
-                    if st.button("Cancel", key="ret_del_all_cancel"):
-                        st.session_state.pop("ret_del_all_confirm", None)
-                        st.rerun()
-
-        # ── Uploaded data coverage ────────────────────────────────────────────
-        _ret_meta = get_upload_meta()
-        if _ret_meta:
-            _cov_parts = []
-            for _rg in ("NA", "EU"):
-                _m = _ret_meta.get(_rg)
-                if _m and _m.get("report_from") and _m.get("report_to"):
-                    _cov_parts.append(
-                        f"**{_rg}** {_m['report_from']} → {_m['report_to']}"
-                    )
-            if _cov_parts:
-                st.info("📅 Uploaded data covers: " + " &nbsp;|&nbsp; ".join(_cov_parts))
-
-        st.divider()
-
-        # ── Filters ───────────────────────────────────────────────────────────
-        _ret_min_date, _ret_max_date = get_returns_date_range()
-        _ret_avail_countries = get_available_countries()   # ["CA","DE","FR", ...]
-
-        _ret_f1, _ret_f2, _ret_f3, _ret_f4, _ = st.columns([1.5, 2, 2, 2, 2])
-        with _ret_f1:
-            _ret_region_filter = st.selectbox(
+    # ── Upload ────────────────────────────────────────────────────────────
+    with st.expander("📤 Upload Returns CSV", expanded=False):
+        st.markdown(
+            "Download the **FBA Customer Returns** report from Seller Central "
+            "(*Reports → Fulfillment → Customer Concessions → FBA Customer Returns*).  \n"
+            "The country is **auto-detected** from the Fulfillment Center ID — "
+            "just pick the region (NA or EU) as a fallback for unrecognised FCs."
+        )
+        _ru1, _ru2, _ru3, _ru4 = st.columns([2, 2, 2, 1])
+        with _ru4:
+            _ret_upload_region = st.selectbox(
                 "Region",
-                options=["All", "NA", "EU"],
-                key="ret_region_sel",
+                options=["NA", "EU"],
+                key="ret_region_hint",
+                help="Only used as a fallback when the FC code cannot be mapped to a country.",
             )
-        with _ret_f2:
-            _country_options = ["All"] + [
-                f"{COUNTRY_FLAG.get(c, '')} {c}"
-                for c in _ret_avail_countries
-            ]
-            _ret_country_disp = st.selectbox(
-                "Country",
-                options=_country_options,
-                key="ret_country_sel",
+        with _ru2:
+            _ret_rpt_from = st.date_input(
+                "Report from",
+                value=date.today().replace(day=1),
+                key="ret_rpt_from",
+                help="Start date of the report period you downloaded from Seller Central.",
             )
-            # Strip flag prefix back to code
-            _ret_country = None if _ret_country_disp == "All" else _ret_country_disp.split()[-1]
-        with _ret_f3:
-            _ret_start = st.date_input(
-                "From",
-                value=date.fromisoformat(_ret_min_date) if _ret_min_date else date.today() - timedelta(days=90),
-                key="ret_start_date",
+        with _ru3:
+            _ret_rpt_to = st.date_input(
+                "Report to",
+                value=date.today(),
+                key="ret_rpt_to",
+                help="End date of the report period you downloaded from Seller Central.",
             )
-        with _ret_f4:
-            _ret_end = st.date_input(
-                "To",
-                value=date.fromisoformat(_ret_max_date) if _ret_max_date else date.today(),
-                key="ret_end_date",
+        with _ru1:
+            _ret_file = st.file_uploader(
+                "Choose CSV file",
+                type=["csv", "txt"],
+                key=f"ret_upload_{st.session_state.get('ret_upload_key', 0)}",
             )
-
-        # ── Country breakdown mini-table ───────────────────────────────────────
-        _ret_country_df = get_return_country_breakdown(str(_ret_start), str(_ret_end))
-        if not _ret_country_df.empty:
-            with st.expander("🌍 Returns by Country", expanded=False):
-                st.dataframe(
-                    _ret_country_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Country":       st.column_config.TextColumn("Country",        width=90),
-                        "Total":         st.column_config.NumberColumn("Total",         width=70),
-                        "🔴 Amazon":     st.column_config.NumberColumn("🔴 Amazon",     width=90),
-                        "🟠 Mfg Defect": st.column_config.NumberColumn("🟠 Mfg Defect", width=110),
-                        "⚪ Customer":   st.column_config.NumberColumn("⚪ Customer",    width=100),
-                        "Other":         st.column_config.NumberColumn("Other",          width=65),
-                    },
-                )
+        if _ret_file is not None:
+            if st.button("⬆️ Import Returns", key="ret_import_btn", type="primary"):
+                try:
+                    _ret_df = pd.read_csv(_ret_file, sep=None, engine="python",
+                                          encoding_errors="replace")
+                    _ret_imported, _ret_warns = import_returns_csv(
+                        _ret_df, _ret_upload_region,
+                        report_from=str(_ret_rpt_from),
+                        report_to=str(_ret_rpt_to),
+                    )
+                    if _ret_warns:
+                        st.warning(f"⚠️ {'; '.join(_ret_warns[:5])}")
+                    if _ret_imported:
+                        st.success(
+                            f"✅ Imported {_ret_imported} return records "
+                            f"({_ret_upload_region} · {_ret_rpt_from} → {_ret_rpt_to})."
+                        )
+                    else:
+                        st.info("No new records imported (all may be duplicates).")
+                    st.session_state["ret_upload_key"] = st.session_state.get("ret_upload_key", 0) + 1
+                    st.rerun()
+                except Exception as _re:
+                    st.error(f"Import failed: {_re}")
 
         st.divider()
+        st.markdown("**🗑️ Danger Zone**")
+        if st.button("Delete All Returns Data", key="ret_del_all_btn",
+                     help="Permanently removes every return record from the database."):
+            st.session_state["ret_del_all_confirm"] = True
 
-        # ── Report ────────────────────────────────────────────────────────────
-        _ret_report = get_return_rate_report(
-            region=_ret_region_filter if _ret_region_filter != "All" else None,
-            country=_ret_country,
-            start_date=str(_ret_start),
-            end_date=str(_ret_end),
+        if st.session_state.get("ret_del_all_confirm"):
+            st.warning("This will permanently delete **all** returns records. Are you sure?")
+            _rd1, _rd2, _ = st.columns([2, 2, 6])
+            with _rd1:
+                if st.button("Yes, delete all", type="primary", key="ret_del_all_yes"):
+                    _deleted = clear_all_returns()
+                    st.session_state.pop("ret_del_all_confirm", None)
+                    st.success(f"✅ Deleted {_deleted:,} records.")
+                    st.rerun()
+            with _rd2:
+                if st.button("Cancel", key="ret_del_all_cancel"):
+                    st.session_state.pop("ret_del_all_confirm", None)
+                    st.rerun()
+
+    # ── Uploaded data coverage ────────────────────────────────────────────
+    _ret_meta = get_upload_meta()
+    if _ret_meta:
+        _cov_parts = []
+        for _rg in ("NA", "EU"):
+            _m = _ret_meta.get(_rg)
+            if _m and _m.get("report_from") and _m.get("report_to"):
+                _cov_parts.append(
+                    f"**{_rg}** {_m['report_from']} → {_m['report_to']}"
+                )
+        if _cov_parts:
+            st.info("📅 Uploaded data covers: " + " &nbsp;|&nbsp; ".join(_cov_parts))
+
+    st.divider()
+
+    # ── Filters ───────────────────────────────────────────────────────────
+    _ret_min_date, _ret_max_date = get_returns_date_range()
+    _ret_avail_countries = get_available_countries()   # ["CA","DE","FR", ...]
+
+    _ret_f1, _ret_f2, _ret_f3, _ret_f4, _ = st.columns([1.5, 2, 2, 2, 2])
+    with _ret_f1:
+        _ret_region_filter = st.selectbox(
+            "Region",
+            options=["All", "NA", "EU"],
+            key="ret_region_sel",
+        )
+    with _ret_f2:
+        _country_options = ["All"] + [
+            f"{COUNTRY_FLAG.get(c, '')} {c}"
+            for c in _ret_avail_countries
+        ]
+        _ret_country_disp = st.selectbox(
+            "Country",
+            options=_country_options,
+            key="ret_country_sel",
+        )
+        # Strip flag prefix back to code
+        _ret_country = None if _ret_country_disp == "All" else _ret_country_disp.split()[-1]
+    with _ret_f3:
+        _ret_start = st.date_input(
+            "From",
+            value=date.fromisoformat(_ret_min_date) if _ret_min_date else date.today() - timedelta(days=90),
+            key="ret_start_date",
+        )
+    with _ret_f4:
+        _ret_end = st.date_input(
+            "To",
+            value=date.fromisoformat(_ret_max_date) if _ret_max_date else date.today(),
+            key="ret_end_date",
         )
 
-        if _ret_report.empty:
-            st.info("No returns data found for the selected filters. Upload a returns CSV to get started.")
-        else:
-            # Summary KPIs
-            _ret_total_returned = int(_ret_report["Returns"].sum())
-            _ret_total_sold     = int(_ret_report["Units Sold"].sum())
-            _ret_overall_rate   = round(_ret_total_returned / _ret_total_sold * 100, 1) if _ret_total_sold else 0.0
-            _ret_amazon_cnt     = int(_ret_report["🔴 Amazon"].sum())
-            _ret_defect_cnt     = int(_ret_report["🟠 Mfg Defect"].sum())
-            _ret_cust_cnt       = int(_ret_report["⚪ Customer"].sum())
-
-            _rk1, _rk2, _rk3, _rk4, _rk5 = st.columns(5)
-            _rk1.metric("Total Returns",    f"{_ret_total_returned:,}")
-            _rk2.metric("Units Sold",        f"{_ret_total_sold:,}")
-            _rk3.metric("Overall Rate",      f"{_ret_overall_rate}%")
-            _rk4.metric("🔴 Contact Amazon", f"{_ret_amazon_cnt:,}")
-            _rk5.metric("🟠 Mfg Defects",   f"{_ret_defect_cnt:,}")
-
-            st.divider()
-
-            # Color-code Return Rate %
-            def _ret_rate_color(rate):
-                if rate is None:
-                    return "color: #888"
-                if rate >= 5:
-                    return "color: #e05252; font-weight: 700"
-                if rate >= 2:
-                    return "color: #e09c52; font-weight: 600"
-                return "color: #52a852"
-
-            # Display the report table
-            _ret_display = _ret_report.copy()
-            _ret_img_map  = get_asin_image_map()
-            _ret_display.insert(0, "Image",
-                _ret_display["ASIN"].str.upper().map(_ret_img_map).fillna(""))
-            # Keep Return Rate % and Units Sold NUMERIC so the table sorts them
-            # numerically — NumberColumn (below) formats the display. Storing them
-            # as strings made Streamlit sort "12.7%" below "2.x%" alphabetically.
-
+    # ── Country breakdown mini-table ───────────────────────────────────────
+    _ret_country_df = get_return_country_breakdown(str(_ret_start), str(_ret_end))
+    if not _ret_country_df.empty:
+        with st.expander("🌍 Returns by Country", expanded=False):
             st.dataframe(
-                _ret_display.style.apply(
-                    lambda _col: [_ret_rate_color(
-                        float(_v) if isinstance(_v, (int, float)) and pd.notna(_v) else None
-                    ) for _v in _col]
-                    if _col.name == "Return Rate %"
-                    else [""] * len(_col),
-                    axis=0,
-                ),
+                _ret_country_df,
                 use_container_width=True,
                 hide_index=True,
-                height=500,
                 column_config={
-                    "Image":          st.column_config.ImageColumn("", width=55),
-                    "ASIN":           st.column_config.TextColumn("ASIN",          width=110),
-                    "Product":        st.column_config.TextColumn("Product",        width=200),
-                    "Units Sold":     st.column_config.NumberColumn("Units Sold",   format="%d", width=90),
-                    "Returns":        st.column_config.NumberColumn("Returns",      width=80),
-                    "Return Rate %":  st.column_config.NumberColumn("Return Rate %", format="%.1f%%", width=105),
-                    "Top Reason":     st.column_config.TextColumn("Top Reason",     width=160),
-                    "Action":         st.column_config.TextColumn("Action",         width=185),
-                    "🔴 Amazon":      st.column_config.NumberColumn("🔴 Amazon",    width=90),
-                    "🟠 Mfg Defect":  st.column_config.NumberColumn("🟠 Mfg Defect", width=105),
-                    "⚪ Customer":    st.column_config.NumberColumn("⚪ Customer",   width=100),
-                    "Other":          st.column_config.NumberColumn("Other",         width=70),
+                    "Country":       st.column_config.TextColumn("Country",        width=90),
+                    "Total":         st.column_config.NumberColumn("Total",         width=70),
+                    "🔴 Amazon":     st.column_config.NumberColumn("🔴 Amazon",     width=90),
+                    "🟠 Mfg Defect": st.column_config.NumberColumn("🟠 Mfg Defect", width=110),
+                    "⚪ Customer":   st.column_config.NumberColumn("⚪ Customer",    width=100),
+                    "Other":         st.column_config.NumberColumn("Other",          width=65),
                 },
             )
 
-            st.caption(
-                "**🔴 ≥ 5%** critical &nbsp;|&nbsp; **🟠 2–5%** elevated &nbsp;|&nbsp; **🟢 < 2%** normal &nbsp;|&nbsp; "
-                "**🔴 Contact Amazon** — FC/carrier damage &nbsp;|&nbsp; "
-                "**🟠 Contact Manufacturer** — product defect/quality &nbsp;|&nbsp; "
-                "**⚪ Normal Return** — customer preference"
-            )
+    st.divider()
 
-            st.download_button(
-                "⬇️ Download Returns Report CSV",
-                data=_ret_report.to_csv(index=False),
-                file_name=f"returns_report_{_ret_start}_{_ret_end}.csv",
-                mime="text/csv",
-                key="ret_dl_btn",
-            )
+    # ── Report ────────────────────────────────────────────────────────────
+    _ret_report = get_return_rate_report(
+        region=_ret_region_filter if _ret_region_filter != "All" else None,
+        country=_ret_country,
+        start_date=str(_ret_start),
+        end_date=str(_ret_end),
+    )
+
+    if _ret_report.empty:
+        st.info("No returns data found for the selected filters. Upload a returns CSV to get started.")
+    else:
+        # Summary KPIs
+        _ret_total_returned = int(_ret_report["Returns"].sum())
+        _ret_total_sold     = int(_ret_report["Units Sold"].sum())
+        _ret_overall_rate   = round(_ret_total_returned / _ret_total_sold * 100, 1) if _ret_total_sold else 0.0
+        _ret_amazon_cnt     = int(_ret_report["🔴 Amazon"].sum())
+        _ret_defect_cnt     = int(_ret_report["🟠 Mfg Defect"].sum())
+        _ret_cust_cnt       = int(_ret_report["⚪ Customer"].sum())
+
+        _rk1, _rk2, _rk3, _rk4, _rk5 = st.columns(5)
+        _rk1.metric("Total Returns",    f"{_ret_total_returned:,}")
+        _rk2.metric("Units Sold",        f"{_ret_total_sold:,}")
+        _rk3.metric("Overall Rate",      f"{_ret_overall_rate}%")
+        _rk4.metric("🔴 Contact Amazon", f"{_ret_amazon_cnt:,}")
+        _rk5.metric("🟠 Mfg Defects",   f"{_ret_defect_cnt:,}")
+
+        st.divider()
+
+        # Color-code Return Rate %
+        def _ret_rate_color(rate):
+            if rate is None:
+                return "color: #888"
+            if rate >= 5:
+                return "color: #e05252; font-weight: 700"
+            if rate >= 2:
+                return "color: #e09c52; font-weight: 600"
+            return "color: #52a852"
+
+        # Display the report table
+        _ret_display = _ret_report.copy()
+        _ret_img_map  = get_asin_image_map()
+        _ret_display.insert(0, "Image",
+            _ret_display["ASIN"].str.upper().map(_ret_img_map).fillna(""))
+        # Keep Return Rate % and Units Sold NUMERIC so the table sorts them
+        # numerically — NumberColumn (below) formats the display. Storing them
+        # as strings made Streamlit sort "12.7%" below "2.x%" alphabetically.
+
+        st.dataframe(
+            _ret_display.style.apply(
+                lambda _col: [_ret_rate_color(
+                    float(_v) if isinstance(_v, (int, float)) and pd.notna(_v) else None
+                ) for _v in _col]
+                if _col.name == "Return Rate %"
+                else [""] * len(_col),
+                axis=0,
+            ),
+            use_container_width=True,
+            hide_index=True,
+            height=500,
+            column_config={
+                "Image":          st.column_config.ImageColumn("", width=55),
+                "ASIN":           st.column_config.TextColumn("ASIN",          width=110),
+                "Product":        st.column_config.TextColumn("Product",        width=200),
+                "Units Sold":     st.column_config.NumberColumn("Units Sold",   format="%d", width=90),
+                "Returns":        st.column_config.NumberColumn("Returns",      width=80),
+                "Return Rate %":  st.column_config.NumberColumn("Return Rate %", format="%.1f%%", width=105),
+                "Top Reason":     st.column_config.TextColumn("Top Reason",     width=160),
+                "Action":         st.column_config.TextColumn("Action",         width=185),
+                "🔴 Amazon":      st.column_config.NumberColumn("🔴 Amazon",    width=90),
+                "🟠 Mfg Defect":  st.column_config.NumberColumn("🟠 Mfg Defect", width=105),
+                "⚪ Customer":    st.column_config.NumberColumn("⚪ Customer",   width=100),
+                "Other":          st.column_config.NumberColumn("Other",         width=70),
+            },
+        )
+
+        st.caption(
+            "**🔴 ≥ 5%** critical &nbsp;|&nbsp; **🟠 2–5%** elevated &nbsp;|&nbsp; **🟢 < 2%** normal &nbsp;|&nbsp; "
+            "**🔴 Contact Amazon** — FC/carrier damage &nbsp;|&nbsp; "
+            "**🟠 Contact Manufacturer** — product defect/quality &nbsp;|&nbsp; "
+            "**⚪ Normal Return** — customer preference"
+        )
+
+        st.download_button(
+            "⬇️ Download Returns Report CSV",
+            data=_ret_report.to_csv(index=False),
+            file_name=f"returns_report_{_ret_start}_{_ret_end}.csv",
+            mime="text/csv",
+            key="ret_dl_btn",
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — SALES DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_sales:
+if _nav == "📈 Sales Dashboard":
     # ── View toggle: Orders vs Bundles ────────────────────────────────────────
     _sales_view = st.radio(
         "View",
@@ -4571,7 +4583,7 @@ with tab_sales:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — ADS
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_ads:
+if _nav == "📣 Ads":
     _placement_tab, = st.tabs(["📍 Placement"])
 
     with _placement_tab:
@@ -6258,7 +6270,7 @@ with tab_ads:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 5 — AMAZON TRANSACTIONS
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_amazon:
+if _nav == "🛒 Amazon Transactions":
     from db.amazon_module import render_amazon_upload_ui, init_amazon_tables, MONTHS
     from db.database import get_conn as _amz_get_conn
 
@@ -6945,7 +6957,7 @@ with tab_amazon:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — MONTHLY SUMMARY (deterministic stats + cached AI narrative)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_summary:
+if _nav == "📋 Monthly Summary":
     from db.database import get_conn as _sum_get_conn
     from db.summary_module import (
         build_summary_stats, available_months, all_marketplaces,
@@ -7240,7 +7252,7 @@ with tab_summary:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 6 — CASH FORECAST
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_cashflow:
+if _nav == "💰 Cash Forecast":
     from db.cashflow_module import (
         init_cashflow_tables, get_accounts, update_account_balance,
         get_items as _cf_get_items, add_item, update_item, delete_item, change_from_month, add_account,
@@ -7910,7 +7922,7 @@ with tab_cashflow:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 7 — DATA HEALTH
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_datahealth:
+if _nav == "🔔 Data Health":
     from datetime import date as _dh_date
     from db.database import get_report_freshness
 
@@ -7988,7 +8000,7 @@ with tab_datahealth:
 # TAB 8 — ADMIN  (admin role only)
 # ══════════════════════════════════════════════════════════════════════════════
 if tab_admin is not None:
-    with tab_admin:
+    if _nav == "⚙️ Admin":
         st.markdown("# ⚙️ Admin")
         st.markdown(
             f"<p style='color:{T['text_secondary']};'>Maintenance tools. Use with care.</p>",
