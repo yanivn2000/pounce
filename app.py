@@ -1003,14 +1003,18 @@ if _nav == "📦 Inventory":
 # TAB — PROFIT
 # ══════════════════════════════════════════════════════════════════════════════
 if _nav == "📦 Products":
-    _suppliers_tab, _items_tab, _catalog_tab, _fba_tab = st.tabs([
-        "🏭 Suppliers", "🧩 Items", "📋 Products Catalog", "💰 FBA Fees"
-    ])
+    _PROF_SUBTABS = ["🏭 Suppliers", "🧩 Items", "📋 Products Catalog", "💰 FBA Fees"]
+    if st.session_state.get("_prof_nav") not in _PROF_SUBTABS:
+        st.session_state["_prof_nav"] = _PROF_SUBTABS[0]
+    _prof_nav = st.radio("Products section", _PROF_SUBTABS, key="_prof_nav",
+                         horizontal=True, label_visibility="collapsed")
+    if not _prof_nav:
+        _prof_nav = st.session_state.get("_prof_nav") or _PROF_SUBTABS[0]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — SUPPLIERS
 # ══════════════════════════════════════════════════════════════════════════════
-with _suppliers_tab:
+if _nav == "📦 Products" and _prof_nav == "🏭 Suppliers":
     st.markdown("# 🏭 Suppliers")
     st.markdown(
         f"<p style='color:{T['text_secondary']};'>Manage your supplier and manufacturer contacts.</p>",
@@ -1151,7 +1155,7 @@ with _suppliers_tab:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — ITEMS
 # ══════════════════════════════════════════════════════════════════════════════
-with _items_tab:
+if _nav == "📦 Products" and _prof_nav == "🧩 Items":
     st.markdown("# 🧩 Items")
     st.markdown(
         f"<p style='color:{T['text_secondary']};'>Raw items and components used to assemble products.</p>",
@@ -1389,7 +1393,7 @@ with _items_tab:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — PRODUCTS CATALOG
 # ══════════════════════════════════════════════════════════════════════════════
-with _catalog_tab:
+if _nav == "📦 Products" and _prof_nav == "📋 Products Catalog":
     st.markdown("# 📋 Products Catalog")
     st.markdown(
         f"<p style='color:{T['text_secondary']};'>Assembled products with components, dimensions, "
@@ -1765,7 +1769,7 @@ with _catalog_tab:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — FBA FEES
 # ══════════════════════════════════════════════════════════════════════════════
-with _fba_tab:
+if _nav == "📦 Products" and _prof_nav == "💰 FBA Fees":
     st.markdown("### 💰 FBA Fees")
     st.markdown(
         f"<p style='font-size:0.85rem;color:{T['text_secondary']};'>"
