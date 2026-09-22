@@ -87,6 +87,15 @@ def get_sales_matrix(marketplace: str = None, days: int = 30,
     return pivot[["asin", "title"] + date_cols]
 
 
+def _one_title_per_asin(df, order_col):
+    """One representative (most-recent) title per ASIN so a pivot indexed by
+    ASIN alone collapses the many per-period title variants Amazon returns for
+    the same ASIN into a single row (fixes duplicate ASIN rows)."""
+    if df.empty or "title" not in df.columns:
+        return {}
+    return df.sort_values(order_col).groupby("asin")["title"].last()
+
+
 def get_units_matrix(marketplace: str = None, days: int = 30,
                      include_pending: bool = False) -> pd.DataFrame:
     """Daily pivot: ASIN × Date, values = units sold."""
@@ -94,11 +103,12 @@ def get_units_matrix(marketplace: str = None, days: int = 30,
     if df.empty:
         return df
     pivot = df.pivot_table(
-        index=["asin", "title"], columns="order_date",
+        index="asin", columns="order_date",
         values="units", aggfunc="sum", fill_value=0,
     )
     pivot.columns.name = None
     pivot = pivot.reset_index()
+    pivot["title"] = pivot["asin"].map(_one_title_per_asin(df, "order_date")).fillna("")
     date_cols = sorted([c for c in pivot.columns if c not in ("asin", "title")], reverse=True)
     return pivot[["asin", "title"] + date_cols]
 
@@ -110,11 +120,12 @@ def get_weekly_units_matrix(marketplace: str = None, weeks: int = 8,
     if df.empty:
         return df
     pivot = df.pivot_table(
-        index=["asin", "title"], columns="week_start",
+        index="asin", columns="week_start",
         values="units", aggfunc="sum", fill_value=0,
     )
     pivot.columns.name = None
     pivot = pivot.reset_index()
+    pivot["title"] = pivot["asin"].map(_one_title_per_asin(df, "week_start")).fillna("")
     date_cols = sorted([c for c in pivot.columns if c not in ("asin", "title")], reverse=True)
     return pivot[["asin", "title"] + date_cols]
 
@@ -166,11 +177,12 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8,
         if df.empty:
             return df
         p = df.pivot_table(
-            index=["asin", "title"], columns="week_start",
+            index="asin", columns="week_start",
             values="units", aggfunc="sum", fill_value=0,
         )
         p.columns.name = None
         p = p.reset_index()
+        p["title"] = p["asin"].map(_one_title_per_asin(df, "week_start")).fillna("")
         date_cols = sorted([c for c in p.columns if c not in ("asin", "title")], reverse=True)
         return p[["asin", "title"] + date_cols]
 
