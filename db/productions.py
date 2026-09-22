@@ -364,13 +364,14 @@ def get_asin_image_map() -> dict[str, str]:
 
 def fetch_asin_image_url(asin: str) -> str | None:
     """
-    Fetch the main product image URL for an ASIN by reading the Amazon listing
-    page and extracting the og:image meta tag.
+    Fetch the main product image URL for an ASIN from the Amazon listing page.
 
-    Tries amazon.com first, then amazon.co.uk as a fallback.
-    Returns None if the image URL cannot be determined.
+    Amazon dropped the og:image meta tag, so we read (in order): og:image
+    (older layout), the "hiRes" main-gallery image, "large", then the largest
+    URL in a data-a-dynamic-image blob. Tries amazon.com then amazon.co.uk.
+    Returns None if no image URL can be determined.
     """
-    import re
+    import re, json
     try:
         import requests as _req
     except ImportError:
@@ -386,30 +387,45 @@ def fetch_asin_image_url(asin: str) -> str | None:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
+    def _extract(html: str) -> str | None:
+        m = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](https?://[^"\']+)["\']',
+            html)
+        if m:
+            return m.group(1).strip()
+        m = re.search(
+            r'<meta[^>]+content=["\'](https?://[^"\']+)["\'][^>]+property=["\']og:image["\']',
+            html)
+        if m:
+            return m.group(1).strip()
+        # Main gallery high-res image (current Amazon layout)
+        for m in re.finditer(r'"hiRes"\s*:\s*"(https://m\.media-amazon\.com/images/I/[^"]+)"', html):
+            return m.group(1)
+        m = re.search(r'"large"\s*:\s*"(https://m\.media-amazon\.com/images/I/[^"]+)"', html)
+        if m:
+            return m.group(1)
+        # Fallback: largest URL in a data-a-dynamic-image blob
+        best, area = None, 0
+        for dm in re.finditer(r'data-a-dynamic-image=["\'](\{.*?\})["\']', html):
+            try:
+                d = json.loads(dm.group(1).replace("&quot;", '"'))
+                for url, wh in d.items():
+                    if ("images/I/" in url and isinstance(wh, list) and len(wh) == 2
+                            and wh[0] * wh[1] > area):
+                        best, area = url, wh[0] * wh[1]
+            except Exception:
+                continue
+        return best
+
     for base in ("https://www.amazon.com/dp/", "https://www.amazon.co.uk/dp/"):
         try:
-            resp = _req.get(f"{base}{asin}", headers=headers, timeout=10, allow_redirects=True)
-            if resp.status_code != 200:
+            resp = _req.get(f"{base}{asin}", headers=headers, timeout=12, allow_redirects=True)
+            # Block/captcha pages are tiny; real product pages are >50KB
+            if resp.status_code != 200 or len(resp.text) < 50000:
                 continue
-            html = resp.text
-            # 1. og:image meta tag  (most reliable)
-            m = re.search(
-                r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-                html
-            )
-            if not m:
-                m = re.search(
-                    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-                    html
-                )
-            if m:
-                url = m.group(1).strip()
-                if url.startswith("http"):
-                    return url
-            # 2. landingAsinColor JSON blob — hiRes key
-            m = re.search(r'"hiRes"\s*:\s*"(https://[^"]+)"', html)
-            if m:
-                return m.group(1).strip()
+            url = _extract(resp.text)
+            if url and url.startswith("http"):
+                return url
         except Exception:
             continue
     return None
