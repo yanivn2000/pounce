@@ -4594,6 +4594,82 @@ if _nav == "📈 Sales Dashboard":
                     else:
                         st.warning("ASIN is required.")
 
+            # ── Manage existing entries: edit / delete / add (Excel-like) ──────
+            from db.database import get_conn as _clm_conn_fn
+            _clm_conn = _clm_conn_fn()
+            _clm_rows = _clm_conn.execute(
+                "SELECT id, log_date, asin, marketplace, change_type, notes "
+                "FROM change_log ORDER BY log_date DESC, id DESC LIMIT 200"
+            ).fetchall()
+            _clm_conn.close()
+
+            if _clm_rows:
+                with st.expander(f"✏️ Edit / delete entries ({len(_clm_rows)})", expanded=False):
+                    st.caption(
+                        "Edit any cell, delete a row with the trash icon on its left, or add a "
+                        "row at the bottom — then click Save changes."
+                    )
+                    _cl_orig = pd.DataFrame(
+                        [dict(r) for r in _clm_rows],
+                        columns=["id", "log_date", "asin", "marketplace", "change_type", "notes"],
+                    )
+                    _CL_MKTS  = ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au", "amazon.de"]
+                    _CL_TYPES = ["bid", "price", "image", "title", "deal", "listing", "other"]
+                    _cl_ver = st.session_state.get("cl_editor_ver", 0)
+                    _cl_edited = st.data_editor(
+                        _cl_orig, key=f"cl_manage_editor_{_cl_ver}", num_rows="dynamic",
+                        hide_index=True, use_container_width=True,
+                        column_config={
+                            "id": None,
+                            "log_date":    st.column_config.TextColumn("Date", help="YYYY-MM-DD"),
+                            "asin":        st.column_config.TextColumn("ASIN"),
+                            "marketplace": st.column_config.SelectboxColumn("Marketplace", options=_CL_MKTS),
+                            "change_type": st.column_config.SelectboxColumn("Type", options=_CL_TYPES),
+                            "notes":       st.column_config.TextColumn("Notes", width="large"),
+                        },
+                    )
+                    if st.button("💾 Save changes", key="cl_manage_save", type="primary"):
+                        _orig_by_id = {int(r["id"]): dict(r) for r in _clm_rows}
+                        _seen, _upd, _del, _ins = set(), 0, 0, 0
+                        _cw = _clm_conn_fn()
+                        with _cw:
+                            for _row in _cl_edited.to_dict("records"):
+                                _rid  = _row.get("id")
+                                _asin = str(_row.get("asin") or "").strip().upper()
+                                if _rid is None or (isinstance(_rid, float) and pd.isna(_rid)):
+                                    if _asin:  # newly added row
+                                        _cw.execute(
+                                            "INSERT INTO change_log (log_date, asin, marketplace, change_type, notes) VALUES (?,?,?,?,?)",
+                                            (str(_row.get("log_date") or date.today()), _asin,
+                                             _row.get("marketplace") or "amazon.com",
+                                             _row.get("change_type") or "other",
+                                             str(_row.get("notes") or "")))
+                                        _ins += 1
+                                    continue
+                                _rid = int(_rid); _seen.add(_rid)
+                                _o = _orig_by_id.get(_rid)
+                                if not _o:
+                                    continue
+                                _new = (str(_row.get("log_date") or ""), _asin,
+                                        str(_row.get("marketplace") or ""), str(_row.get("change_type") or ""),
+                                        str(_row.get("notes") or ""))
+                                _old = (str(_o["log_date"] or ""), str(_o["asin"] or "").upper(),
+                                        str(_o["marketplace"] or ""), str(_o["change_type"] or ""),
+                                        str(_o["notes"] or ""))
+                                if _new != _old:
+                                    _cw.execute(
+                                        "UPDATE change_log SET log_date=?, asin=?, marketplace=?, change_type=?, notes=? WHERE id=?",
+                                        (*_new, _rid))
+                                    _upd += 1
+                            for _rid in _orig_by_id:            # rows removed in the editor
+                                if _rid not in _seen:
+                                    _cw.execute("DELETE FROM change_log WHERE id=?", (_rid,))
+                                    _del += 1
+                        _cw.close()
+                        st.session_state["cl_editor_ver"] = _cl_ver + 1   # reset editor
+                        st.success(f"✅ Saved — {_upd} updated, {_del} deleted, {_ins} added.")
+                        st.rerun()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB — ADS
