@@ -4369,11 +4369,22 @@ if _nav == "📈 Sales Dashboard":
                 # ── Latest change log per ASIN ────────────────────────────────────
                 from db.database import get_conn as _gcl
                 _cl_conn = _gcl()
-                _lc_rows = _cl_conn.execute("""
-                    SELECT asin, log_date, change_type, notes
-                    FROM change_log
-                    WHERE id IN (SELECT MAX(id) FROM change_log GROUP BY asin)
-                """).fetchall()
+                if sel_market:
+                    # Notes are per-marketplace — show only the selected market's latest
+                    _lc_rows = _cl_conn.execute("""
+                        SELECT asin, log_date, change_type, notes
+                        FROM change_log
+                        WHERE id IN (
+                            SELECT MAX(id) FROM change_log
+                            WHERE marketplace = ? GROUP BY asin
+                        )
+                    """, (sel_market,)).fetchall()
+                else:
+                    _lc_rows = _cl_conn.execute("""
+                        SELECT asin, log_date, change_type, notes
+                        FROM change_log
+                        WHERE id IN (SELECT MAX(id) FROM change_log GROUP BY asin)
+                    """).fetchall()
                 _cl_conn.close()
                 _last_change_map = {}
                 for _r in _lc_rows:
