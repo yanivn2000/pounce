@@ -858,6 +858,20 @@ if _nav == "📦 Inventory":
         # SPM / 3PL UK upload
         st.markdown("### 🏢 3PL UK — SPM")
         st.markdown(f"<p style='font-size:0.83rem;color:{T['text_secondary']};'>Upload the SPM stock report CSV. SKUs are mapped to ASINs below.</p>", unsafe_allow_html=True)
+
+        # Show the result of the previous import (survives the post-import rerun)
+        _spm_msg = st.session_state.pop("_spm_import_msg", None)
+        if _spm_msg is not None:
+            if _spm_msg["n"]:
+                st.success(f"✅ {_spm_msg['n']} SKUs imported into 3PL UK.")
+            for _w in _spm_msg["w"]:
+                st.warning(_w)
+            if _spm_msg["unmapped"]:
+                st.warning(f"⚠️ {len(_spm_msg['unmapped'])} SKUs not mapped to ASINs: "
+                           + ", ".join(_spm_msg["unmapped"]))
+                st.info("Map them in the **SKU → ASIN Mapping** section below, then re-import.")
+            if not _spm_msg["n"] and not _spm_msg["w"] and not _spm_msg["unmapped"]:
+                st.warning("No rows imported — check the CSV has **SKU** and **OnHand** columns with data rows.")
         _spm_f = st.file_uploader("SPM Stock Report", type=["csv", "txt"], key="spm_upload")
 
         # Pre-filled template: SPM's exact columns + the latest recorded on-hand,
@@ -891,12 +905,7 @@ if _nav == "📦 Inventory":
             st.caption(f"Template unavailable: {_spm_te}")
         if _spm_f and st.button("Import SPM", key="btn_spm"):
             _n, _w, _unmapped = import_spm_csv(_spm_f, _snap_date_upload)
-            if _n:
-                st.success(f"✅ {_n} SKUs imported.")
-            for w in _w: st.warning(w)
-            if _unmapped:
-                st.warning(f"⚠️ {len(_unmapped)} SKUs not mapped to ASINs: {', '.join(_unmapped)}")
-                st.info("Map them in the **SKU → ASIN Mapping** section below.")
+            st.session_state["_spm_import_msg"] = {"n": _n, "w": list(_w), "unmapped": list(_unmapped)}
             st.rerun()
 
         # SKU → ASIN mapping
