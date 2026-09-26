@@ -195,6 +195,17 @@ def import_awd_csv(file_obj, snapshot_date: str = None) -> tuple[int, list[str]]
     return imported, warnings
 
 
+def _norm_sku(s) -> str:
+    """Normalize a SKU for tolerant matching: uppercase, strip, drop zero-width /
+    non-breaking spaces, and treat spaces/hyphens as underscores — so a CSV
+    cell like 'GIFFTED 063' still matches the stored 'GIFFTED_063'."""
+    import re as _re
+    s = str(s or "").replace("\u00a0", " ").replace("\u200b", "").strip().upper()
+    s = _re.sub(r"[\s\-]+", "_", s)
+    s = _re.sub(r"_+", "_", s)
+    return s
+
+
 def import_spm_csv(file_obj, snapshot_date: str = None) -> tuple[int, list[str], list[str]]:
     """
     Parse an SPM (UK 3PL) CSV. Returns (imported, warnings, unmapped_skus).
@@ -216,6 +227,10 @@ def import_spm_csv(file_obj, snapshot_date: str = None) -> tuple[int, list[str],
     conn = get_conn()
     map_rows = conn.execute("SELECT sku, asin FROM sku_asin_map").fetchall()
     sku_map = {r["sku"]: r["asin"] for r in map_rows}
+    # Tolerant fallback: match ignoring case and space/underscore/hyphen slips
+    norm_map = {}
+    for r in map_rows:
+        norm_map.setdefault(_norm_sku(r["sku"]), r["asin"])
 
     def _int(row, col):
         try:
@@ -231,7 +246,7 @@ def import_spm_csv(file_obj, snapshot_date: str = None) -> tuple[int, list[str],
             sku = str(row.get("SKU", "")).strip()
             if not sku:
                 continue
-            asin = sku_map.get(sku)
+            asin = sku_map.get(sku) or norm_map.get(_norm_sku(sku))
             if not asin:
                 unmapped.append(sku)
                 continue
