@@ -573,7 +573,7 @@ if _nav == "🎁 Occasions":
 # ══════════════════════════════════════════════════════════════════════════════
 if _nav == "📦 Inventory":
     _INV_SUBTABS = ["📊 Overview", "📦 Long Storage", "🔍 Storage Audit", "📤 Upload Data",
-                    "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns"]
+                    "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns", "🐋 Large Orders"]
     if st.session_state.get("_inv_nav") not in _INV_SUBTABS:
         st.session_state["_inv_nav"] = _INV_SUBTABS[0]
     _inv_nav = st.radio("Inventory section", _INV_SUBTABS, key="_inv_nav",
@@ -3573,6 +3573,187 @@ if _nav == "📦 Inventory" and _inv_nav == "↩️ Returns":
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — SALES DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# INVENTORY SUB-TAB — LARGE ORDERS (return-risk)
+# ══════════════════════════════════════════════════════════════════════════════
+if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
+    st.markdown("# 🐋 Large Orders — return risk")
+    st.caption("Large single-SKU orders (qty ≥ threshold) and their return / refund / "
+               "reimbursement status. Location is city / state / postcode only — no buyer names.")
+    from db.large_orders import (full_analysis, get_lo_settings, save_lo_settings,
+                                 import_reimbursements_csv, get_reimbursements_summary)
+    from db.database import get_conn as _lo_get_conn
+    _lo_conn = _lo_get_conn()
+
+    _lo_f1, _lo_f2 = st.columns([1, 2])
+    with _lo_f1:
+        _lo_mps = ["(All)"] + [r[0] for r in _lo_conn.execute(
+            "SELECT DISTINCT marketplace FROM orders WHERE marketplace IS NOT NULL ORDER BY 1").fetchall()]
+        _lo_mp_sel = st.selectbox("Marketplace", _lo_mps, key="lo_mp",
+                                  format_func=lambda m: "🌐 All" if m == "(All)" else m)
+    _lo_mm = _lo_conn.execute("SELECT MIN(order_date), MAX(order_date) FROM orders").fetchone()
+    _lo_min = (_lo_mm[0] or "2026-01-01")[:10]
+    _lo_max = (_lo_mm[1] or date.today().isoformat())[:10]
+    with _lo_f2:
+        _lo_range = st.date_input("Order date range",
+                                  value=(date.fromisoformat(_lo_min), date.fromisoformat(_lo_max)),
+                                  key="lo_range")
+    if isinstance(_lo_range, (list, tuple)) and len(_lo_range) == 2:
+        _lo_start, _lo_end = _lo_range[0].isoformat(), _lo_range[1].isoformat()
+    else:
+        _lo_start, _lo_end = _lo_min, _lo_max
+
+    with st.expander("⚙️ Settings — thresholds, caps, windows"):
+        _s = get_lo_settings(_lo_conn)
+        _sc1, _sc2 = st.columns(2)
+        _s["large_threshold"] = _sc1.number_input("Large line threshold (qty ≥)",
+            min_value=2, max_value=100, value=int(_s["large_threshold"]), step=1, key="lo_thr")
+        _s["refund_no_return_days"] = _sc2.number_input("Refund-no-return overdue (days)",
+            min_value=1, max_value=180, value=int(_s["refund_no_return_days"]), step=5, key="lo_rnr")
+        st.markdown("**Per-marketplace** (major 3):")
+        for _m in ["amazon.com", "amazon.ca", "amazon.co.uk"]:
+            _mc = st.columns([2, 1, 1, 1, 1])
+            _mc[0].markdown(f"`{_m}`")
+            _s["max_order_qty"][_m] = _mc[1].number_input("Max qty", min_value=1, max_value=999,
+                value=int(_s["max_order_qty"].get(_m, 15)), key=f"lo_cap_{_m}")
+            _s["transit_days"][_m] = _mc[2].number_input("Transit d", min_value=0, max_value=60,
+                value=int(_s["transit_days"].get(_m, 3)), key=f"lo_tr_{_m}")
+            _s["return_window_days"][_m] = _mc[3].number_input("Return win d", min_value=0, max_value=180,
+                value=int(_s["return_window_days"].get(_m, 30)), key=f"lo_rw_{_m}")
+            _s["holiday_window"][_m] = _mc[4].checkbox("Holiday", value=bool(_s["holiday_window"].get(_m, False)),
+                key=f"lo_hol_{_m}")
+        if st.button("💾 Save settings", key="lo_save_settings"):
+            save_lo_settings(_lo_conn, _s)
+            st.success("Saved.")
+            st.rerun()
+
+    with st.expander("📤 Upload Reimbursements report (NA / UK — same format)"):
+        _rsum = get_reimbursements_summary(_lo_conn)
+        st.caption(f"Currently {_rsum['rows']} reimbursements loaded"
+                   + (f" ({_rsum['earliest'][:10]} → {_rsum['latest'][:10]})" if _rsum['rows'] else ""))
+        _rf = st.file_uploader("Reimbursements CSV", type=["csv"], accept_multiple_files=True, key="lo_reimb_up")
+        if _rf and st.button("Import reimbursements", key="lo_reimb_btn", type="primary"):
+            _rtot = 0
+            for _one in _rf:
+                _rn, _rw = import_reimbursements_csv(_one, _lo_conn)
+                _rtot += _rn
+                for _ww in _rw:
+                    st.warning(_ww)
+            st.session_state["_lo_reimb_msg"] = f"✅ Imported {_rtot} reimbursement rows."
+            st.rerun()
+        _rmsg = st.session_state.pop("_lo_reimb_msg", None)
+        if _rmsg:
+            st.success(_rmsg)
+
+    _lo = full_analysis(_lo_conn, marketplace=None if _lo_mp_sel == "(All)" else _lo_mp_sel,
+                        start=_lo_start, end=_lo_end)
+    _k = _lo["kpis"]
+    _kc = st.columns(5)
+    _kc[0].metric("Large lines", f"{_k['large_lines']:,}")
+    _kc[1].metric("Open-risk units", f"{_k['open_risk_units']:,}")
+    _kc[2].metric("Open-risk revenue", f"${_k['open_risk_revenue']:,.0f}")
+    _kc[3].metric("Units returned", f"{_k['units_returned']:,}")
+    _kc[4].metric("Claim candidates", f"{_k['claim_candidates']:,}")
+
+    def _lo_csv(rows, label, fname):
+        if rows:
+            st.download_button(label, data=pd.DataFrame(rows).to_csv(index=False),
+                               file_name=fname, mime="text/csv", key="dl_" + fname)
+
+    _lo_view = st.radio("View", ["📋 Tracker", "👥 Customers", "🏷️ Badge impact", "⚖️ Claims"],
+                        horizontal=True, key="lo_view", label_visibility="collapsed")
+
+    if _lo_view == "📋 Tracker":
+        _rows = _lo["lines"]
+        if not _rows:
+            st.info("No large lines in this range. Lower the threshold in Settings, or widen the dates.")
+        else:
+            _df = pd.DataFrame([{
+                "Status": l["status"], "MP": l["marketplace"], "Order": l["order_id"],
+                "Date": l["order_date"], "SKU": l["sku"], "Qty": l["qty"], "Rev": l["revenue"],
+                "City": l["city"], "State": l["state"], "Zip": l["zip"], "Received": l["received"],
+                "Received detail": ", ".join(f"{k}:{v}" for k, v in l["by_disposition"].items()),
+                "Refund": ("$%.2f" % l["refund_amt"]) if l["refund_seen"] else "",
+                "Reimb units": l["reimbursed_units"], "Days left": l["days_left"],
+                "Window end": l["window_end"],
+            } for l in _rows])
+            st.dataframe(_df, use_container_width=True, hide_index=True)
+            _lo_csv(_rows, "⬇️ Download tracker CSV", "large_orders_tracker.csv")
+
+    elif _lo_view == "👥 Customers":
+        _rows = _lo["customers"]
+        if not _rows:
+            st.info("No large-order customers in range.")
+        else:
+            _df = pd.DataFrame([{
+                "MP": c["marketplace"], "City": c["city"], "State": c["state"], "Zip": c["zip"],
+                "Orders": c["orders"], "Large lines": c["large_lines"], "Units": c["units"],
+                "SKUs": c["skus"], "First": c["first_order"], "Last": c["last_order"],
+                "Returned": c["units_returned"], "Refunds": c["refunds_seen"],
+                "Repeat": "🔁" if c["repeat_large"] else "", "Split": "⏱️" if c["split_orders"] else "",
+                "At-cap": "🎯" if c["at_cap"] else "", "Above-cap": "🚩" if c["above_cap"] else "",
+            } for c in _rows])
+            st.dataframe(_df, use_container_width=True, hide_index=True)
+            st.caption("🔁 repeat large buyer (2+ large lines ≤60d) · ⏱️ split (orders ≤60 min apart — "
+                       "needs re-imported timestamps) · 🎯 at cap · 🚩 above cap (limit not set on that SKU)")
+            _lo_csv(_rows, "⬇️ Download customers CSV", "large_orders_customers.csv")
+
+    elif _lo_view == "🏷️ Badge impact":
+        _rows = _lo["badge"]
+        st.caption("Trailing-90-day units shipped vs returned per ASIN. Returned is a **lower bound** "
+                   "(Amazon also counts initiated returns that never arrive). Open large lines show how many "
+                   "percentage points they'd add to the return rate if fully returned.")
+        if not _rows:
+            st.info("No badge data in range.")
+        else:
+            _df = pd.DataFrame([{
+                "ASIN": b["asin"], "MP": b["marketplace"], "Units 90d": b["units_90d"],
+                "Returned 90d (≥)": b["returns_90d_lowerbound"], "Rate %": b["return_rate_pct"],
+                "Suggested thr %": b["suggested_threshold"], "Open lines": b["open_large_lines"],
+                "Max +pp if returned": b["max_pp_if_returned"],
+                "Would cross": "⚠️" if b["would_cross_threshold"] else "",
+            } for b in _rows])
+            st.dataframe(_df, use_container_width=True, hide_index=True)
+            _lo_csv(_rows, "⬇️ Download badge CSV", "large_orders_badge.csv")
+
+    else:
+        _cl = _lo["claims"]
+        st.markdown("##### ⚖️ Contradiction returns — carrier/FC fault but marked CUSTOMER_DAMAGED")
+        if _cl["contradiction"]:
+            st.dataframe(pd.DataFrame(_cl["contradiction"]), use_container_width=True, hide_index=True)
+            _lo_csv(_cl["contradiction"], "⬇️ CSV", "claims_contradiction.csv")
+        else:
+            st.caption("None.")
+        st.markdown("##### 💸 Refund, no return, overdue — claim candidates")
+        if _cl["refund_no_return_overdue"]:
+            st.dataframe(pd.DataFrame([{"MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
+                "Qty": l["qty"], "Received": l["received"], "Refund $": l["refund_amt"],
+                "Refund date": l["refund_date"]} for l in _cl["refund_no_return_overdue"]]),
+                use_container_width=True, hide_index=True)
+            _lo_csv(_cl["refund_no_return_overdue"], "⬇️ CSV", "claims_overdue.csv")
+        else:
+            st.caption("None.")
+        st.markdown("##### 📦 Shortfall on refunded orders — ordered − received − reimbursed > 0")
+        if _cl["shortfall"]:
+            st.dataframe(pd.DataFrame([{"MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
+                "Qty": l["qty"], "Received": l["received"], "Reimbursed": l["reimbursed_units"],
+                "Shortfall": l["shortfall"]} for l in _cl["shortfall"]]),
+                use_container_width=True, hide_index=True)
+            _lo_csv(_cl["shortfall"], "⬇️ CSV", "claims_shortfall.csv")
+        else:
+            st.caption("None.")
+        st.markdown("##### 🔍 Sellable returns from large lines — inspect for tampering")
+        if _cl["inspect_sellable"]:
+            st.dataframe(pd.DataFrame([{"MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
+                "Qty": l["qty"], "Sellable back": l["sellable_back"]} for l in _cl["inspect_sellable"]]),
+                use_container_width=True, hide_index=True)
+            _lo_csv(_cl["inspect_sellable"], "⬇️ CSV", "claims_inspect.csv")
+        else:
+            st.caption("None.")
+
+    _lo_conn.close()
+
+
 if _nav == "📈 Sales Dashboard":
     # ── View toggle: Orders vs Bundles ────────────────────────────────────────
     _sales_view = st.radio(

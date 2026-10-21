@@ -384,3 +384,161 @@ def get_large_orders_analysis(conn=None, marketplace=None, start=None, end=None,
     if close:
         conn.close()
     return {"lines": lines, "settings": settings, "today": today.isoformat()}
+
+
+# ── Customers / Badge / Claims (built from the tracker lines + a few queries) ──
+from datetime import datetime as _datetime
+
+
+def _parse_full(s):
+    """Parse 'YYYY-MM-DD HH:MM:SS' to datetime, but only when a real time is
+    present (date-only strings return None, so split-minute logic stays dormant
+    until orders are re-imported with timestamps)."""
+    s = str(s or "")
+    if len(s) <= 10:
+        return None
+    try:
+        dt = _datetime.fromisoformat(s.replace("T", " ")[:19])
+        if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+            return None   # midnight = almost certainly a date-only import
+        return dt
+    except Exception:
+        return None
+
+
+def build_customers(lines, settings) -> list[dict]:
+    from collections import defaultdict
+    g = defaultdict(list)
+    for l in lines:
+        g[l["customer_key"]].append(l)
+    out = []
+    for key, ls in g.items():
+        mp = ls[0]["marketplace"]
+        maxcap = int(_mp_val(settings, "max_order_qty", mp, 15))
+        order_ids = sorted(set(l["order_id"] for l in ls))
+        dates = sorted(d for d in (_parse_dt(l["order_date"]) for l in ls) if d)
+        times = sorted(t for t in (_parse_full(l["order_datetime"]) for l in ls) if t)
+        # repeat large buyer: 2+ large lines whose order dates fall within 60 days
+        repeat = len(ls) >= 2 and bool(dates) and (dates[-1] - dates[0]).days <= 60
+        # split: 2+ distinct orders from this key within 60 minutes (needs real time)
+        split = False
+        order_times = sorted({(l["order_id"]): t for l in ls
+                              for t in [_parse_full(l["order_datetime"])] if t}.values())
+        for i in range(len(order_times) - 1):
+            if (order_times[i + 1] - order_times[i]).total_seconds() <= 3600:
+                split = True
+                break
+        out.append({
+            "customer_key": key, "marketplace": mp,
+            "city": ls[0]["city"], "state": ls[0]["state"], "zip": ls[0]["zip"],
+            "orders": len(order_ids), "large_lines": len(ls),
+            "units": sum(l["qty"] for l in ls),
+            "skus": len(set(l["sku"] for l in ls)),
+            "first_order": min(l["order_date"] for l in ls),
+            "last_order": max(l["order_date"] for l in ls),
+            "units_returned": sum(l["received"] for l in ls),
+            "refunds_seen": sum(1 for l in ls if l["refund_seen"]),
+            "repeat_large": repeat, "split_orders": split,
+            "at_cap": any(l["qty"] == maxcap for l in ls),
+            "above_cap": any(l["qty"] > maxcap for l in ls),
+        })
+    out.sort(key=lambda c: (-c["units"], -c["large_lines"]))
+    return out
+
+
+def build_claims(conn, lines) -> dict:
+    # 1) contradiction: disposition CUSTOMER_DAMAGED but reason says carrier/FC fault
+    contradiction = [dict(order_id=r[0], asin=r[1], sku=r[2], reason=r[3],
+                          disposition=r[4], marketplace=r[5])
+                     for r in conn.execute("""
+        SELECT order_id, asin, sku, reason, disposition, marketplace
+        FROM amazon_returns
+        WHERE UPPER(COALESCE(disposition,''))='CUSTOMER_DAMAGED'
+          AND UPPER(COALESCE(reason,'')) IN ('DAMAGED_BY_CARRIER','DAMAGED_BY_FC')
+        ORDER BY return_date DESC""").fetchall()]
+    # 2) refund-no-return overdue
+    overdue = [l for l in lines if l["status"] == "REFUND_NO_RETURN_OVERDUE"]
+    # 3) shortfall on refunded lines: ordered - received - reimbursed > 0
+    shortfall = [dict(l, shortfall=l["qty"] - l["received"] - l["reimbursed_units"])
+                 for l in lines
+                 if l["refund_seen"] and (l["qty"] - l["received"] - l["reimbursed_units"]) > 0]
+    # 4) sellable returns from flagged large lines → inspect for tampering
+    inspect = [l for l in lines if l["sellable_back"] > 0]
+    return {"contradiction": contradiction, "refund_no_return_overdue": overdue,
+            "shortfall": shortfall, "inspect_sellable": inspect}
+
+
+def build_badge(conn, lines, settings, badge_inputs=None) -> list[dict]:
+    badge_inputs = badge_inputs or {}
+    today = _date.today()
+    since = (today - _td(days=90)).isoformat()
+    units90 = {}
+    for r in conn.execute("""
+        SELECT UPPER(asin) a, marketplace, SUM(quantity)
+        FROM orders WHERE order_date >= ? AND COALESCE(order_status,'') NOT IN ('Cancelled')
+        GROUP BY UPPER(asin), marketplace""", (since,)).fetchall():
+        units90[(r[0], r[1])] = int(r[2] or 0)
+    ret90 = {}
+    for r in conn.execute("""
+        SELECT UPPER(asin) a, marketplace, COUNT(*)
+        FROM amazon_returns WHERE return_date >= ?
+        GROUP BY UPPER(asin), marketplace""", (since,)).fetchall():
+        ret90[(r[0], r[1])] = int(r[2] or 0)
+
+    # open large lines per (asin, mp) → potential pp impact
+    open_lines = {}
+    for l in lines:
+        if l["status"] in ("AT_RISK", "RETURN_IN_PROGRESS"):
+            open_lines.setdefault((l["asin"], l["marketplace"]), []).append(l["qty"])
+
+    keys = set(units90) | set(open_lines) | {tuple(k.split("|")) for k in badge_inputs if "|" in k}
+    out = []
+    for (asin, mp) in keys:
+        u = units90.get((asin, mp), 0)
+        rr = ret90.get((asin, mp), 0)
+        mi = badge_inputs.get(f"{asin}|{mp}", {})
+        thr = mi.get("threshold")
+        opens = open_lines.get((asin, mp), [])
+        max_pp = round(max(opens) / u * 100, 2) if (opens and u) else 0.0
+        rate = round(rr / u * 100, 2) if u else None
+        would_cross = bool(thr and rate is not None and (rate + max_pp) >= float(thr))
+        out.append({
+            "asin": asin, "marketplace": mp, "units_90d": u,
+            "returns_90d_lowerbound": rr, "return_rate_pct": rate,
+            "short_term_rate": mi.get("short_term"), "long_term_rate": mi.get("long_term"),
+            "suggested_threshold": thr, "badge": mi.get("badge"),
+            "open_large_lines": len(opens),
+            "max_pp_if_returned": max_pp, "would_cross_threshold": would_cross,
+        })
+    out.sort(key=lambda b: (-(b["max_pp_if_returned"] or 0), -(b["units_90d"] or 0)))
+    return out
+
+
+def full_analysis(conn=None, marketplace=None, start=None, end=None) -> dict:
+    close = conn is None
+    if conn is None:
+        conn = get_conn()
+    settings = get_lo_settings(conn)
+    base = get_large_orders_analysis(conn, marketplace, start, end, settings)
+    lines = base["lines"]
+    result = {
+        "lines": lines,
+        "customers": build_customers(lines, settings),
+        "claims": build_claims(conn, lines),
+        "badge": build_badge(conn, lines, settings, get_badge_inputs(conn)),
+        "settings": settings, "today": base["today"],
+    }
+    # KPIs
+    open_lines = [l for l in lines if l["status"] in ("AT_RISK", "RETURN_IN_PROGRESS")]
+    result["kpis"] = {
+        "large_lines": len(lines),
+        "open_risk_units": sum(l["qty"] - l["received"] for l in open_lines),
+        "open_risk_revenue": round(sum(l["revenue"] for l in open_lines), 2),
+        "units_returned": sum(l["received"] for l in lines),
+        "claim_candidates": (len(result["claims"]["contradiction"])
+                             + len(result["claims"]["refund_no_return_overdue"])
+                             + len(result["claims"]["shortfall"])),
+    }
+    if close:
+        conn.close()
+    return result
