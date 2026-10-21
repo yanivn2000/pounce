@@ -2689,6 +2689,10 @@ if _nav == "📦 Inventory" and _inv_nav == "🗂️ Stock to be Shipped":
 # INVENTORY SUB-TAB 3 — SHIPMENTS
 # ══════════════════════════════════════════════════════════════════════════════
 if _nav == "📦 Inventory" and _inv_nav == "🚢 Shipments":
+    # Shipments uses the catalog SKU list for its forms; define it here
+    # (it was previously inherited from the Productions tab, which no
+    # longer runs first under the lazy nav).
+    _all_skus = get_catalog_skus()
     st.markdown(
         f"<p style='font-size:1.1rem;font-weight:700;margin:0 0 4px;'>🚢 Shipments &nbsp;"
         f"<span style='font-size:0.78rem;font-weight:400;color:{T['text_secondary']};'>"
