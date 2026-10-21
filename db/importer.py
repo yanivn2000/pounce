@@ -6,6 +6,7 @@ Amazon order report columns (varies slightly by marketplace):
   sales-channel, quantity, item-price, item-tax, shipping-price, currency, order-status
 """
 
+import io
 import json
 import pandas as pd
 import sqlite3
@@ -66,13 +67,21 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
     try:
         # Auto-detect separator: Amazon fulfillment reports are tab-separated,
         # manually exported Google Sheets files are comma-separated.
-        sample = file_obj.read(4096)
-        if isinstance(sample, bytes):
-            sample = sample.decode("utf-8", errors="replace")
-        file_obj.seek(0)
-        first_line = sample.split("\n")[0]
+        raw = file_obj.read()
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        text = None
+        for _enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                text = raw.decode(_enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            text = raw.decode("utf-8", errors="replace")
+        first_line = text.split("\n", 1)[0]
         sep = "\t" if first_line.count("\t") >= first_line.count(",") else ","
-        df = pd.read_csv(file_obj, dtype=str, sep=sep)
+        df = pd.read_csv(io.StringIO(text), dtype=str, sep=sep)
     except Exception as e:
         return 0, [f"Failed to read CSV: {e}"]
 
@@ -80,6 +89,11 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
 
     # Rename columns to our schema names
     df = df.rename(columns={k: v for k, v in _COL_MAP.items() if k in df.columns})
+
+    # Amazon concatenates report chunks → repeated header rows mid-file.
+    if "order_id" in df.columns:
+        df = df[~df["order_id"].astype(str).str.strip().str.lower().isin(
+            ("amazon-order-id", "order-id"))]
 
     required = {"order_id", "order_date", "asin"}
     missing = required - set(df.columns)
@@ -111,7 +125,9 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
             df[col] = 0
 
     # Normalize date to YYYY-MM-DD
-    df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    _odt = pd.to_datetime(df["order_date"], errors="coerce", utc=True)
+    df["order_datetime"] = _odt.dt.strftime("%Y-%m-%d %H:%M:%S")
+    df["order_date"]     = _odt.dt.strftime("%Y-%m-%d")
     invalid_dates = df["order_date"].isna().sum()
     if invalid_dates:
         warnings.append(f"{invalid_dates} rows had unparseable dates and were skipped.")
@@ -130,13 +146,14 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
             try:
                 conn.execute("""
                     INSERT INTO orders
-                        (order_id, order_date, asin, sku, title, marketplace,
+                        (order_id, order_date, order_datetime, asin, sku, title, marketplace,
                          quantity, item_price, item_tax, shipping_price, currency, order_status,
                          ship_name, ship_address_1, ship_city, ship_state,
                          ship_postal_code, ship_country, buyer_name, buyer_email)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(order_id, asin) DO UPDATE SET
                         order_date       = excluded.order_date,
+                        order_datetime   = excluded.order_datetime,
                         quantity         = excluded.quantity,
                         item_price       = excluded.item_price,
                         item_tax         = excluded.item_tax,
@@ -153,6 +170,7 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
                 """, (
                     str(row["order_id"]).strip(),
                     row["order_date"],
+                    row.get("order_datetime"),
                     str(row["asin"]).strip().upper(),
                     row.get("sku"),
                     row.get("title"),

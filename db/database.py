@@ -278,6 +278,8 @@ def init_db():
     _migrate_returns(conn)
     _migrate_returns_lpn(conn)
     _migrate_orders_address_fields(conn)
+    _migrate_orders_datetime(conn)
+    _migrate_reimbursements(conn)
     _migrate_bundle_sales(conn)
     _migrate_bid_changes_unique_constraint(conn)
     _migrate_bid_changes_source(conn)
@@ -1264,6 +1266,47 @@ def _migrate_bundle_sales(conn: sqlite3.Connection):
         conn.commit()
     except Exception:
         pass
+
+
+def _migrate_orders_datetime(conn: sqlite3.Connection):
+    """Add order_datetime (full timestamp) to orders; keep order_date (YYYY-MM-DD)."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(orders)").fetchall()]
+    if "order_datetime" not in cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN order_datetime TEXT")
+        conn.commit()
+
+
+def _migrate_reimbursements(conn: sqlite3.Connection):
+    """Amazon Reimbursements report (refunded-no-return / warehouse loss/damage)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reimbursements (
+            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_date               TEXT,
+            reimbursement_id            TEXT NOT NULL,
+            case_id                     TEXT,
+            order_id                    TEXT,
+            reason                      TEXT,
+            sku                         TEXT NOT NULL DEFAULT '',
+            fnsku                       TEXT,
+            asin                        TEXT,
+            product_name                TEXT,
+            condition                   TEXT,
+            currency                    TEXT,
+            amount_per_unit             REAL DEFAULT 0,
+            amount_total                REAL DEFAULT 0,
+            qty_cash                    INTEGER DEFAULT 0,
+            qty_inventory               INTEGER DEFAULT 0,
+            qty_total                   INTEGER DEFAULT 0,
+            original_reimbursement_id   TEXT,
+            original_reimbursement_type TEXT,
+            marketplace                 TEXT,
+            imported_at                 TEXT DEFAULT (datetime('now')),
+            UNIQUE(reimbursement_id, sku)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reimb_order ON reimbursements(order_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reimb_asin  ON reimbursements(asin)")
+    conn.commit()
 
 
 def _migrate_orders_address_fields(conn: sqlite3.Connection):

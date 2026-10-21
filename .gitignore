@@ -8,3 +8,4 @@ data/pounce.db
 
 # Secrets — never commit credentials
 .streamlit/secrets.toml
+/pounce_reports/
