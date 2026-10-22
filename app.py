@@ -7286,6 +7286,9 @@ if _nav == "📋 Monthly Summary":
                 help="Flag a change as dramatic when it exceeds this %.",
             ) / 100.0
         _sum_all_mps = all_marketplaces(_sum_conn)
+        # Drop stray EU-country marketplaces (same as the P&L selector)
+        _sum_all_mps = [m for m in _sum_all_mps
+                        if str(m).strip().upper() not in _EU_MP_CODES]
         st.markdown("Marketplaces &nbsp;<span style='color:#999;font-size:0.8rem'>"
                     "(combined, converted to USD)</span>", unsafe_allow_html=True)
         _sum_mps = mp_quick_selector(_sum_all_mps, key="sum_mps")
