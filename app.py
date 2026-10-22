@@ -577,7 +577,7 @@ if _nav == "🎁 Occasions":
 # TAB — INVENTORY
 # ══════════════════════════════════════════════════════════════════════════════
 if _nav == "📦 Inventory":
-    _INV_SUBTABS = ["📊 Overview", "📦 Long Storage", "🔍 Storage Audit", "📤 Upload Data",
+    _INV_SUBTABS = ["📊 Overview", "📤 Upload Data", "📦 Long Storage", "🔍 Storage Audit",
                     "✏️ Manual Entry", "📦 Productions", "🗂️ Stock to be Shipped", "🚢 Shipments", "↩️ Returns", "🐋 Large Orders"]
     if st.session_state.get("_inv_nav") not in _INV_SUBTABS:
         st.session_state["_inv_nav"] = _INV_SUBTABS[0]
