@@ -8237,7 +8237,7 @@ if _nav == "🔔 Data Health":
     for r in _dh_reports:
         _dh_groups.setdefault(r["group"], []).append(r)
 
-    _GROUP_ORDER = ["Inventory", "Amazon Transactions", "FBA Fees",
+    _GROUP_ORDER = ["Inventory", "Amazon Transactions", "Reimbursements", "FBA Fees",
                     "Aged Inventory", "Returns", "Advertising"]
 
     for _grp in _GROUP_ORDER:

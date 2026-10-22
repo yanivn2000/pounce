@@ -1410,6 +1410,13 @@ def get_report_freshness() -> list[dict]:
 
     reports = []
 
+    # Only track our live markets in the per-marketplace cards (drop the EU
+    # country codes + NON-AMAZ that otherwise sit perpetually overdue).
+    _KEEP_MP = {"US", "CA", "UK", "GB",
+                "AMAZON.COM", "AMAZON.CA", "AMAZON.CO.UK"}
+    def _keep_mp(mp):
+        return str(mp or "").strip().upper() in _KEEP_MP
+
     # ── Inventory ─────────────────────────────────────────────────────────
     for loc, label, cadence in [
         ("FBA_US",  "FBA Inventory — US",       14),
@@ -1434,9 +1441,19 @@ def get_report_freshness() -> list[dict]:
     ).fetchall()
     for row in mp_rows:
         mp = row[0]
+        if not _keep_mp(mp):
+            continue
         d = _q("SELECT MAX(tx_date) FROM amazon_transactions WHERE marketplace=?", (mp,))
         reports.append({"group": "Amazon Transactions", "label": f"Transactions — {mp}",
                         "last_date": d[:10] if d else None, "cadence_days": 7})
+
+    # ── Reimbursements ─────────────────────────────────────────────────────
+    try:
+        d = _q("SELECT MAX(approval_date) FROM reimbursements")
+        reports.append({"group": "Reimbursements", "label": "Reimbursements",
+                        "last_date": d[:10] if d else None, "cadence_days": 30})
+    except Exception:
+        pass
 
     # ── FBA Fees ──────────────────────────────────────────────────────────
     d = _q("SELECT MAX(updated_at) FROM fba_fees")
@@ -1467,6 +1484,8 @@ def get_report_freshness() -> list[dict]:
         ).fetchall()
         for row in cp_rows:
             mp = row[0]
+            if not _keep_mp(mp):
+                continue
             d = _q(
                 "SELECT MAX(snapshot_date) FROM campaign_performance WHERE marketplace=?",
                 (mp,)
