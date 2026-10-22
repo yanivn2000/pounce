@@ -405,6 +405,11 @@ with st.sidebar:
     )
 
 # ── Reusable marketplace selector ─────────────────────────────────────────────
+_EU_MP_CODES = {"DE", "FR", "ES", "IT", "NL", "BE", "IE", "PL", "SE", "AT", "DK",
+                "FI", "GR", "PT", "CZ", "HU", "RO", "SK", "LU", "HR", "BG", "SI",
+                "EE", "LV", "LT", "CY", "MT"}
+
+
 def mp_quick_selector(all_mps, key, label="Marketplaces", show_label=False):
     """Marketplace multiselect with one-click presets:
     🌍 All · ⭐ Major 3 (US·CA·UK) · 🌎 NA (US·CA) · 🇪🇺 EU · 🧹 Clear.
@@ -427,7 +432,7 @@ def mp_quick_selector(all_mps, key, label="Marketplaces", show_label=False):
         _presets.append(("⭐ Major 3", _major, "US · CA · UK"))
     if _na:
         _presets.append(("🌎 NA", _na, "US · CA"))
-    if _eu:
+    if any(str(m).strip().upper() in _EU_MP_CODES for m in all_mps):
         _presets.append(("🇪🇺 EU", _eu, "UK + EU marketplaces"))
     _presets.append(("🧹 Clear", [], "Remove all — then pick your own"))
 
@@ -6602,6 +6607,9 @@ if _nav == "🛒 Amazon Transactions":
         _amz_all_mps = [r[0] for r in _amz_conn.execute(
             "SELECT DISTINCT marketplace FROM amazon_transactions ORDER BY marketplace"
         ).fetchall()]
+        # Drop stray EU-country marketplaces — we only operate US / CA / UK (+ NON-AMAZ)
+        _amz_all_mps = [m for m in _amz_all_mps
+                        if str(m).strip().upper() not in _EU_MP_CODES]
 
         _fa1, _fa2 = st.columns([1, 3])
         with _fa1:
