@@ -447,15 +447,38 @@ def build_customers(lines, settings) -> list[dict]:
 
 
 def build_claims(conn, lines) -> dict:
-    # 1) contradiction: disposition CUSTOMER_DAMAGED but reason says carrier/FC fault
-    contradiction = [dict(order_id=r[0], asin=r[1], sku=r[2], reason=r[3],
-                          disposition=r[4], marketplace=r[5])
-                     for r in conn.execute("""
-        SELECT order_id, asin, sku, reason, disposition, marketplace
+    # Net reimbursements per (order_id, ASIN). Reimbursement_Reversal rows carry
+    # negative units/amount, so SUM() nets clawbacks out automatically.
+    reimb_net = {}
+    for r in conn.execute(
+        "SELECT order_id, UPPER(asin), COALESCE(SUM(qty_total),0), COALESCE(SUM(amount_total),0) "
+        "FROM reimbursements WHERE order_id IS NOT NULL AND order_id!='' "
+        "GROUP BY order_id, UPPER(asin)").fetchall():
+        reimb_net[(str(r[0]), str(r[1] or ""))] = (int(r[2] or 0), round(float(r[3] or 0), 2))
+
+    # 1) contradiction: CUSTOMER_DAMAGED but carrier/FC fault — aggregated per
+    #    order-line, cross-referenced against reimbursements so you see which
+    #    units are still OPEN (not yet net-reimbursed) vs already covered.
+    contradiction = []
+    for r in conn.execute("""
+        SELECT order_id, UPPER(asin) AS asin, MAX(sku) AS sku, MAX(marketplace) AS mp,
+               COUNT(*) AS units, MAX(return_date) AS last_return,
+               GROUP_CONCAT(DISTINCT reason) AS reasons
         FROM amazon_returns
         WHERE UPPER(COALESCE(disposition,''))='CUSTOMER_DAMAGED'
           AND UPPER(COALESCE(reason,'')) IN ('DAMAGED_BY_CARRIER','DAMAGED_BY_FC')
-        ORDER BY return_date DESC""").fetchall()]
+        GROUP BY order_id, UPPER(asin)
+        ORDER BY units DESC""").fetchall():
+        oid, asin, units = str(r[0]), str(r[1] or ""), int(r[4] or 0)
+        rb_u, rb_amt = reimb_net.get((oid, asin), (0, 0.0))
+        rb_u = max(0, rb_u)
+        open_units = max(0, units - rb_u)
+        contradiction.append({
+            "order_id": oid, "asin": asin, "sku": r[2], "marketplace": r[3],
+            "reason": r[6], "last_return": (r[5] or "")[:10],
+            "units": units, "reimbursed_units": rb_u, "reimbursed_net": rb_amt,
+            "open_units": open_units, "status": "open" if open_units > 0 else "covered",
+        })
     # 2) refund-no-return overdue
     overdue = [l for l in lines if l["status"] == "REFUND_NO_RETURN_OVERDUE"]
     # 3) shortfall on refunded lines: ordered - received - reimbursed > 0
@@ -535,7 +558,7 @@ def full_analysis(conn=None, marketplace=None, start=None, end=None) -> dict:
         "open_risk_units": sum(l["qty"] - l["received"] for l in open_lines),
         "open_risk_revenue": round(sum(l["revenue"] for l in open_lines), 2),
         "units_returned": sum(l["received"] for l in lines),
-        "claim_candidates": (len(result["claims"]["contradiction"])
+        "claim_candidates": (sum(1 for c in result["claims"]["contradiction"] if c["open_units"] > 0)
                              + len(result["claims"]["refund_no_return_overdue"])
                              + len(result["claims"]["shortfall"])),
     }

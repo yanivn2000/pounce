@@ -3728,9 +3728,21 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
     else:
         _cl = _lo["claims"]
         st.markdown("##### ⚖️ Contradiction returns — carrier/FC fault but marked CUSTOMER_DAMAGED")
-        if _cl["contradiction"]:
-            st.dataframe(pd.DataFrame(_cl["contradiction"]), use_container_width=True, hide_index=True)
-            _lo_csv(_cl["contradiction"], "⬇️ CSV", "claims_contradiction.csv")
+        _contra = _cl["contradiction"]
+        if _contra:
+            _n_open = sum(1 for c in _contra if c["open_units"] > 0)
+            st.caption(f"**{_n_open}** order-lines still open (not net-reimbursed) of {len(_contra)}. "
+                       "'Reimbursed' nets out Reimbursement_Reversal clawbacks, and counts any reimbursement "
+                       "on the line (not only damage) — so treat 'covered' as a prompt to double-check, not proof.")
+            _cdf = pd.DataFrame([{
+                "": "🔴" if c["open_units"] > 0 else "✅",
+                "MP": c["marketplace"], "Order": c["order_id"], "SKU": c["sku"],
+                "Units": c["units"], "Reimb units": c["reimbursed_units"],
+                "Reimb net $": c["reimbursed_net"], "Open units": c["open_units"],
+                "Reason": c["reason"], "Last return": c["last_return"],
+            } for c in _contra])
+            st.dataframe(_cdf, use_container_width=True, hide_index=True)
+            _lo_csv(_contra, "⬇️ CSV", "claims_contradiction.csv")
         else:
             st.caption("None.")
         st.markdown("##### 💸 Refund, no return, overdue — claim candidates")
