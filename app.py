@@ -3727,13 +3727,47 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
 
     else:
         _cl = _lo["claims"]
-        st.markdown("##### ⚖️ Contradiction returns — carrier/FC fault but marked CUSTOMER_DAMAGED")
+        st.caption("כל רשומה כאן היא **מועמדת לבדיקה** מול אמזון — לא זיכוי שכבר אושר.  "
+                   "🔴 = פתוח (לא זוכה)  ·  ✅ = כנראה כבר מכוסה (בדוק לפני פתיחה).  "
+                   "פתח את ℹ️ בכל סעיף להסבר מלא ולטקסט מוכן לפתיחת בקשה.")
+        with st.expander("ℹ️ איך פותחים בקשה מול אמזון (כללי)"):
+            st.markdown(
+                "בדרך כלל: **Seller Central → Help (?) → Get Support → Selling on Amazon / FBA**, "
+                "בוחרים את הנושא (reimbursement / returns / FBA) ופותחים *case*. מצרפים את ה‑Order ID "
+                "ואת פרטי ההחזרה (אפשר גם LPN). שומרים את מספר ה‑case למעקב.  \n\n"
+                "המערכת **לא** פותחת בקשות באמזון בשבילך — היא מזהה את המקרים, מצליבה מול הזיכויים, "
+                "ומכינה לך טקסט מוכן. המסלול המדויק והמדיניות עשויים להשתנות — התאם לפי מה שאתה רואה ב‑Seller Central.")
+
+        # ── 1. Contradiction ───────────────────────────────────────────────
+        st.markdown("##### ⚖️ Contradiction — נזק באשמת מוביל/FC אבל סומן CUSTOMER_DAMAGED")
+        with st.expander("ℹ️ מה זה · מה לבדוק · טקסט לפתיחת בקשה"):
+            st.markdown(
+                "**מה זה:** החזרה שאמזון סימנה כ‑`CUSTOMER_DAMAGED` (נזק באשמת הלקוח → אין זיכוי), "
+                "אבל סיבת ההחזרה היא `DAMAGED_BY_CARRIER` / `DAMAGED_BY_FC` — כלומר הנזק נגרם בהובלה "
+                "או במרכז הלוגיסטי של אמזון, לא ע\"י הלקוח.  \n"
+                "**למה מגיע כסף:** אם הנזק לא באשמת הלקוח, היחידה לא הייתה אמורה להיות CUSTOMER_DAMAGED "
+                "(שנתרמת ללא פיצוי) — מגיע עליה זיכוי.  \n"
+                "**מה לבדוק:** רק שורות עם **Open units > 0** (🔴) — ✅ כבר יש עליהן זיכוי כלשהו, בדוק לפני פתיחה.  \n"
+                "**איך לפעול:** פתח case על *disposition / reimbursement* וצרף Order ID + פרטי ההחזרה.")
+            st.markdown("**טקסט מוכן (החלף את ה‑[...] והעתק):**")
+            st.code(
+"""Subject: Reimbursement request - FBA return mis-dispositioned as customer-damaged
+
+Order ID: [ORDER ID]
+ASIN / SKU: [ASIN] / [SKU]
+Units affected: [OPEN UNITS]
+
+This FBA customer return was dispositioned CUSTOMER_DAMAGED, but the return
+reason is [DAMAGED_BY_CARRIER / DAMAGED_BY_FC], indicating the damage occurred
+in transit or at the fulfillment center - not by the customer. As the unit was
+not customer-damaged, please review the disposition and reimburse the affected
+unit(s). Return and LPN details available on request.""", language="text")
         _contra = _cl["contradiction"]
         if _contra:
             _n_open = sum(1 for c in _contra if c["open_units"] > 0)
-            st.caption(f"**{_n_open}** order-lines still open (not net-reimbursed) of {len(_contra)}. "
-                       "'Reimbursed' nets out Reimbursement_Reversal clawbacks, and counts any reimbursement "
-                       "on the line (not only damage) — so treat 'covered' as a prompt to double-check, not proof.")
+            st.caption(f"**{_n_open}** שורות פתוחות (לא זוכו) מתוך {len(_contra)}. "
+                       "'Reimb' מקזז Reimbursement_Reversal וסופר כל זיכוי על השורה (לא רק נזק) — "
+                       "לכן ✅ הוא תמרור לבדיקה, לא הוכחה.")
             _cdf = pd.DataFrame([{
                 "": "🔴" if c["open_units"] > 0 else "✅",
                 "MP": c["marketplace"], "Order": c["order_id"], "SKU": c["sku"],
@@ -3744,34 +3778,93 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
             st.dataframe(_cdf, use_container_width=True, hide_index=True)
             _lo_csv(_contra, "⬇️ CSV", "claims_contradiction.csv")
         else:
-            st.caption("None.")
-        st.markdown("##### 💸 Refund, no return, overdue — claim candidates")
-        if _cl["refund_no_return_overdue"]:
-            st.dataframe(pd.DataFrame([{"MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
-                "Qty": l["qty"], "Received": l["received"], "Refund $": l["refund_amt"],
-                "Refund date": l["refund_date"]} for l in _cl["refund_no_return_overdue"]]),
-                use_container_width=True, hide_index=True)
-            _lo_csv(_cl["refund_no_return_overdue"], "⬇️ CSV", "claims_overdue.csv")
-        else:
-            st.caption("None.")
-        st.markdown("##### 📦 Shortfall on refunded orders — ordered − received − reimbursed > 0")
-        if _cl["shortfall"]:
-            st.dataframe(pd.DataFrame([{"MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
-                "Qty": l["qty"], "Received": l["received"], "Reimbursed": l["reimbursed_units"],
-                "Shortfall": l["shortfall"]} for l in _cl["shortfall"]]),
-                use_container_width=True, hide_index=True)
-            _lo_csv(_cl["shortfall"], "⬇️ CSV", "claims_shortfall.csv")
-        else:
-            st.caption("None.")
-        st.markdown("##### 🔍 Sellable returns from large lines — inspect for tampering")
-        if _cl["inspect_sellable"]:
-            st.dataframe(pd.DataFrame([{"MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
-                "Qty": l["qty"], "Sellable back": l["sellable_back"]} for l in _cl["inspect_sellable"]]),
-                use_container_width=True, hide_index=True)
-            _lo_csv(_cl["inspect_sellable"], "⬇️ CSV", "claims_inspect.csv")
-        else:
-            st.caption("None.")
+            st.caption("אין רשומות.")
 
+        # ── 2. Refund, no return, overdue ──────────────────────────────────
+        st.markdown("##### 💸 Refund, no return, overdue — החזר ללא החזרה שעבר זמן")
+        with st.expander("ℹ️ מה זה · מה לבדוק · טקסט לפתיחת בקשה"):
+            st.markdown(
+                "**מה זה:** הלקוח קיבל החזר כספי, אבל היחידות לא חזרו ל‑FBA, עבר חלון הזמן, "
+                "ולא ניתן זיכוי.  \n"
+                "**למה מגיע כסף:** שילמת על המוצר וגם החזרת כסף ללקוח — בלי לקבל סחורה בחזרה ובלי פיצוי. "
+                "מגיע זיכוי על היחידות שלא חזרו.  \n"
+                "**מה לבדוק:** `Open` > 0 (הוזמן − חזר − זוכה). שעברו מספיק ימים מתאריך ההחזר "
+                "(לפי ההגדרה Refund-no-return).  \n"
+                "**איך לפעול:** פתח case על *refund without return / un-returned units*.")
+            st.markdown("**טקסט מוכן (החלף את ה‑[...] והעתק):**")
+            st.code(
+"""Subject: Reimbursement - customer refunded but units never returned
+
+Order ID: [ORDER ID]
+ASIN / SKU: [ASIN] / [SKU]
+Refund date: [REFUND DATE]    Refund amount: [REFUND $]
+Ordered: [QTY]   Received back: [RECEIVED]   Still missing: [OPEN]
+
+The customer was refunded on this order, but [OPEN] unit(s) were never returned
+to the fulfillment center and no reimbursement has been issued, although the
+return window has passed. Please reimburse the un-returned, refunded unit(s).""", language="text")
+        _overdue = _cl["refund_no_return_overdue"]
+        if _overdue:
+            st.dataframe(pd.DataFrame([{
+                "MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
+                "Qty": l["qty"], "Received": l["received"],
+                "Refund $": l["refund_amt"], "Refund date": l["refund_date"],
+                "Reimb units": l["reimbursed_units"], "Reimb net $": l.get("reimbursed_net", 0),
+                "Open": max(0, l["qty"] - l["received"] - l["reimbursed_units"]),
+            } for l in _overdue]), use_container_width=True, hide_index=True)
+            _lo_csv(_overdue, "⬇️ CSV", "claims_overdue.csv")
+        else:
+            st.caption("אין רשומות.")
+
+        # ── 3. Shortfall ───────────────────────────────────────────────────
+        st.markdown("##### 📦 Shortfall — יחידות חסרות בהזמנות שהוחזר עליהן כסף")
+        with st.expander("ℹ️ מה זה · מה לבדוק · טקסט לפתיחת בקשה"):
+            st.markdown(
+                "**מה זה:** על הזמנה שהוחזר עליה כסף, המאזן לא מסתדר: **הוזמן − חזר − זוכה > 0**.  \n"
+                "**למה מגיע כסף:** היחידות החסרות לא חזרו פיזית ולא זוכו — מגיע עליהן זיכוי.  \n"
+                "**מה לבדוק:** `Shortfall` = החוסר (כבר אחרי קיזוז זיכויים). ודא שהוא עדיין > 0.  \n"
+                "**איך לפעול:** פתח case על *missing units on a refunded order*.")
+            st.markdown("**טקסט מוכן (החלף את ה‑[...] והעתק):**")
+            st.code(
+"""Subject: Reimbursement - missing units on a refunded order
+
+Order ID: [ORDER ID]
+ASIN / SKU: [ASIN] / [SKU]
+Ordered: [QTY]   Received back: [RECEIVED]   Reimbursed: [REIMB UNITS]
+Unaccounted-for units: [SHORTFALL]
+
+This order was refunded, but [SHORTFALL] unit(s) are unaccounted for - not
+returned to the fulfillment center and not reimbursed. Please investigate and
+reimburse the missing unit(s).""", language="text")
+        _short = _cl["shortfall"]
+        if _short:
+            st.dataframe(pd.DataFrame([{
+                "MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
+                "Qty": l["qty"], "Received": l["received"],
+                "Reimb units": l["reimbursed_units"], "Reimb net $": l.get("reimbursed_net", 0),
+                "Shortfall": l["shortfall"],
+            } for l in _short]), use_container_width=True, hide_index=True)
+            _lo_csv(_short, "⬇️ CSV", "claims_shortfall.csv")
+        else:
+            st.caption("אין רשומות.")
+
+        # ── 4. Sellable returns to inspect (internal, not an Amazon claim) ──
+        st.markdown("##### 🔍 Sellable returns — לבדיקה פנימית (לא תביעה מול אמזון)")
+        with st.expander("ℹ️ מה זה · מה לעשות"):
+            st.markdown(
+                "**מה זה:** יחידות שחזרו כ‑`SELLABLE` מהזמנות גדולות מסומנות — חוזרות למדף כ\"חדשות\".  \n"
+                "**למה לבדוק:** בהזמנה גדולה חשודה ייתכן שהקופסה נפתחה או שהוחלף התוכן "
+                "(למשל \"Grandpa & Grandpa\" בקופסה של \"Grandma & Grandpa\") לפני שחוזרת למכירה.  \n"
+                "**מה לעשות:** משוך את היחידות לבדיקה פיזית לפני החזרה למלאי. "
+                "**זו משימה פנימית — אין כאן בקשה לאמזון.**")
+        _inspect = _cl["inspect_sellable"]
+        if _inspect:
+            st.dataframe(pd.DataFrame([{"MP": l["marketplace"], "Order": l["order_id"], "SKU": l["sku"],
+                "Qty": l["qty"], "Sellable back": l["sellable_back"]} for l in _inspect]),
+                use_container_width=True, hide_index=True)
+            _lo_csv(_inspect, "⬇️ CSV", "claims_inspect.csv")
+        else:
+            st.caption("אין רשומות.")
     _lo_conn.close()
 
 

@@ -378,6 +378,7 @@ def get_large_orders_analysis(conn=None, marketplace=None, start=None, end=None,
             "return_reasons": sorted(rk["reasons"]),
             "refund_seen": bool(rf["amt"] > 0), "refund_date": rf["date"].isoformat() if rf["date"] else None,
             "refund_amt": round(rf["amt"], 2), "reimbursed_units": rb["units"],
+            "reimbursed_net": round(rb["amt"], 2),
             "status": status, "title": lr[11],
         })
 
