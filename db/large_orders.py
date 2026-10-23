@@ -566,3 +566,47 @@ def full_analysis(conn=None, marketplace=None, start=None, end=None) -> dict:
     if close:
         conn.close()
     return result
+
+
+# ── Amazon case-text builder (auto-filled from a flagged row) ──────────────────
+def case_text(kind: str, r: dict) -> str:
+    """Return a ready-to-paste Amazon case message for a flagged claim row.
+    kind ∈ {'contradiction','overdue','shortfall'}."""
+    oid = r.get("order_id", "") or ""
+    asin = r.get("asin", "") or ""
+    sku = r.get("sku", "") or ""
+    if kind == "contradiction":
+        units = r.get("open_units") or r.get("units", "")
+        return (
+            "Subject: Reimbursement request - FBA return mis-dispositioned as customer-damaged\n\n"
+            f"Order ID: {oid}\n"
+            f"ASIN / SKU: {asin} / {sku}\n"
+            f"Units affected: {units}\n\n"
+            f"This FBA customer return was dispositioned CUSTOMER_DAMAGED, but the return\n"
+            f"reason is {r.get('reason','')}, indicating the damage occurred in transit or at\n"
+            "the fulfillment center - not by the customer. As the unit was not customer-\n"
+            "damaged, please review the disposition and reimburse the affected unit(s).\n"
+            "Return and LPN details available on request.")
+    if kind == "overdue":
+        open_u = max(0, int(r.get("qty", 0)) - int(r.get("received", 0)) - int(r.get("reimbursed_units", 0)))
+        return (
+            "Subject: Reimbursement - customer refunded but units never returned\n\n"
+            f"Order ID: {oid}\n"
+            f"ASIN / SKU: {asin} / {sku}\n"
+            f"Refund date: {r.get('refund_date','')}    Refund amount: {r.get('refund_amt','')}\n"
+            f"Ordered: {r.get('qty','')}   Received back: {r.get('received','')}   Still missing: {open_u}\n\n"
+            f"The customer was refunded on this order, but {open_u} unit(s) were never returned\n"
+            "to the fulfillment center and no reimbursement has been issued, although the\n"
+            "return window has passed. Please reimburse the un-returned, refunded unit(s).")
+    if kind == "shortfall":
+        sf = r.get("shortfall", "")
+        return (
+            "Subject: Reimbursement - missing units on a refunded order\n\n"
+            f"Order ID: {oid}\n"
+            f"ASIN / SKU: {asin} / {sku}\n"
+            f"Ordered: {r.get('qty','')}   Received back: {r.get('received','')}   Reimbursed: {r.get('reimbursed_units','')}\n"
+            f"Unaccounted-for units: {sf}\n\n"
+            f"This order was refunded, but {sf} unit(s) are unaccounted for - not returned to\n"
+            "the fulfillment center and not reimbursed. Please investigate and reimburse the\n"
+            "missing unit(s).")
+    return ""
