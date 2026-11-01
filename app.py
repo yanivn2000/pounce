@@ -55,8 +55,9 @@ from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
     get_change_log, get_marketplaces, get_order_date_range, count_orders,
     get_units_matrix, get_weekly_units_matrix, get_weekly_units_matrix_yoy,
-    search_orders_by_address, get_noted_recommendations, get_orders_freshness,
+    search_orders_by_address, get_noted_recommendations, get_orders_coverage,
 )
+from db.marketplace_tz import local_day_end_utc
 from db.bundles import (
     import_bundle_csv, count_bundle_rows, get_bundle_date_range,
     get_bundle_summary, get_bundle_units_matrix, get_bundle_revenue_matrix,
@@ -4597,16 +4598,25 @@ if _nav == "📈 Sales Dashboard":
                 compare_label = "vs prev week" if view_mode == "Weekly" else "vs prev day"
                 st.markdown(f"### Units Sold — color coded {compare_label}")
             # Days are purchase days in each marketplace's local time (see
-            # db/marketplace_tz.py); "partial" is judged against the latest imported day.
+            # db/marketplace_tz.py). A column is "partial" when a marketplace selling in
+            # the period was last imported before that column's last day ended in ITS zone.
             import datetime as _dt
             _span_days = days_back_raw * 7 if view_mode == "Weekly" else days_back_raw
-            _cutoff_d  = _dt.date.today() - _dt.timedelta(days=_span_days)
-            _fresh     = get_orders_freshness(sel_market, since=_cutoff_d.isoformat())
-            _last_d    = _dt.date.fromisoformat(_fresh["max_date"]) if _fresh["max_date"] else None
+            _today_d   = _dt.date.today()
+            _cutoff_d  = _today_d - _dt.timedelta(days=_span_days)
+            _ty_win    = (_cutoff_d, _today_d + _dt.timedelta(days=1))   # +1: zones ahead of the server
+            _cov       = get_orders_coverage(sel_market, windows=[_ty_win],
+                                             include_pending=_include_pending)
+            _untimed   = _cov["untimed"]
+            if yoy_mode:   # last year's rows feed the YoY deltas too
+                _ly_win  = (_cutoff_d - _dt.timedelta(days=364), _today_d - _dt.timedelta(days=364))
+                _untimed += get_orders_coverage(sel_market, windows=[_ly_win],
+                                                include_pending=_include_pending)["untimed"]
             # Latin tokens are wrapped in <bdi> so the RTL line doesn't reorder them.
             _cap_style = f"color:{T['text_secondary']};font-size:0.82rem;margin:0 0 0.4rem"
             _tz_note   = ("לפי יום הרכישה <b>בשעון המקומי של ה-<bdi>marketplace</bdi></b>. "
-                          "ב-<bdi>amazon.com</bdi> זה שעון החוף המערבי, כמו ב-<bdi>Seller Central</bdi>.")
+                          "ב-<bdi>amazon.com</bdi> זה שעון החוף המערבי, כמו ב-"
+                          "<bdi style='white-space:nowrap'>Seller Central</bdi>.")
             if view_mode == "Weekly":
                 st.markdown(
                     f"<div dir='rtl' style='{_cap_style}'>כל עמודה = שבוע <b>שני→ראשון</b> "
@@ -4620,12 +4630,12 @@ if _nav == "📈 Sales Dashboard":
                     "ריחוף על כותרת מראה פרטים.</div>",
                     unsafe_allow_html=True,
                 )
-            if _fresh["untimed"]:
+            if _untimed:
                 st.markdown(
                     f"<div dir='rtl' style='color:{T['score_mid']};font-size:0.82rem;"
-                    f"margin:0 0 0.4rem'>⚠ {_fresh['untimed']:,} הזמנות בתקופה נשמרו בלי שעת רכישה, "
+                    f"margin:0 0 0.4rem'>⚠ {_untimed:,} שורות הזמנה בתקופה נשמרו בלי שעת רכישה, "
                     "ולכן נספרות לפי התאריך שבקובץ בלי התאמת שעון. העלאה מחדש של דוח "
-                    "<bdi>All Orders</bdi> תתקן אותן.</div>",
+                    "<bdi style='white-space:nowrap'>All Orders</bdi> תתקן אותן.</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -4770,9 +4780,10 @@ if _nav == "📈 Sales Dashboard":
                     "Total":       st.column_config.NumberColumn("Total",      width=90),
                 }
                 # ── Per-column tooltips: the exact date window each column covers ──
-                # (_cutoff_d / _last_d are computed above, next to the caption)
-                _partial_txt = (f"⚠ חלקי — הזמנה אחרונה שיובאה: {_last_d:%d.%m}."
-                                if _last_d else "")
+                # (_cutoff_d / _cov are computed above, next to the caption)
+                def _is_partial(last_day) -> bool:
+                    return any(pd.Timestamp(cov, tz="UTC") < local_day_end_utc(last_day, m)
+                               for m, cov in _cov["coverage"].items())
 
                 def _col_help(dc: str) -> str:
                     try:
@@ -4785,15 +4796,15 @@ if _nav == "📈 Sales Dashboard":
                                  "לפי יום הרכישה בשעון המקומי."]
                         if yoy_mode:
                             parts.append("התא = השנה פחות שבוע מקביל אשתקד.")
-                        if _last_d and end >= _last_d:
-                            parts.append(_partial_txt)
+                        if _is_partial(end):
+                            parts.append("⚠ חלקי — הייבוא האחרון היה לפני סוף השבוע.")
                         if start < _cutoff_d:
                             parts.append("⚠ נחתך בסף התקופה.")
                         body = " ".join(parts)
                     else:
                         body = f"{start:%d.%m} — יום רכישה מלא בשעון המקומי."
-                        if _last_d and start >= _last_d:
-                            body += " " + _partial_txt
+                        if _is_partial(start):
+                            body += " ⚠ חלקי — הייבוא האחרון היה לפני סוף היום."
                     # RTL-isolate so Hebrew orders correctly inside the LTR tooltip
                     # (tooltip bottom spacing is handled in CSS via .e1bi6yfx2).
                     return chr(0x2067) + body + chr(0x2069)   # RLI … PDI

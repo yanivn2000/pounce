@@ -2,8 +2,10 @@
 db/queries.py — Aggregation queries for the Sales Dashboard.
 """
 
+import json
 import pandas as pd
 from db.database import get_conn
+from db.marketplace_tz import STORED_HAS_TIME_SQL, local_day_end_utc
 
 
 def get_daily_sales(marketplace: str = None, days: int = 30,
@@ -189,23 +191,41 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8,
     return _pivot(df_cur), _pivot(df_ly)
 
 
-def get_orders_freshness(marketplace: str = None, since: str = None) -> dict:
-    """Latest imported purchase day (local), and how many orders since `since` carry
-    no purchase time — those keep the file's date, unconverted to local time."""
+def get_orders_coverage(marketplace: str = None, windows=(),
+                        include_pending: bool = False) -> dict:
+    """For the dashboard's "partial" flags and data-quality note, over `windows`
+    (local-date [start, end] pairs) and the same status filter as the table.
+    coverage: {marketplace: UTC 'YYYY-MM-DD HH:MM:SS' the imported data reaches} for
+      each marketplace selling in the windows — the last fresh import when recorded
+      (db/importer.py), else the latest purchase moment, else the end of the day
+      before its latest order day (no times at all).
+    untimed: order lines in the windows with no purchase time — they sit on the
+      file's date, unconverted to local time."""
     conn = get_conn()
+    status = ("COALESCE(order_status,'') NOT IN ('Cancelled')" if include_pending
+              else "COALESCE(order_status,'') NOT IN ('Cancelled','Pending')")
+    win = " OR ".join(["(order_date BETWEEN ? AND ?)"] * len(windows)) or "1=1"
+    p = [str(d) for w in windows for d in w]
     mkt = "AND marketplace = ?" if marketplace else ""
-    p = [marketplace] if marketplace else []
-    max_date = conn.execute(f"SELECT MAX(order_date) FROM orders WHERE 1=1 {mkt}", p).fetchone()[0]
-    untimed = 0
-    if since:
-        untimed = conn.execute(f"""
-            SELECT COUNT(*) FROM orders
-            WHERE order_date >= ? {mkt}
-              AND (order_datetime IS NULL OR order_datetime = ''
-                   OR substr(order_datetime, 12) = '00:00:00')
-        """, [since] + p).fetchone()[0]
+    p += [marketplace] if marketplace else []
+    base = f"FROM orders WHERE ({win}) AND {status} {mkt}"
+
+    row = conn.execute("SELECT value FROM app_settings WHERE key='orders_import_coverage'").fetchone()
+    recorded = json.loads(row[0]) if row else {}
+    coverage = {}
+    for (m,) in conn.execute(f"SELECT DISTINCT marketplace {base}", p).fetchall():
+        last_t, last_d = conn.execute(
+            f"SELECT (SELECT MAX(order_datetime) FROM orders WHERE marketplace=? AND {STORED_HAS_TIME_SQL}),"
+            " (SELECT MAX(order_date) FROM orders WHERE marketplace=?)", (m, m)).fetchone()
+        known = [x for x in (recorded.get(m), last_t) if x]
+        if known:
+            coverage[m] = max(known)
+        elif last_d:
+            prev = pd.Timestamp(last_d) - pd.Timedelta(days=1)
+            coverage[m] = local_day_end_utc(prev, m).strftime("%Y-%m-%d %H:%M:%S")
+    untimed = conn.execute(f"SELECT COUNT(*) {base} AND NOT {STORED_HAS_TIME_SQL}", p).fetchone()[0]
     conn.close()
-    return {"max_date": max_date, "untimed": int(untimed or 0)}
+    return {"coverage": coverage, "untimed": int(untimed or 0)}
 
 
 def get_weekly_summary(marketplace: str = None, weeks: int = 8,

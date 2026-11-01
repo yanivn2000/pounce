@@ -12,7 +12,7 @@ import re
 import pandas as pd
 import sqlite3
 from db.database import get_conn
-from db.marketplace_tz import MARKETPLACE_TZ, local_order_dates
+from db.marketplace_tz import MARKETPLACE_TZ, ZONED_RE, is_local_convertible, local_order_dates
 
 # Map Amazon CSV column names → our schema
 _COL_MAP = {
@@ -125,9 +125,9 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
             df[col] = 0
 
     # order_datetime = exact purchase moment in UTC; order_date = the purchase day in
-    # the marketplace's local time (as in Seller Central). A date-only value has no
-    # moment to convert, so it keeps the date written in the file.
-    _has_time = df["order_date"].astype(str).str.contains(r"\d{1,2}:\d{2}", regex=True, na=False)
+    # the marketplace's local time (as in Seller Central). Date-only values, and times
+    # that don't state their zone, keep the date written in the file.
+    _raw = df["order_date"].astype(str)
     _odt = pd.to_datetime(df["order_date"], errors="coerce", utc=True)
     # pandas 2 infers ONE format from the first row, so rows in another format
     # (e.g. a date-only value among timestamps) come back NaT — re-parse just those.
@@ -137,9 +137,16 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
                                       utc=True, format="mixed")
     df["order_datetime"] = _odt.dt.strftime("%Y-%m-%d %H:%M:%S")
     df["order_date"]     = _odt.dt.strftime("%Y-%m-%d")
-    if _has_time.any():
-        df.loc[_has_time, "order_date"] = local_order_dates(
-            _odt[_has_time], df.loc[_has_time, "marketplace"])
+    df["_utc"]           = _odt
+    _conv = is_local_convertible(_raw, _odt)
+    if _conv.any():
+        df.loc[_conv, "order_date"] = local_order_dates(_odt[_conv], df.loc[_conv, "marketplace"])
+    _naive = (_raw.str.contains(r"\d{1,2}:\d{2}", regex=True, na=False)
+              & ~_raw.str.contains(ZONED_RE, regex=True, na=False)
+              & _odt.notna() & (_odt.dt.strftime("%H:%M:%S") != "00:00:00"))
+    if _naive.any():
+        warnings.append(f"{int(_naive.sum())} rows have a purchase time with no time zone — "
+                        "kept the date as written (no local-time conversion).")
     invalid_dates = df["order_date"].isna().sum()
     if invalid_dates:
         warnings.append(f"{invalid_dates} rows had unparseable dates and were skipped.")
@@ -210,8 +217,28 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
             except Exception as e:
                 warnings.append(f"Row skipped ({row.get('order_id')}): {e}")
 
+    if imported:
+        _record_import_coverage(conn, df)
     conn.close()
     return imported, warnings
+
+
+def _record_import_coverage(conn, df):
+    """A fresh report (an order within the last 2 days) covers its marketplaces up to
+    now — remember that per marketplace for the dashboard's "partial" flags. Old files
+    re-uploaded for history don't move the mark."""
+    now = pd.Timestamp.now(tz="UTC")
+    latest = df["_utc"].max()
+    if pd.isna(latest) or latest < now - pd.Timedelta(days=2):
+        return
+    row = conn.execute("SELECT value FROM app_settings WHERE key='orders_import_coverage'").fetchone()
+    cov = json.loads(row[0]) if row else {}
+    stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    for m in df["marketplace"].dropna().unique():
+        cov[str(m)] = max(cov.get(str(m), ""), stamp)
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO app_settings (key, value) "
+                     "VALUES ('orders_import_coverage', ?)", (json.dumps(cov),))
 
 
 _UPSERT_RECOMMENDATIONS = """

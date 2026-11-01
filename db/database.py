@@ -1288,11 +1288,10 @@ def _migrate_orders_local_date(conn: sqlite3.Connection):
         return
     import json
     import pandas as pd
-    from db.marketplace_tz import local_order_dates
+    from db.marketplace_tz import STORED_HAS_TIME_SQL, local_order_dates
     df = pd.read_sql_query(
         "SELECT id, order_date, order_datetime, marketplace FROM orders "
-        "WHERE order_datetime IS NOT NULL AND order_datetime <> '' "
-        "AND substr(order_datetime, 12) <> '00:00:00'", conn)
+        f"WHERE {STORED_HAS_TIME_SQL}", conn)
     upd = []
     if not df.empty:
         utc = pd.to_datetime(df["order_datetime"], errors="coerce", utc=True)
@@ -1333,7 +1332,7 @@ def _migrate_orders_marketplace_fix(conn: sqlite3.Connection):
         conn.executemany("UPDATE orders SET marketplace=? WHERE id=?",
                          list(zip(moved["mkt"], moved["id"].astype(int))))
         odt = moved["order_datetime"].fillna("")
-        timed = moved[(odt != "") & ~odt.str.endswith("00:00:00")]
+        timed = moved[(odt != "") & ~odt.str.endswith("00:00:00")]   # = STORED_HAS_TIME_SQL
         if not timed.empty:
             local = local_order_dates(
                 pd.to_datetime(timed["order_datetime"], errors="coerce", utc=True), timed["mkt"])
