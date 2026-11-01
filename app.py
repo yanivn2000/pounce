@@ -4570,10 +4570,10 @@ if _nav == "📈 Sales Dashboard":
             cl_df = get_change_log(marketplace=sel_market, days=days_back_raw if view_mode == "Daily" else days_back_raw * 7)
 
             def _to_week_start(date_str: str) -> str:
-                """Replicate SQLite: date(d,'weekday 1','-7 days') → Monday of that week."""
+                """Monday of the week containing d (Mon-start, Monday included) —
+                matches SQLite date(d,'-6 days','weekday 1')."""
                 d = pd.Timestamp(date_str)
-                days_to_next_monday = 0 if d.weekday() == 0 else (7 - d.weekday())
-                return (d + pd.Timedelta(days=days_to_next_monday) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+                return (d - pd.Timedelta(days=d.weekday())).strftime("%Y-%m-%d")
 
             if not cl_df.empty:
                 if view_mode == "Daily":
@@ -4592,6 +4592,13 @@ if _nav == "📈 Sales Dashboard":
             else:
                 compare_label = "vs prev week" if view_mode == "Weekly" else "vs prev day"
                 st.markdown(f"### Units Sold — color coded {compare_label}")
+            if view_mode == "Weekly":
+                st.caption("Each column is one **Mon→Sun** week, labeled by its Monday "
+                           "(that Monday is included), counted by Amazon purchase date. "
+                           "Hover any week header for its exact dates — the newest week is partial.")
+            else:
+                st.caption("Each column is one full calendar day, by Amazon purchase date. "
+                           "Hover a date header for details.")
 
             ly_matrix = None
             if view_mode == "Daily":
@@ -4733,8 +4740,45 @@ if _nav == "📈 Sales Dashboard":
                     "Last Change": st.column_config.TextColumn("Last Change", width=220),
                     "Total":       st.column_config.NumberColumn("Total",      width=90),
                 }
+                # ── Per-column tooltips: the exact date window each column covers ──
+                import datetime as _dt
+                _pending_txt = "included" if _include_pending else "excluded"
+                _today_d = _dt.date.today()
+                _span_days = days_back_raw * 7 if view_mode == "Weekly" else days_back_raw
+                _cutoff_d = _today_d - _dt.timedelta(days=_span_days)
+
+                def _col_help(dc: str) -> str:
+                    try:
+                        start = _dt.date.fromisoformat(str(dc))
+                    except ValueError:
+                        return ""
+                    if view_mode == "Weekly":
+                        end = start + _dt.timedelta(days=6)
+                        h = (f"Mon {start:%Y-%m-%d} → Sun {end:%Y-%m-%d} (inclusive). "
+                             f"Units by Amazon purchase date: 7 full calendar days in the "
+                             f"marketplace's report time zone — no time-of-day cutoff.")
+                        if yoy_mode:
+                            h += " Cell = this year minus the same week last year (±364d aligned)."
+                        h += f" Cancelled excluded; Pending {_pending_txt}."
+                        extra = []
+                        if end >= _today_d:
+                            extra.append("Current week — still in progress (partial).")
+                        if start < _cutoff_d:
+                            extra.append(f"Clipped by the {_span_days}-day period cutoff "
+                                         f"({_cutoff_d:%Y-%m-%d}).")
+                        if extra:
+                            h += " ⚠ " + " ".join(extra)
+                        return h
+                    # Daily view — one calendar day per column
+                    h = (f"{start:%a %Y-%m-%d} — one full calendar day by Amazon purchase date "
+                         f"(marketplace report time zone, no time-of-day cutoff). "
+                         f"Cancelled excluded; Pending {_pending_txt}.")
+                    if start >= _today_d:
+                        h += " ⚠ Today — still in progress (partial)."
+                    return h
+
                 for _dc in date_cols:
-                    col_cfg[_dc] = st.column_config.NumberColumn(_dc, width=80)
+                    col_cfg[_dc] = st.column_config.NumberColumn(_dc, width=80, help=_col_help(_dc))
 
                 # ── Totals row — prepended as row 0 in the same dataframe ─────────
                 _col_sums    = {col: int(_totals_src[col].sum()) for col in date_cols}

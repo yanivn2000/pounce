@@ -147,7 +147,7 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8,
 
     # Current period
     sql_cur = f"""
-        SELECT date(order_date, 'weekday 1', '-7 days') AS week_start,
+        SELECT date(order_date, '-6 days', 'weekday 1') AS week_start,
                asin, {title_expr} AS title, SUM(quantity) AS units
         FROM orders
         WHERE order_date >= date('now', '-' || ? || ' days')
@@ -160,7 +160,7 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8,
 
     # Last year: shift dates forward 364 days so week labels match current year
     sql_ly = f"""
-        SELECT date(date(order_date, '+364 days'), 'weekday 1', '-7 days') AS week_start,
+        SELECT date(date(order_date, '+364 days'), '-6 days', 'weekday 1') AS week_start,
                asin, {title_expr} AS title, SUM(quantity) AS units
         FROM orders
         WHERE order_date >= date('now', '-' || ? || ' days', '-364 days')
@@ -201,7 +201,7 @@ def get_weekly_summary(marketplace: str = None, weeks: int = 8,
     _sf = "AND order_status NOT IN ('Cancelled')" if include_pending else "AND order_status NOT IN ('Cancelled', 'Pending')"
     if marketplace:
         sql = f"""
-            SELECT date(order_date, 'weekday 1', '-7 days') AS week_start,
+            SELECT date(order_date, '-6 days', 'weekday 1') AS week_start,
                    asin, MAX(title) AS title, marketplace,
                    SUM(quantity) AS units, SUM(item_price) AS revenue
             FROM orders
@@ -214,7 +214,7 @@ def get_weekly_summary(marketplace: str = None, weeks: int = 8,
         params = [marketplace, days]
     else:
         sql = f"""
-            SELECT date(order_date, 'weekday 1', '-7 days') AS week_start,
+            SELECT date(order_date, '-6 days', 'weekday 1') AS week_start,
                    asin,
                    COALESCE(
                        MAX(CASE WHEN marketplace = 'amazon.com' THEN title END),
