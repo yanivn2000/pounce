@@ -24,6 +24,7 @@ _DOMAIN_MP_MAP = [
     ("amazon.com.mx",  ("MX", "MXN")),
     ("amazon.com.au",  ("AU", "AUD")),
     ("amazon.com.be",  ("BE", "EUR")),
+    ("amazon.com.tr",  ("TR", "TRY")),
     ("amazon.co.uk",   ("UK", "GBP")),
     ("amazon.co.jp",   ("JP", "JPY")),
     ("amazon.com",     ("US", "USD")),
@@ -40,7 +41,6 @@ _DOMAIN_MP_MAP = [
     ("amazon.sg",      ("SG", "SGD")),
     ("amazon.ae",      ("AE", "AED")),
     ("amazon.sa",      ("SA", "SAR")),
-    ("amazon.tr",      ("TR", "TRY")),
     ("amazon.cn",      ("CN", "CNY")),
 ]
 

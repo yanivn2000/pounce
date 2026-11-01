@@ -280,6 +280,7 @@ def init_db():
     _migrate_orders_address_fields(conn)
     _migrate_orders_datetime(conn)
     _migrate_orders_local_date(conn)
+    _migrate_orders_marketplace_fix(conn)   # after local_date: re-derives moved rows' day
     _migrate_reimbursements(conn)
     _migrate_bundle_sales(conn)
     _migrate_bid_changes_unique_constraint(conn)
@@ -1302,6 +1303,50 @@ def _migrate_orders_local_date(conn: sqlite3.Connection):
         conn.executemany("UPDATE orders SET order_date=? WHERE id=?", upd)
         conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
                      (key, json.dumps({"converted_rows": len(df), "date_changed": len(upd)})))
+
+
+def _migrate_orders_marketplace_fix(conn: sqlite3.Connection):
+    """One-time: the orders importer matched "amazon.com" as a substring, so
+    Amazon.com.au/.mx/.br/.tr orders were filed under amazon.com, and channels outside
+    its short list kept their casing ("Amazon.fr"). Lower-cases amazon.* names, moves
+    amazon.com rows whose currency names another .com.* marketplace, and re-derives
+    their order_date (local day) in the right zone. amazon.com rows in other non-USD
+    currencies (EUR is most likely amazon.com.be) are only counted — re-uploading
+    All Orders heals them through the importer's upsert."""
+    key = "migr_orders_marketplace_v1"
+    if conn.execute("SELECT 1 FROM app_settings WHERE key=?", (key,)).fetchone():
+        return
+    import json
+    import pandas as pd
+    from db.marketplace_tz import local_order_dates
+    cur_to_mkt = {"AUD": "amazon.com.au", "MXN": "amazon.com.mx",
+                  "BRL": "amazon.com.br", "TRY": "amazon.com.tr"}
+    with conn:
+        lowered = conn.execute(
+            "UPDATE orders SET marketplace = lower(marketplace) "
+            "WHERE marketplace LIKE 'amazon.%' AND marketplace <> lower(marketplace)").rowcount
+        moved = pd.read_sql_query(
+            "SELECT id, order_datetime, UPPER(TRIM(currency)) AS cur FROM orders "
+            "WHERE marketplace = 'amazon.com' AND UPPER(TRIM(currency)) IN "
+            f"({','.join('?' * len(cur_to_mkt))})", conn, params=list(cur_to_mkt))
+        moved["mkt"] = moved["cur"].map(cur_to_mkt)
+        conn.executemany("UPDATE orders SET marketplace=? WHERE id=?",
+                         list(zip(moved["mkt"], moved["id"].astype(int))))
+        odt = moved["order_datetime"].fillna("")
+        timed = moved[(odt != "") & ~odt.str.endswith("00:00:00")]
+        if not timed.empty:
+            local = local_order_dates(
+                pd.to_datetime(timed["order_datetime"], errors="coerce", utc=True), timed["mkt"])
+            conn.executemany("UPDATE orders SET order_date=? WHERE id=?",
+                             [(d, int(i)) for d, i in zip(local, timed["id"]) if isinstance(d, str)])
+        left = {str(c): int(n) for c, n in conn.execute(
+            "SELECT UPPER(TRIM(currency)), COUNT(*) FROM orders WHERE marketplace='amazon.com' "
+            "AND UPPER(TRIM(COALESCE(currency,''))) NOT IN ('USD','') GROUP BY 1")}
+        conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                     (key, json.dumps({
+                         "lowercased": lowered,
+                         "moved": {str(c): int(n) for c, n in moved["cur"].value_counts().items()},
+                         "amazon_com_other_currency": left})))
 
 
 def _migrate_reimbursements(conn: sqlite3.Connection):

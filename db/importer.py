@@ -8,10 +8,11 @@ Amazon order report columns (varies slightly by marketplace):
 
 import io
 import json
+import re
 import pandas as pd
 import sqlite3
 from db.database import get_conn
-from db.marketplace_tz import local_order_dates
+from db.marketplace_tz import MARKETPLACE_TZ, local_order_dates
 
 # Map Amazon CSV column names → our schema
 _COL_MAP = {
@@ -41,23 +42,21 @@ _COL_MAP = {
     "buyer-email":        "buyer_email",
 }
 
-_MARKETPLACE_MAP = {
-    "amazon.com":    "amazon.com",
-    "amazon.co.uk":  "amazon.co.uk",
-    "amazon.ca":     "amazon.ca",
-    "amazon.com.au": "amazon.com.au",
-    "amazon.de":     "amazon.de",
-}
+# Known marketplace domains (single source: db/marketplace_tz.py), longest first so
+# "amazon.com.au" wins over its prefix "amazon.com".
+_KNOWN_DOMAINS = sorted(MARKETPLACE_TZ, key=len, reverse=True)
 
 
 def _normalize_marketplace(raw: str) -> str:
-    if not raw:
+    """Sales-channel text → lower-case marketplace domain ("Amazon.com.au" →
+    "amazon.com.au"). Unknown channels ("Non-Amazon") are returned as given."""
+    if not raw or not str(raw).strip():
         return "amazon.com"
-    lower = raw.strip().lower()
-    for k, v in _MARKETPLACE_MAP.items():
-        if k in lower:
-            return v
-    return raw.strip()
+    lower = str(raw).strip().lower()
+    for dom in _KNOWN_DOMAINS:
+        if re.search(re.escape(dom) + r"(?![\w.])", lower):
+            return dom
+    return lower if lower.startswith("amazon.") else str(raw).strip()
 
 
 def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, list[str]]:
@@ -165,6 +164,10 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
                          ship_postal_code, ship_country, buyer_name, buyer_email)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(order_id, asin) DO UPDATE SET
+                        -- self-heal rows the old substring match filed under amazon.com
+                        marketplace      = CASE WHEN marketplace = 'amazon.com'
+                                                 AND excluded.marketplace LIKE 'amazon.com.%'
+                                                THEN excluded.marketplace ELSE marketplace END,
                         order_date       = excluded.order_date,
                         order_datetime   = excluded.order_datetime,
                         quantity         = excluded.quantity,
