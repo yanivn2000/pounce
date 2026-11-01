@@ -457,6 +457,15 @@ def build_claims(conn, lines) -> dict:
         "GROUP BY order_id, UPPER(asin)").fetchall():
         reimb_net[(str(r[0]), str(r[1] or ""))] = (int(r[2] or 0), round(float(r[3] or 0), 2))
 
+    # Warehouse/loss reimbursements carry NO order_id (Amazon reimburses them at
+    # the SKU/FNSKU level), so they can only be matched per ASIN, not per order.
+    wh_reimb = {}
+    for r in conn.execute(
+        "SELECT UPPER(asin), COALESCE(SUM(qty_total),0) FROM reimbursements "
+        "WHERE reason IN ('Damaged_Warehouse','Lost_Warehouse') "
+        "AND asin IS NOT NULL AND asin!='' GROUP BY UPPER(asin)").fetchall():
+        wh_reimb[str(r[0] or "")] = int(r[1] or 0)
+
     # 1) contradiction: CUSTOMER_DAMAGED but carrier/FC fault — aggregated per
     #    order-line, cross-referenced against reimbursements so you see which
     #    units are still OPEN (not yet net-reimbursed) vs already covered.
@@ -479,6 +488,7 @@ def build_claims(conn, lines) -> dict:
             "reason": r[6], "last_return": (r[5] or "")[:10],
             "units": units, "reimbursed_units": rb_u, "reimbursed_net": rb_amt,
             "open_units": open_units, "status": "open" if open_units > 0 else "covered",
+            "sku_wh_reimb_units": wh_reimb.get(asin, 0),
         })
     # 2) refund-no-return overdue
     overdue = [l for l in lines if l["status"] == "REFUND_NO_RETURN_OVERDUE"]

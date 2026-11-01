@@ -3757,19 +3757,27 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
                 "הלוגיסטי של אמזון, לא ע\"י הלקוח.  \n"
                 "**למה מגיע כסף:** אם הנזק לא באשמת הלקוח, היחידה לא הייתה אמורה להיות CUSTOMER_DAMAGED "
                 "(שנתרמת ללא פיצוי) — מגיע עליה זיכוי.  \n"
-                "**מה לבדוק:** רק שורות עם **Open units > 0** (🔴) — ✅ כבר יש זיכוי כלשהו, בדוק לפני פתיחה.  \n"
+                "**מה לבדוק:** 🔴 פתוח וברור · ⚠️ ל‑SKU יש זיכוי Damaged/Lost_Warehouse (אולי כבר כוסה — בדוק) · ✅ כוסה ברמת הזמנה.  \n"
                 "**איך לפעול:** פתח case על *disposition / reimbursement* וצרף Order ID + פרטי ההחזרה.")
         _contra = _cl["contradiction"]
         if _contra:
-            _n_open = sum(1 for c in _contra if c["open_units"] > 0)
-            st.caption(f"**{_n_open}** שורות פתוחות (לא זוכו) מתוך {len(_contra)}. "
-                       "'Reimb' מקזז Reimbursement_Reversal וסופר כל זיכוי על השורה (לא רק נזק) — "
-                       "לכן ✅ הוא תמרור לבדיקה, לא הוכחה.")
+            _n_clear = sum(1 for c in _contra if c["open_units"] > 0 and c["sku_wh_reimb_units"] == 0)
+            _n_maybe = sum(1 for c in _contra if c["open_units"] > 0 and c["sku_wh_reimb_units"] > 0)
+            _n_cov   = sum(1 for c in _contra if c["open_units"] <= 0)
+            st.caption(f"🔴 **{_n_clear}** פתוחות וברורות  ·  ⚠️ **{_n_maybe}** אולי כוסו ברמת SKU "
+                       f"(ל‑SKU יש זיכוי Damaged/Lost_Warehouse)  ·  ✅ **{_n_cov}** כוסו ברמת הזמנה.  "
+                       "זיכויי מחסן אינם נושאים order_id, לכן 'SKU wh-reimb' הוא רמז ברמת ה‑SKU לתקופה — "
+                       "בדוק לפני פתיחה, אין קישור ודאי להזמנה.")
+            def _ct_flag(c):
+                if c["open_units"] <= 0:
+                    return "✅"
+                return "⚠️" if c["sku_wh_reimb_units"] > 0 else "🔴"
             _cdf = pd.DataFrame([{
-                "": "🔴" if c["open_units"] > 0 else "✅",
+                "": _ct_flag(c),
                 "MP": c["marketplace"], "Order": c["order_id"], "SKU": c["sku"],
                 "Units": c["units"], "Reimb units": c["reimbursed_units"],
                 "Reimb net $": c["reimbursed_net"], "Open units": c["open_units"],
+                "SKU wh-reimb": c["sku_wh_reimb_units"],
                 "Reason": c["reason"], "Last return": c["last_return"],
             } for c in _contra])
             st.dataframe(_cdf, use_container_width=True, hide_index=True)
