@@ -3727,11 +3727,23 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
 
     else:
         _cl = _lo["claims"]
-        st.caption("כל רשומה כאן היא **מועמדת לבדיקה** מול אמזון — לא זיכוי שכבר אושר.  "
-                   "🔴 = פתוח (לא זוכה)  ·  ✅ = כנראה כבר מכוסה (בדוק לפני פתיחה).  "
-                   "פתח את ℹ️ בכל סעיף להסבר, ואת 📝 כדי ליצור טקסט מוכן לפי הזמנה.")
+        def _rtl(md, muted=False, head=False):
+            import re as _re
+            h = _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", md)
+            h = _re.sub(r"`(.+?)`", r"<code>\1</code>", h)
+            h = _re.sub(r"\*(.+?)\*", r"<em>\1</em>", h)
+            h = h.replace("  \n", "<br>").replace("\n\n", "<br><br>").replace("\n", "<br>")
+            _style = "direction:rtl;text-align:right"
+            if head:
+                _style += ";font-weight:700;font-size:1.05rem;margin:0.6rem 0 0.2rem"
+            elif muted:
+                _style += f";color:{T['text_secondary']};font-size:0.82rem"
+            st.markdown(f"<div dir='rtl' style='{_style}'>{h}</div>", unsafe_allow_html=True)
+        _rtl("כל רשומה כאן היא **מועמדת לבדיקה** מול אמזון — לא זיכוי שכבר אושר.  "
+             "🔴 = פתוח (לא זוכה ברמת הזמנה)  ·  ✅ = כבר מכוסה ברמת הזמנה (בדוק לפני פתיחה).  "
+             "פתח את ℹ️ בכל סעיף להסבר, ואת 📝 כדי ליצור טקסט מוכן לפי הזמנה.", muted=True)
         with st.expander("ℹ️ איך פותחים בקשה מול אמזון (כללי)"):
-            st.markdown(
+            _rtl(
                 "בדרך כלל: **Seller Central → Help (?) → Get Support → Selling on Amazon / FBA**, "
                 "בוחרים את הנושא (reimbursement / returns / FBA) ופותחים *case*. מצרפים את ה‑Order ID "
                 "ואת פרטי ההחזרה (אפשר גם LPN). שומרים את מספר ה‑case למעקב.  \n\n"
@@ -3749,29 +3761,26 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
                 st.code(case_text(kind, _opts[_pick]), language="text")
 
         # ── 1. Contradiction ───────────────────────────────────────────────
-        st.markdown("##### ⚖️ Contradiction — נזק באשמת מוביל/FC אבל סומן CUSTOMER_DAMAGED")
+        _rtl("⚖️ Contradiction — נזק באשמת מוביל/FC אבל סומן CUSTOMER_DAMAGED", head=True)
         with st.expander("ℹ️ מה זה · למה מגיע כסף · מה לבדוק"):
-            st.markdown(
+            _rtl(
                 "**מה זה:** החזרה שאמזון סימנה כ‑`CUSTOMER_DAMAGED` (נזק באשמת הלקוח → אין זיכוי), "
                 "אבל סיבת ההחזרה היא `DAMAGED_BY_CARRIER` / `DAMAGED_BY_FC` — נזק בהובלה או במרכז "
                 "הלוגיסטי של אמזון, לא ע\"י הלקוח.  \n"
                 "**למה מגיע כסף:** אם הנזק לא באשמת הלקוח, היחידה לא הייתה אמורה להיות CUSTOMER_DAMAGED "
                 "(שנתרמת ללא פיצוי) — מגיע עליה זיכוי.  \n"
-                "**מה לבדוק:** 🔴 פתוח וברור · ⚠️ ל‑SKU יש זיכוי Damaged/Lost_Warehouse (אולי כבר כוסה — בדוק) · ✅ כוסה ברמת הזמנה.  \n"
+                "**מה לבדוק:** 🔴 `Open units` > 0 (לא זוכה ברמת הזמנה) · ✅ כבר מכוסה ברמת הזמנה.  \n"
+                "עמודת 'SKU wh-reimb' = זיכויי מחסן לאותו SKU (מסלול נפרד — לידיעה בלבד).  \n"
                 "**איך לפעול:** פתח case על *disposition / reimbursement* וצרף Order ID + פרטי ההחזרה.")
         _contra = _cl["contradiction"]
         if _contra:
-            _n_clear = sum(1 for c in _contra if c["open_units"] > 0 and c["sku_wh_reimb_units"] == 0)
-            _n_maybe = sum(1 for c in _contra if c["open_units"] > 0 and c["sku_wh_reimb_units"] > 0)
-            _n_cov   = sum(1 for c in _contra if c["open_units"] <= 0)
-            st.caption(f"🔴 **{_n_clear}** פתוחות וברורות  ·  ⚠️ **{_n_maybe}** אולי כוסו ברמת SKU "
-                       f"(ל‑SKU יש זיכוי Damaged/Lost_Warehouse)  ·  ✅ **{_n_cov}** כוסו ברמת הזמנה.  "
-                       "זיכויי מחסן אינם נושאים order_id, לכן 'SKU wh-reimb' הוא רמז ברמת ה‑SKU לתקופה — "
-                       "בדוק לפני פתיחה, אין קישור ודאי להזמנה.")
+            _n_open = sum(1 for c in _contra if c["open_units"] > 0)
+            _n_cov  = sum(1 for c in _contra if c["open_units"] <= 0)
+            _rtl(f"🔴 **{_n_open}** פתוחות (לא זוכו ברמת הזמנה)  ·  ✅ **{_n_cov}** כוסו ברמת הזמנה.  "
+                 "עמודת 'SKU wh-reimb' = כמות זיכויי מחסן (Damaged/Lost_Warehouse) לאותו SKU בתקופה — "
+                 "מסלול נפרד שאינו נושא order_id, לכן לידיעה בלבד, לא הוכחה שההחזרה הספציפית זוכתה.", muted=True)
             def _ct_flag(c):
-                if c["open_units"] <= 0:
-                    return "✅"
-                return "⚠️" if c["sku_wh_reimb_units"] > 0 else "🔴"
+                return "🔴" if c["open_units"] > 0 else "✅"
             _cdf = pd.DataFrame([{
                 "": _ct_flag(c),
                 "MP": c["marketplace"], "Order": c["order_id"], "SKU": c["sku"],
@@ -3788,9 +3797,9 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
             st.caption("אין רשומות.")
 
         # ── 2. Refund, no return, overdue ──────────────────────────────────
-        st.markdown("##### 💸 Refund, no return, overdue — החזר ללא החזרה שעבר זמן")
+        _rtl("💸 Refund, no return, overdue — החזר ללא החזרה שעבר זמן", head=True)
         with st.expander("ℹ️ מה זה · למה מגיע כסף · מה לבדוק"):
-            st.markdown(
+            _rtl(
                 "**מה זה:** הלקוח קיבל החזר כספי, אבל היחידות לא חזרו ל‑FBA, עבר חלון הזמן, ולא ניתן זיכוי.  \n"
                 "**למה מגיע כסף:** שילמת על המוצר וגם החזרת כסף ללקוח — בלי לקבל סחורה בחזרה ובלי פיצוי.  \n"
                 "**מה לבדוק:** `Open` > 0 (הוזמן − חזר − זוכה), ושעברו מספיק ימים מתאריך ההחזר.  \n"
@@ -3813,9 +3822,9 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
             st.caption("אין רשומות.")
 
         # ── 3. Shortfall ───────────────────────────────────────────────────
-        st.markdown("##### 📦 Shortfall — יחידות חסרות בהזמנות שהוחזר עליהן כסף")
+        _rtl("📦 Shortfall — יחידות חסרות בהזמנות שהוחזר עליהן כסף", head=True)
         with st.expander("ℹ️ מה זה · למה מגיע כסף · מה לבדוק"):
-            st.markdown(
+            _rtl(
                 "**מה זה:** על הזמנה שהוחזר עליה כסף, המאזן לא מסתדר: **הוזמן − חזר − זוכה > 0**.  \n"
                 "**למה מגיע כסף:** היחידות החסרות לא חזרו פיזית ולא זוכו — מגיע עליהן זיכוי.  \n"
                 "**מה לבדוק:** `Shortfall` = החוסר (כבר אחרי קיזוז זיכויים). ודא שהוא עדיין > 0.  \n"
@@ -3835,9 +3844,9 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
             st.caption("אין רשומות.")
 
         # ── 4. Sellable returns to inspect (internal, not an Amazon claim) ──
-        st.markdown("##### 🔍 Sellable returns — לבדיקה פנימית (לא תביעה מול אמזון)")
+        _rtl("🔍 Sellable returns — לבדיקה פנימית (לא תביעה מול אמזון)", head=True)
         with st.expander("ℹ️ מה זה · מה לעשות"):
-            st.markdown(
+            _rtl(
                 "**מה זה:** יחידות שחזרו כ‑`SELLABLE` מהזמנות גדולות מסומנות — חוזרות למדף כ\"חדשות\".  \n"
                 "**למה לבדוק:** בהזמנה גדולה חשודה ייתכן שהקופסה נפתחה או שהוחלף התוכן לפני שחוזרת למכירה.  \n"
                 "**מה לעשות:** משוך את היחידות לבדיקה פיזית לפני החזרה למלאי. "
