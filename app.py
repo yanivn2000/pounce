@@ -197,6 +197,10 @@ hr {{ margin: 6px 0 !important; border-color: #e6e8ea !important; }}
 /* ── Captions ────────────────────────────────────────────────────── */
 [data-testid="stCaptionContainer"] {{ font-size: 0.74rem !important; color: {T['text_secondary']} !important; }}
 
+/* ── Column-help tooltip: extra bottom breathing room (emotion label;
+      may need updating if Streamlit is upgraded) ──────────────────── */
+.e1bi6yfx2 {{ padding-bottom: 13px !important; line-height: 1.45 !important; }}
+
 /* ── Compact dataframe rows ─────────────────────────────────────── */
 [data-testid="stDataFrame"] .dvn-scroller [role="gridcell"],
 [data-testid="stDataFrame"] .dvn-scroller [role="columnheader"] {{
@@ -4593,12 +4597,20 @@ if _nav == "📈 Sales Dashboard":
                 compare_label = "vs prev week" if view_mode == "Weekly" else "vs prev day"
                 st.markdown(f"### Units Sold — color coded {compare_label}")
             if view_mode == "Weekly":
-                st.caption("Each column is one **Mon→Sun** week, labeled by its Monday "
-                           "(that Monday is included), counted by Amazon purchase date. "
-                           "Hover any week header for its exact dates — the newest week is partial.")
+                st.markdown(
+                    f"<div dir='rtl' style='color:{T['text_secondary']};font-size:0.82rem;"
+                    "margin:0 0 0.4rem'>כל עמודה = שבוע <b>שני→ראשון</b> המתויג לפי יום שני "
+                    "(כולל אותו), בספירה לפי תאריך הרכישה. ריחוף על כותרת שבוע מראה את התאריכים "
+                    "המדויקים. מבוטלות לא נספרות; ממתינות לפי הסימון. השבוע הימני חלקי.</div>",
+                    unsafe_allow_html=True,
+                )
             else:
-                st.caption("Each column is one full calendar day, by Amazon purchase date. "
-                           "Hover a date header for details.")
+                st.markdown(
+                    f"<div dir='rtl' style='color:{T['text_secondary']};font-size:0.82rem;"
+                    "margin:0 0 0.4rem'>כל עמודה = יום לוח מלא לפי תאריך הרכישה. "
+                    "ריחוף על כותרת מראה פרטים.</div>",
+                    unsafe_allow_html=True,
+                )
 
             ly_matrix = None
             if view_mode == "Daily":
@@ -4742,7 +4754,6 @@ if _nav == "📈 Sales Dashboard":
                 }
                 # ── Per-column tooltips: the exact date window each column covers ──
                 import datetime as _dt
-                _pending_txt = "included" if _include_pending else "excluded"
                 _today_d = _dt.date.today()
                 _span_days = days_back_raw * 7 if view_mode == "Weekly" else days_back_raw
                 _cutoff_d = _today_d - _dt.timedelta(days=_span_days)
@@ -4754,28 +4765,22 @@ if _nav == "📈 Sales Dashboard":
                         return ""
                     if view_mode == "Weekly":
                         end = start + _dt.timedelta(days=6)
-                        h = (f"Mon {start:%Y-%m-%d} → Sun {end:%Y-%m-%d} (inclusive). "
-                             f"Units by Amazon purchase date: 7 full calendar days in the "
-                             f"marketplace's report time zone — no time-of-day cutoff.")
+                        parts = [f"שבוע: שני {start:%d.%m} עד ראשון {end:%d.%m} (כולל). "
+                                 "לפי תאריך הרכישה."]
                         if yoy_mode:
-                            h += " Cell = this year minus the same week last year (±364d aligned)."
-                        h += f" Cancelled excluded; Pending {_pending_txt}."
-                        extra = []
+                            parts.append("התא = השנה פחות שבוע מקביל אשתקד.")
                         if end >= _today_d:
-                            extra.append("Current week — still in progress (partial).")
+                            parts.append("⚠ השבוע הנוכחי — חלקי.")
                         if start < _cutoff_d:
-                            extra.append(f"Clipped by the {_span_days}-day period cutoff "
-                                         f"({_cutoff_d:%Y-%m-%d}).")
-                        if extra:
-                            h += " ⚠ " + " ".join(extra)
-                        return h
-                    # Daily view — one calendar day per column
-                    h = (f"{start:%a %Y-%m-%d} — one full calendar day by Amazon purchase date "
-                         f"(marketplace report time zone, no time-of-day cutoff). "
-                         f"Cancelled excluded; Pending {_pending_txt}.")
-                    if start >= _today_d:
-                        h += " ⚠ Today — still in progress (partial)."
-                    return h
+                            parts.append("⚠ נחתך בסף התקופה.")
+                        body = " ".join(parts)
+                    else:
+                        body = f"{start:%d.%m} — יום לוח מלא, לפי תאריך הרכישה."
+                        if start >= _today_d:
+                            body += " ⚠ היום — חלקי."
+                    # RTL-isolate so Hebrew orders correctly inside the LTR tooltip
+                    # (tooltip bottom spacing is handled in CSS via .e1bi6yfx2).
+                    return "⁧" + body + "⁩"
 
                 for _dc in date_cols:
                     col_cfg[_dc] = st.column_config.NumberColumn(_dc, width=80, help=_col_help(_dc))
