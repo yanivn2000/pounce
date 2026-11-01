@@ -189,6 +189,25 @@ def get_weekly_units_matrix_yoy(marketplace: str = None, weeks: int = 8,
     return _pivot(df_cur), _pivot(df_ly)
 
 
+def get_orders_freshness(marketplace: str = None, since: str = None) -> dict:
+    """Latest imported purchase day (local), and how many orders since `since` carry
+    no purchase time — those keep the file's date, unconverted to local time."""
+    conn = get_conn()
+    mkt = "AND marketplace = ?" if marketplace else ""
+    p = [marketplace] if marketplace else []
+    max_date = conn.execute(f"SELECT MAX(order_date) FROM orders WHERE 1=1 {mkt}", p).fetchone()[0]
+    untimed = 0
+    if since:
+        untimed = conn.execute(f"""
+            SELECT COUNT(*) FROM orders
+            WHERE order_date >= ? {mkt}
+              AND (order_datetime IS NULL OR order_datetime = ''
+                   OR substr(order_datetime, 12) = '00:00:00')
+        """, [since] + p).fetchone()[0]
+    conn.close()
+    return {"max_date": max_date, "untimed": int(untimed or 0)}
+
+
 def get_weekly_summary(marketplace: str = None, weeks: int = 8,
                        include_pending: bool = False) -> pd.DataFrame:
     """

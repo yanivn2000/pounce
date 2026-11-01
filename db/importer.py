@@ -11,6 +11,7 @@ import json
 import pandas as pd
 import sqlite3
 from db.database import get_conn
+from db.marketplace_tz import local_order_dates
 
 # Map Amazon CSV column names → our schema
 _COL_MAP = {
@@ -124,10 +125,22 @@ def import_orders_csv(file_obj, marketplace_override: str = None) -> tuple[int, 
         else:
             df[col] = 0
 
-    # Normalize date to YYYY-MM-DD
+    # order_datetime = exact purchase moment in UTC; order_date = the purchase day in
+    # the marketplace's local time (as in Seller Central). A date-only value has no
+    # moment to convert, so it keeps the date written in the file.
+    _has_time = df["order_date"].astype(str).str.contains(r"\d{1,2}:\d{2}", regex=True, na=False)
     _odt = pd.to_datetime(df["order_date"], errors="coerce", utc=True)
+    # pandas 2 infers ONE format from the first row, so rows in another format
+    # (e.g. a date-only value among timestamps) come back NaT — re-parse just those.
+    _retry = _odt.isna() & df["order_date"].notna()
+    if _retry.any():
+        _odt[_retry] = pd.to_datetime(df.loc[_retry, "order_date"], errors="coerce",
+                                      utc=True, format="mixed")
     df["order_datetime"] = _odt.dt.strftime("%Y-%m-%d %H:%M:%S")
     df["order_date"]     = _odt.dt.strftime("%Y-%m-%d")
+    if _has_time.any():
+        df.loc[_has_time, "order_date"] = local_order_dates(
+            _odt[_has_time], df.loc[_has_time, "marketplace"])
     invalid_dates = df["order_date"].isna().sum()
     if invalid_dates:
         warnings.append(f"{invalid_dates} rows had unparseable dates and were skipped.")

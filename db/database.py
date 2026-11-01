@@ -279,6 +279,7 @@ def init_db():
     _migrate_returns_lpn(conn)
     _migrate_orders_address_fields(conn)
     _migrate_orders_datetime(conn)
+    _migrate_orders_local_date(conn)
     _migrate_reimbursements(conn)
     _migrate_bundle_sales(conn)
     _migrate_bid_changes_unique_constraint(conn)
@@ -1274,6 +1275,33 @@ def _migrate_orders_datetime(conn: sqlite3.Connection):
     if "order_datetime" not in cols:
         conn.execute("ALTER TABLE orders ADD COLUMN order_datetime TEXT")
         conn.commit()
+
+
+def _migrate_orders_local_date(conn: sqlite3.Connection):
+    """One-time: order_date was the UTC day of the purchase; re-derive it as the day
+    in the marketplace's local time. Only rows with a real purchase time can be
+    converted — date-only rows (no order_datetime, or a bare 00:00:00) keep their date.
+    Reversible: order_datetime (UTC) is untouched."""
+    key = "migr_order_date_local_v1"
+    if conn.execute("SELECT 1 FROM app_settings WHERE key=?", (key,)).fetchone():
+        return
+    import json
+    import pandas as pd
+    from db.marketplace_tz import local_order_dates
+    df = pd.read_sql_query(
+        "SELECT id, order_date, order_datetime, marketplace FROM orders "
+        "WHERE order_datetime IS NOT NULL AND order_datetime <> '' "
+        "AND substr(order_datetime, 12) <> '00:00:00'", conn)
+    upd = []
+    if not df.empty:
+        utc = pd.to_datetime(df["order_datetime"], errors="coerce", utc=True)
+        df["local"] = local_order_dates(utc, df["marketplace"])
+        moved = df[df["local"].notna() & (df["local"] != df["order_date"])]
+        upd = list(zip(moved["local"], moved["id"].astype(int)))
+    with conn:
+        conn.executemany("UPDATE orders SET order_date=? WHERE id=?", upd)
+        conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                     (key, json.dumps({"converted_rows": len(df), "date_changed": len(upd)})))
 
 
 def _migrate_reimbursements(conn: sqlite3.Connection):

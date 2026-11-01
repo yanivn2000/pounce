@@ -55,7 +55,7 @@ from db.queries import (
     get_sales_matrix, get_weekly_summary, get_recommendations_history,
     get_change_log, get_marketplaces, get_order_date_range, count_orders,
     get_units_matrix, get_weekly_units_matrix, get_weekly_units_matrix_yoy,
-    search_orders_by_address, get_noted_recommendations,
+    search_orders_by_address, get_noted_recommendations, get_orders_freshness,
 )
 from db.bundles import (
     import_bundle_csv, count_bundle_rows, get_bundle_date_range,
@@ -4596,19 +4596,36 @@ if _nav == "📈 Sales Dashboard":
             else:
                 compare_label = "vs prev week" if view_mode == "Weekly" else "vs prev day"
                 st.markdown(f"### Units Sold — color coded {compare_label}")
+            # Days are purchase days in each marketplace's local time (see
+            # db/marketplace_tz.py); "partial" is judged against the latest imported day.
+            import datetime as _dt
+            _span_days = days_back_raw * 7 if view_mode == "Weekly" else days_back_raw
+            _cutoff_d  = _dt.date.today() - _dt.timedelta(days=_span_days)
+            _fresh     = get_orders_freshness(sel_market, since=_cutoff_d.isoformat())
+            _last_d    = _dt.date.fromisoformat(_fresh["max_date"]) if _fresh["max_date"] else None
+            # Latin tokens are wrapped in <bdi> so the RTL line doesn't reorder them.
+            _cap_style = f"color:{T['text_secondary']};font-size:0.82rem;margin:0 0 0.4rem"
+            _tz_note   = ("לפי יום הרכישה <b>בשעון המקומי של ה-<bdi>marketplace</bdi></b>. "
+                          "ב-<bdi>amazon.com</bdi> זה שעון החוף המערבי, כמו ב-<bdi>Seller Central</bdi>.")
             if view_mode == "Weekly":
                 st.markdown(
-                    f"<div dir='rtl' style='color:{T['text_secondary']};font-size:0.82rem;"
-                    "margin:0 0 0.4rem'>כל עמודה = שבוע <b>שני→ראשון</b> המתויג לפי יום שני "
-                    "(כולל אותו), בספירה לפי תאריך הרכישה. ריחוף על כותרת שבוע מראה את התאריכים "
-                    "המדויקים. מבוטלות לא נספרות; ממתינות לפי הסימון. השבוע הימני חלקי.</div>",
+                    f"<div dir='rtl' style='{_cap_style}'>כל עמודה = שבוע <b>שני→ראשון</b> "
+                    f"המתויג לפי יום שני (כולל אותו), {_tz_note} ריחוף על כותרת מראה את "
+                    "התאריכים. מבוטלות לא נספרות; ממתינות לפי הסימון.</div>",
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
-                    f"<div dir='rtl' style='color:{T['text_secondary']};font-size:0.82rem;"
-                    "margin:0 0 0.4rem'>כל עמודה = יום לוח מלא לפי תאריך הרכישה. "
+                    f"<div dir='rtl' style='{_cap_style}'>כל עמודה = יום רכישה מלא, {_tz_note} "
                     "ריחוף על כותרת מראה פרטים.</div>",
+                    unsafe_allow_html=True,
+                )
+            if _fresh["untimed"]:
+                st.markdown(
+                    f"<div dir='rtl' style='color:{T['score_mid']};font-size:0.82rem;"
+                    f"margin:0 0 0.4rem'>⚠ {_fresh['untimed']:,} הזמנות בתקופה נשמרו בלי שעת רכישה, "
+                    "ולכן נספרות לפי התאריך שבקובץ בלי התאמת שעון. העלאה מחדש של דוח "
+                    "<bdi>All Orders</bdi> תתקן אותן.</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -4753,10 +4770,9 @@ if _nav == "📈 Sales Dashboard":
                     "Total":       st.column_config.NumberColumn("Total",      width=90),
                 }
                 # ── Per-column tooltips: the exact date window each column covers ──
-                import datetime as _dt
-                _today_d = _dt.date.today()
-                _span_days = days_back_raw * 7 if view_mode == "Weekly" else days_back_raw
-                _cutoff_d = _today_d - _dt.timedelta(days=_span_days)
+                # (_cutoff_d / _last_d are computed above, next to the caption)
+                _partial_txt = (f"⚠ חלקי — הזמנה אחרונה שיובאה: {_last_d:%d.%m}."
+                                if _last_d else "")
 
                 def _col_help(dc: str) -> str:
                     try:
@@ -4765,22 +4781,22 @@ if _nav == "📈 Sales Dashboard":
                         return ""
                     if view_mode == "Weekly":
                         end = start + _dt.timedelta(days=6)
-                        parts = [f"שבוע: שני {start:%d.%m} עד ראשון {end:%d.%m} (כולל). "
-                                 "לפי תאריך הרכישה."]
+                        parts = [f"שבוע: שני {start:%d.%m} עד ראשון {end:%d.%m} (כולל), "
+                                 "לפי יום הרכישה בשעון המקומי."]
                         if yoy_mode:
                             parts.append("התא = השנה פחות שבוע מקביל אשתקד.")
-                        if end >= _today_d:
-                            parts.append("⚠ השבוע הנוכחי — חלקי.")
+                        if _last_d and end >= _last_d:
+                            parts.append(_partial_txt)
                         if start < _cutoff_d:
                             parts.append("⚠ נחתך בסף התקופה.")
                         body = " ".join(parts)
                     else:
-                        body = f"{start:%d.%m} — יום לוח מלא, לפי תאריך הרכישה."
-                        if start >= _today_d:
-                            body += " ⚠ היום — חלקי."
+                        body = f"{start:%d.%m} — יום רכישה מלא בשעון המקומי."
+                        if _last_d and start >= _last_d:
+                            body += " " + _partial_txt
                     # RTL-isolate so Hebrew orders correctly inside the LTR tooltip
                     # (tooltip bottom spacing is handled in CSS via .e1bi6yfx2).
-                    return "⁧" + body + "⁩"
+                    return chr(0x2067) + body + chr(0x2069)   # RLI … PDI
 
                 for _dc in date_cols:
                     col_cfg[_dc] = st.column_config.NumberColumn(_dc, width=80, help=_col_help(_dc))
