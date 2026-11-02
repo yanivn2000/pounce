@@ -323,9 +323,10 @@ def get_amazon_monthly_net(conn, year: int, usd_nis: float,
                            exclude_agl: bool = True) -> dict[int, float]:
     """Return {month_index: net_payout_usd} for a given year — what Amazon pays out
     for that month's activity: net excl. transfers, with AGL freight added back
-    (planned as scheduled items). All advertising, US included, counts as taken
-    from the Amazon balance (the owner's model, 2026-11-02) — even though in
-    practice US ads often land on the Israeli card when the wallet is empty.
+    (planned as scheduled items). All advertising, US included, is taken from the
+    Amazon balance — the owner's model, and what the data shows once the US copies
+    of CA/UK/IE rows are gone (an earlier "US ads go to the card" reading was those
+    copies; see amazon_module.remove_us_twin_copies).
 
     Cached on the amazon_transactions fingerprint (balance-independent), so the
     forecast doesn't re-query the whole year on every rerun / balance save.
@@ -437,25 +438,6 @@ def _amazon_deposits_cached(usd_nis: float, fp: tuple):
     df["usd"] = [_to_usd(float(a), c or "USD", usd_nis) for a, c in zip(df["amount"], df["currency"])]
     return df.drop(columns="tx_type")
 
-
-def get_ad_spend_monthly(usd_nis: float, marketplace: str = "US") -> dict[str, float]:
-    """{'YYYY-MM': usd} of "Cost of Advertising" service fees in one marketplace."""
-    return _ad_spend_cached(usd_nis, marketplace, _amztx_fp())
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _ad_spend_cached(usd_nis: float, marketplace: str, fp: tuple) -> dict[str, float]:
-    conn = _get_conn_cf()
-    rows = conn.execute(
-        "SELECT substr(tx_date,1,7), currency, SUM(ABS(net_total)) FROM amazon_transactions "
-        "WHERE marketplace=? AND tx_type='Service Fee' "
-        "AND LOWER(product_details) LIKE '%cost of advertising%' GROUP BY 1, 2",
-        (marketplace,)).fetchall()
-    conn.close()
-    out: dict[str, float] = {}
-    for ym, cur, v in rows:
-        out[ym] = out.get(ym, 0.0) + _to_usd(float(v or 0), cur or "USD", usd_nis)
-    return out
 
 
 def _to_usd(amount: float, currency: str, usd_nis: float) -> float:

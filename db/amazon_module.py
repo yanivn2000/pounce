@@ -309,10 +309,25 @@ EU_COL_NAME_MAP = {
 
 # ── Core parser ────────────────────────────────────────────────────────────────
 
-def parse_amazon_transactions(filepath: str) -> list:
+class MarketplaceNeeded(ValueError):
+    """The file never says which marketplace it belongs to (no row has one) and its
+    currency doesn't pin it down (e.g. EUR) — the caller must pass marketplace_hint."""
+
+
+# A file's single currency → its marketplace, when only one marketplace uses it
+_CURRENCY_TO_MP = {"USD": "US", "CAD": "CA", "GBP": "UK", "PLN": "PL", "SEK": "SE",
+                   "MXN": "MX", "AUD": "AU", "JPY": "JP", "BRL": "BR", "TRY": "TR",
+                   "INR": "IN", "SGD": "SG", "AED": "AE", "SAR": "SA"}
+
+
+def parse_amazon_transactions(filepath: str, marketplace_hint: str = None) -> list:
     """
     Parse Amazon Transaction View CSV/TSV.
     Handles US (25-col English) and EU (25/29-col multilingual: DE/FR/ES/IT/NL/PL/SE/BE/IE).
+    Rows without a marketplace take the file's most common one; if no row has one,
+    the file's currency decides (when only one marketplace uses it), else
+    marketplace_hint, else MarketplaceNeeded — never a silent US (that filed CA/UK/IE
+    rows as US; see remove_us_twin_copies).
     Returns list of dicts ready to INSERT into amazon_transactions table.
     """
     import pandas as pd
@@ -332,6 +347,11 @@ def parse_amazon_transactions(filepath: str) -> list:
     # Detect EU locale from preamble
     is_eu_file = False
     eu_currency = "EUR"
+    preamble_currency = None   # "All amounts in USD, unless specified" (English files)
+    for line in lines[:5]:
+        _m = _re.search(r"amounts\s+in\s+([A-Za-z]{3})\b", line)
+        if _m and preamble_currency is None:
+            preamble_currency = _m.group(1).upper()
     for line in lines[:5]:
         low = line.lower()
         if any(p in low for p in [
@@ -480,6 +500,8 @@ def parse_amazon_transactions(filepath: str) -> list:
     df["_product"] = df[col_product].str[:120]   if col_product else ""
 
     # Marketplace → code + currency
+    file_currency = eu_currency if is_eu_file else preamble_currency
+    file_mp = _CURRENCY_TO_MP.get(file_currency or "")
     if col_marketplace:
         mp_pairs = df[col_marketplace].apply(_normalize_marketplace)
         df["_marketplace"] = mp_pairs.apply(lambda x: x[0])
@@ -488,17 +510,24 @@ def parse_amazon_transactions(filepath: str) -> list:
         # most common marketplace in this file so CA/UK advertising isn't misattributed to US.
         unknown_mask = (df[col_marketplace].str.strip() == "")
         mp_mode = df.loc[~unknown_mask, "_marketplace"].mode()
-        if len(mp_mode):
-            df.loc[unknown_mask, "_marketplace"] = mp_mode[0]
+        if unknown_mask.any():
+            fill = mp_mode[0] if len(mp_mode) else (file_mp or marketplace_hint)
+            if not fill:
+                raise MarketplaceNeeded(
+                    "no row in this file names its marketplace and its currency "
+                    f"({file_currency or 'unknown'}) doesn't pin one down")
+            df.loc[unknown_mask, "_marketplace"] = fill
             # Re-derive currency from the filled marketplace
-            df.loc[unknown_mask, "_currency"] = df.loc[unknown_mask, "_marketplace"].apply(
-                lambda m: _normalize_marketplace(m)[1]
-            )
+            df.loc[unknown_mask, "_currency"] = _normalize_marketplace(fill)[1]
         if is_eu_file:
             df.loc[df["_currency"] == "USD", "_currency"] = eu_currency
     else:
-        df["_marketplace"] = "US"
-        df["_currency"]    = "USD"
+        # No marketplace column at all: currency / hint first, US only as the legacy default
+        fill = file_mp or marketplace_hint or "US"
+        df["_marketplace"] = fill
+        df["_currency"]    = _normalize_marketplace(fill)[1]
+        if is_eu_file:
+            df.loc[df["_currency"] == "USD", "_currency"] = eu_currency
 
     # ⚠️ EU VAT: add product_sales_tax to gross_sales (EU prices are net-of-VAT in CSV)
     EU_VAT_MARKETPLACES = {"UK","DE","FR","ES","IT","NL","BE","PL","SE","IE"}
@@ -662,6 +691,53 @@ def get_sellerboard_cost_map(conn) -> dict[str, float]:
             for r in conn.execute("SELECT asin, cost_usd FROM sellerboard_cogs").fetchall()}
 
 
+# ── US copies of other marketplaces' rows ─────────────────────────────────────
+# Amazon prints some rows without a marketplace (transfers, ad fees, some
+# reimbursements); they take the file's marketplace. Before 2026-06-16 the importer
+# filed them under US — and a file with no marketplace rows at all still fell back
+# to US until 2026-11-02 — so a CA/UK/IE row could be stored twice: once as US (its
+# CAD/GBP/EUR amount filed as USD) and once under its own marketplace. The dedupe
+# hash includes the marketplace, so it never caught that. A twin = same day, type,
+# description, order and non-zero amount, filed under US and under another
+# marketplace; the US copy is the wrong one. Audited 2026-11-02 row by row: 506 US
+# copies of CA/UK/IE rows (order ids 70x-/20x-, CA/UK wording "To account ending
+# with" vs US "To your account ending in"); the one $0.00 match was a genuine US row,
+# hence the non-zero rule. The parser no longer falls back to US (see
+# parse_amazon_transactions), so this is a one-time cleanup (_migrate_tx_us_twins).
+_TWIN_COLS = ("tx_date, tx_type, COALESCE(product_details, ''), COALESCE(order_id, ''), "
+              "ROUND(net_total, 2)")
+
+
+def remove_us_twin_copies(conn) -> dict:
+    """Delete US-filed copies of rows that also exist under another marketplace
+    (every non-zero US row of a twin group; stable — a second run finds nothing).
+    Each deleted row is first copied to amazon_tx_removed, in the same transaction,
+    so it can be restored. Returns {"deleted": n, "by_type": {tx_type: n},
+    "net_as_usd": sum of net_total removed}."""
+    # rowid, not id: the production table predates the id column
+    doomed = conn.execute(f"""
+        SELECT rowid, tx_type, net_total
+        FROM amazon_transactions
+        WHERE marketplace = 'US' AND ROUND(net_total, 2) <> 0 AND ({_TWIN_COLS}) IN (
+            SELECT {_TWIN_COLS} FROM amazon_transactions
+            GROUP BY {_TWIN_COLS}
+            HAVING SUM(marketplace = 'US') > 0 AND SUM(marketplace <> 'US') > 0)
+        ORDER BY rowid""").fetchall()
+    by_type: dict[str, int] = {}
+    for _, tx_type, _ in doomed:
+        by_type[tx_type] = by_type.get(tx_type, 0) + 1
+    if doomed:
+        conn.execute("CREATE TABLE IF NOT EXISTS amazon_tx_removed AS "
+                     "SELECT * FROM amazon_transactions WHERE 0")
+        ids = [(rid,) for rid, _, _ in doomed]
+        with conn:   # archive + delete commit together, or not at all
+            conn.executemany("INSERT INTO amazon_tx_removed SELECT * FROM amazon_transactions "
+                             "WHERE rowid = ?", ids)
+            conn.executemany("DELETE FROM amazon_transactions WHERE rowid = ?", ids)
+    return {"deleted": len(doomed), "by_type": by_type,
+            "net_as_usd": round(sum(float(net or 0) for _, _, net in doomed), 2)}
+
+
 def insert_transactions(conn, transactions: list) -> dict:
     """
     Insert parsed transactions, skip duplicates.
@@ -784,6 +860,13 @@ def render_amazon_upload_ui(conn):
         "בחר קובץ CSV/TSV",
         key="amazon_tx_uploader"
     )
+    _iso = lambda t: chr(0x2067) + t + chr(0x2069)   # RTL isolate for Hebrew+Latin text
+    _AUTO = "אוטומטי"
+    mp_pick = st.selectbox(
+        "שוק הקובץ", [_AUTO, "US", "CA", "UK", "DE", "FR", "ES", "IT", "NL", "PL", "SE", "BE", "IE"],
+        key="amazon_tx_marketplace",
+        help=_iso("נחוץ רק לקובץ שאף שורה בו לא מציינת שוק ושהמטבע שלו לא מכריע "
+                  "(למשל קובץ EUR עם העברות ופרסום בלבד)."))
 
     if uploaded:
         if st.button("📥 ייבא עסקאות", key="btn_amazon_import"):
@@ -794,7 +877,12 @@ def render_amazon_upload_ui(conn):
             try:
                 with st.spinner("מנתח קובץ..."):
                     try:
-                        transactions = parse_amazon_transactions(tmp_path)
+                        transactions = parse_amazon_transactions(
+                            tmp_path, None if mp_pick == _AUTO else mp_pick)
+                    except MarketplaceNeeded:
+                        st.error(_iso("❌ הקובץ לא מציין לאיזה שוק הוא שייך, והמטבע שלו לא מכריע. "
+                                      "בחרו את השוק ב„שוק הקובץ” וייבאו שוב."))
+                        return
                     except Exception as _parse_err:
                         st.error(f"❌ שגיאה בניתוח הקובץ: {_parse_err}")
                         return

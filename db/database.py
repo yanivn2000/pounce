@@ -288,6 +288,7 @@ def init_db():
     # Amazon transactions module
     from db.amazon_module import init_amazon_tables
     init_amazon_tables(conn)
+    _migrate_tx_us_twins(conn)   # needs amazon_transactions
     # Aged inventory surcharge
     from db.aged_inventory import init_aged_inventory_table
     init_aged_inventory_table(conn)
@@ -1346,6 +1347,27 @@ def _migrate_orders_marketplace_fix(conn: sqlite3.Connection):
                          "lowercased": lowered,
                          "moved": {str(c): int(n) for c, n in moved["cur"].value_counts().items()},
                          "amazon_com_other_currency": left})))
+
+
+def _migrate_tx_us_twins(conn: sqlite3.Connection):
+    """One-time: delete the US-filed copies of CA/UK/IE transaction rows (transfers,
+    ad fees, reimbursements) left by the pre-2026-06-16 importer — they inflated US
+    deposits and double-counted ads. See amazon_module.remove_us_twin_copies; new
+    uploads run the same cleanup for their dates."""
+    key = "migr_tx_us_twins_v1"
+    if conn.execute("SELECT 1 FROM app_settings WHERE key=?", (key,)).fetchone():
+        return
+    import json
+    from db.amazon_module import remove_us_twin_copies
+    try:
+        result = remove_us_twin_copies(conn)
+    except Exception as e:   # never take the app down over a cleanup; retried next start
+        import logging
+        logging.getLogger(__name__).warning("migr_tx_us_twins_v1 failed: %s", e)
+        return
+    conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                 (key, json.dumps(result)))
+    conn.commit()
 
 
 def _migrate_reimbursements(conn: sqlite3.Connection):
