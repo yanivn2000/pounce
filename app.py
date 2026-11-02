@@ -3688,12 +3688,36 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
     _lo = full_analysis(_lo_conn, marketplace=None if _lo_mp_sel == "(All)" else _lo_mp_sel,
                         start=_lo_start, end=_lo_end)
     _k = _lo["kpis"]
-    _kc = st.columns(5)
-    _kc[0].metric("Large lines", f"{_k['large_lines']:,}")
-    _kc[1].metric("Open-risk units", f"{_k['open_risk_units']:,}")
-    _kc[2].metric("Open-risk revenue", f"${_k['open_risk_revenue']:,.0f}")
-    _kc[3].metric("Units returned", f"{_k['units_returned']:,}")
-    _kc[4].metric("Claim candidates", f"{_k['claim_candidates']:,}")
+    # Two aligned rows — money (USD) above units — so each ratio sits under its base:
+    # revenue → refunds → open risk  /  units sold → returned → open risk.
+    _lo_iso = lambda t: chr(0x2067) + t + chr(0x2069)
+    _lo_pct = lambda a, b, what: f"{a / b * 100:.1f}% of {what}" if b else None
+    _kr1 = st.columns(4)
+    _kr1[0].metric("Large lines", f"{_k['large_lines']:,}",
+                   help=_lo_iso(f"שורות הזמנה גדולות בטבלה ({_k['orders']:,} הזמנות)."))
+    _kr1[1].metric("Revenue", f"${_k['revenue_usd']:,.0f}",
+                   help=_lo_iso("סכום מחיר השורות בטבלה (Rev), מומר לדולר לפי שערי ההמרה בהגדרות."))
+    _kr1[2].metric("Refunds", f"${_k['refunds_usd']:,.0f}",
+                   _lo_pct(_k["refunds_usd"], _k["revenue_usd"], "revenue"),
+                   delta_color="off", delta_arrow="off",
+                   help=_lo_iso(f"החזרים כספיים ללקוחות על ההזמנות בטבלה ({_k['refund_orders']:,} הזמנות, "
+                                "פעם אחת לכל הזמנה), בדולר. עשוי לכלול החזר על פריטים אחרים באותה הזמנה."))
+    _kr1[3].metric("Open-risk revenue", f"${_k['open_risk_revenue']:,.0f}",
+                   _lo_pct(_k["open_risk_revenue"], _k["revenue_usd"], "revenue"),
+                   delta_color="off", delta_arrow="off",
+                   help=_lo_iso("הכנסה מהשורות שעדיין בחלון ההחזרה (AT_RISK / RETURN_IN_PROGRESS), בדולר."))
+    _kr2 = st.columns(4)
+    _kr2[0].metric("Claim candidates", f"{_k['claim_candidates']:,}")
+    _kr2[1].metric("Units sold", f"{_k['units_sold']:,}",
+                   help=_lo_iso("סה״כ יחידות בשורות הגדולות בטבלה."))
+    _kr2[2].metric("Units returned", f"{_k['units_returned']:,}",
+                   _lo_pct(_k["units_returned"], _k["units_sold"], "units sold"),
+                   delta_color="off", delta_arrow="off",
+                   help=_lo_iso("יחידות שחזרו למחסן לפי דוח ההחזרות."))
+    _kr2[3].metric("Open-risk units", f"{_k['open_risk_units']:,}",
+                   _lo_pct(_k["open_risk_units"], _k["units_sold"], "units sold"),
+                   delta_color="off", delta_arrow="off",
+                   help=_lo_iso("יחידות שעוד יכולות לחזור: נמכרו פחות חזרו, בשורות שעדיין בחלון."))
 
     def _lo_csv(rows, label, fname):
         if rows:
@@ -3713,14 +3737,17 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
                 "Date": l["order_date"], "SKU": l["sku"], "Qty": l["qty"], "Rev": l["revenue"],
                 "City": l["city"], "State": l["state"], "Zip": l["zip"], "Received": l["received"],
                 "Received detail": ", ".join(f"{k}:{v}" for k, v in l["by_disposition"].items()),
-                "Refund": ("$%.2f" % l["refund_amt"]) if l["refund_seen"] else "",
+                "Refund": round(l["refund_amt"], 2) if l["refund_seen"] else None,
                 "Reimb units": l["reimbursed_units"], "Days left": l["days_left"],
                 "Window end": l["window_end"],
             } for l in _rows])
             st.dataframe(_df, use_container_width=True, hide_index=True, column_config={
                 "Rev": st.column_config.NumberColumn(
                     "Rev", help=chr(0x2067) + "מחיר השורה מדוח All Orders (כל היחידות), במטבע השוק, "
-                                "בלי מע״מ ומשלוח." + chr(0x2069))})
+                                "בלי מע״מ ומשלוח." + chr(0x2069)),
+                "Refund": st.column_config.NumberColumn(
+                    "Refund", format="%.2f",
+                    help=chr(0x2067) + "החזר כספי ללקוח על ההזמנה, במטבע השוק." + chr(0x2069))})
             _lo_csv(_rows, "⬇️ Download tracker CSV", "large_orders_tracker.csv")
 
     elif _lo_view == "👥 Customers":

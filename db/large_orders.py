@@ -571,12 +571,29 @@ def full_analysis(conn=None, marketplace=None, start=None, end=None) -> dict:
         "badge": build_badge(conn, lines, settings, get_badge_inputs(conn)),
         "settings": settings, "today": base["today"],
     }
-    # KPIs
+    # KPIs — money in USD: line revenue / refunds are in each marketplace's currency
+    # (All Orders item price, transaction refunds), converted with fx_rates
+    # (local units per USD, the same table the geography/summary views use).
+    try:
+        fx = {r[0]: float(r[1]) for r in conn.execute("SELECT marketplace, rate FROM fx_rates") if r[1]}
+    except Exception:
+        fx = {}
+    usd = lambda amt, mp: float(amt or 0) / fx[mp] if fx.get(mp) else float(amt or 0)
     open_lines = [l for l in lines if l["status"] in ("AT_RISK", "RETURN_IN_PROGRESS")]
+    # a refund belongs to the order, not the line — count each order once
+    refund_by_order = {}
+    for l in lines:
+        if l["refund_seen"]:
+            refund_by_order.setdefault(l["order_id"], usd(l["refund_amt"], l["marketplace"]))
     result["kpis"] = {
         "large_lines": len(lines),
+        "orders": len({l["order_id"] for l in lines}),
+        "units_sold": sum(l["qty"] for l in lines),
+        "revenue_usd": round(sum(usd(l["revenue"], l["marketplace"]) for l in lines), 2),
+        "refunds_usd": round(sum(refund_by_order.values()), 2),
+        "refund_orders": len(refund_by_order),
         "open_risk_units": sum(l["qty"] - l["received"] for l in open_lines),
-        "open_risk_revenue": round(sum(l["revenue"] for l in open_lines), 2),
+        "open_risk_revenue": round(sum(usd(l["revenue"], l["marketplace"]) for l in open_lines), 2),
         "units_returned": sum(l["received"] for l in lines),
         "claim_candidates": (sum(1 for c in result["claims"]["contradiction"] if c["open_units"] > 0)
                              + len(result["claims"]["refund_no_return_overdue"])
