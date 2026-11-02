@@ -309,6 +309,13 @@ EU_COL_NAME_MAP = {
 
 # ── Core parser ────────────────────────────────────────────────────────────────
 
+class TransactionsPageExport(ValueError):
+    """The file is the Transactions-page export ("Transactions for time period …":
+    Date / Transaction type / Total product charges / Total (USD|CAD|…), with
+    "Order Payment" and Deferred rows). Its rows don't line up with the Date Range
+    Report's, so mixing the two double-counts — only the Date Range Report is accepted."""
+
+
 class MarketplaceNeeded(ValueError):
     """The file never says which marketplace it belongs to (no row has one) and its
     currency doesn't pin it down (e.g. EUR) — the caller must pass marketplace_hint."""
@@ -430,6 +437,12 @@ def parse_amazon_transactions(filepath: str, marketplace_hint: str = None) -> li
     col_other    = find_col(df, "other")
     col_net      = find_col(df, "total", "total_usd")
     col_marketplace = find_col(df, "marketplace")
+
+    # Transactions-page export: no "date/time" column, but "transaction type" /
+    # "total product charges" (the Date Range Report has date/time, type, product sales)
+    if "date/time" not in df.columns and (
+            "transaction_type" in df.columns or "total_product_charges" in df.columns):
+        raise TransactionsPageExport("Transactions-page export, not the Date Range Report")
 
     if not col_date or not col_net:
         return []
@@ -850,9 +863,9 @@ def render_amazon_upload_ui(conn):
     except ImportError:
         raise ImportError("streamlit is required for render_amazon_upload_ui()")
 
-    st.subheader("📤 העלאת Transaction View")
+    st.subheader("📤 העלאת דוח עסקאות")
     st.caption(
-        "Seller Central → Payments → Transaction View → Download → CSV/TSV. "
+        "Seller Central → Payments → Reports Repository → Transaction (Date Range Report) → CSV. "
         "תומך: US, CA, UK, DE, FR, ES, IT, NL, PL, SE, BE, IE"
     )
 
@@ -879,6 +892,11 @@ def render_amazon_upload_ui(conn):
                     try:
                         transactions = parse_amazon_transactions(
                             tmp_path, None if mp_pick == _AUTO else mp_pick)
+                    except TransactionsPageExport:
+                        st.error(_iso("❌ זה הקובץ מדף Transactions, לא דוח העסקאות שהמערכת עובדת איתו. "
+                                      "הורידו את הדוח מ-Payments → Reports Repository → Transaction "
+                                      "(Date Range Report) לאותה תקופה, והעלו אותו במקום."))
+                        return
                     except MarketplaceNeeded:
                         st.error(_iso("❌ הקובץ לא מציין לאיזה שוק הוא שייך, והמטבע שלו לא מכריע. "
                                       "בחרו את השוק ב„שוק הקובץ” וייבאו שוב."))
@@ -890,7 +908,8 @@ def render_amazon_upload_ui(conn):
                 os.unlink(tmp_path)
 
             if not transactions:
-                st.error("❌ לא נמצאו עסקאות — בדוק שהדוח הוא Transaction View (CSV/TSV)")
+                st.error(_iso("❌ לא נמצאו עסקאות — בדקו שזה דוח העסקאות מ-Reports Repository "
+                              "(Date Range Report, CSV)."))
                 return
 
             result = insert_transactions(conn, transactions)
