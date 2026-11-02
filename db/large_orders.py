@@ -265,6 +265,10 @@ def _window_end(order_d: "_date", mp: str, settings: dict):
     return end
 
 
+# SQL predicate: drop "Non-Amazon" / "Non-Amazon US|CA|UK|DE" sales channels
+NON_AMAZON_EXCLUDE = "COALESCE({col},'') NOT LIKE 'Non-Amazon%'"
+
+
 def get_large_orders_analysis(conn=None, marketplace=None, start=None, end=None,
                               settings=None) -> dict:
     """Return {lines, customers, badge, claims, kpis} for the Large Orders page.
@@ -288,6 +292,9 @@ def get_large_orders_analysis(conn=None, marketplace=None, start=None, end=None,
         mp_clause += " AND o.order_date<=?"; params.append(str(end))
 
     # ── Large lines (one row per order × asin, qty >= threshold, not cancelled) ──
+    # Amazon sales channels only: "Non-Amazon*" rows (S01-/S02- ids — removal / MCF
+    # shipments of our own stock, no price) aren't customer orders.
+    _amazon_only = NON_AMAZON_EXCLUDE.format(col="o.marketplace")
     line_rows = conn.execute(f"""
         SELECT o.order_id, o.order_date,
                COALESCE(o.order_datetime, o.order_date) AS odt,
@@ -296,6 +303,7 @@ def get_large_orders_analysis(conn=None, marketplace=None, start=None, end=None,
         FROM orders o
         WHERE o.quantity >= ?
           AND COALESCE(o.order_status,'') NOT IN ('Cancelled')
+          AND {_amazon_only}
           {mp_clause}
         ORDER BY o.order_date DESC
     """, [thr, *params]).fetchall()
@@ -510,6 +518,7 @@ def build_badge(conn, lines, settings, badge_inputs=None) -> list[dict]:
     for r in conn.execute("""
         SELECT UPPER(asin) a, marketplace, SUM(quantity)
         FROM orders WHERE order_date >= ? AND COALESCE(order_status,'') NOT IN ('Cancelled')
+          AND """ + NON_AMAZON_EXCLUDE.format(col="marketplace") + """
         GROUP BY UPPER(asin), marketplace""", (since,)).fetchall():
         units90[(r[0], r[1])] = int(r[2] or 0)
     ret90 = {}

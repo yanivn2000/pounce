@@ -3627,7 +3627,8 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
     _lo_f1, _lo_f2 = st.columns([1, 2])
     with _lo_f1:
         _lo_mps = ["(All)"] + [r[0] for r in _lo_conn.execute(
-            "SELECT DISTINCT marketplace FROM orders WHERE marketplace IS NOT NULL ORDER BY 1").fetchall()]
+            "SELECT DISTINCT marketplace FROM orders WHERE marketplace IS NOT NULL "
+            "AND marketplace NOT LIKE 'Non-Amazon%' ORDER BY 1").fetchall()]
         _lo_mp_sel = st.selectbox("Marketplace", _lo_mps, key="lo_mp",
                                   format_func=lambda m: "🌐 All" if m == "(All)" else m)
     _lo_mm = _lo_conn.execute("SELECT MIN(order_date), MAX(order_date) FROM orders").fetchone()
@@ -3716,7 +3717,10 @@ if _nav == "📦 Inventory" and _inv_nav == "🐋 Large Orders":
                 "Reimb units": l["reimbursed_units"], "Days left": l["days_left"],
                 "Window end": l["window_end"],
             } for l in _rows])
-            st.dataframe(_df, use_container_width=True, hide_index=True)
+            st.dataframe(_df, use_container_width=True, hide_index=True, column_config={
+                "Rev": st.column_config.NumberColumn(
+                    "Rev", help=chr(0x2067) + "מחיר השורה מדוח All Orders (כל היחידות), במטבע השוק, "
+                                "בלי מע״מ ומשלוח." + chr(0x2069))})
             _lo_csv(_rows, "⬇️ Download tracker CSV", "large_orders_tracker.csv")
 
     elif _lo_view == "👥 Customers":
