@@ -374,9 +374,34 @@ _current_role = st.secrets["auth"]["credentials"]["usernames"].get(
 ).get("role", "team")
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=60, show_spinner=False)
+def _db_role() -> dict:
+    """The 'db_role' marker ~/refresh_staging_db.sh writes into the staging copy
+    ({"role": "staging", "copied_at": ...}); production's database has none."""
+    _c = get_conn()
+    try:
+        _r = _c.execute("SELECT value FROM app_settings WHERE key='db_role'").fetchone()
+    finally:
+        _c.close()
+    try:
+        return json.loads(_r[0]) if _r else {}
+    except (TypeError, ValueError):
+        return {}
+
+
 with st.sidebar:
     st.markdown("## 🐾 Pounce")
     st.markdown(f"<p style='color:{T['text_secondary']};font-size:0.8rem;margin-top:-10px;'>Hunt down your best placements.</p>", unsafe_allow_html=True)
+    _role = _db_role()
+    if _role.get("role") == "staging":
+        _copied = str(_role.get("copied_at", ""))[:10]
+        _copied = f" מ-{_copied[8:10]}.{_copied[5:7]}.{_copied[:4]}" if len(_copied) == 10 else ""
+        st.markdown(
+            f"<div dir='rtl' style='background:{T['alert_bg']};border:1px solid {T['alert_border']};"
+            f"color:{T['alert_text']};border-radius:6px;padding:6px 10px;font-size:0.8rem;margin:4px 0 8px'>"
+            f"<b>🧪 <bdi>STAGING</bdi></b> — עותק בדיקה של הנתונים{_copied}. "
+            f"מה שמעלים או משנים כאן לא מגיע לפרודקשן.</div>",
+            unsafe_allow_html=True)
 
     _display_name = st.secrets["auth"]["credentials"]["usernames"].get(current_username, {}).get("name", current_username)
     st.markdown(
