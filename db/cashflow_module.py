@@ -319,32 +319,23 @@ _AGL_PRODUCT_DETAILS = (
 )
 
 
-# Marketplaces whose "Cost of Advertising" is listed in the transaction report but is
-# NOT taken from the Amazon balance — it lands on the Israeli card (Mizrahi) because
-# frequent payouts leave the wallet empty. Measured 2026-11-02: US deposits exceed
-# the net by ≈ US ad spend, while CA/UK ads are deducted and reconcile.
-_CARD_ADS_MARKETPLACES = ("US",)
-_CARD_ADS_FLOW = "US Ads — Israeli card (auto)"
-
-
 def get_amazon_monthly_net(conn, year: int, usd_nis: float,
-                           exclude_agl: bool = True,
-                           add_back_card_ads: bool = True) -> dict[int, float]:
+                           exclude_agl: bool = True) -> dict[int, float]:
     """Return {month_index: net_payout_usd} for a given year — what Amazon pays out
     for that month's activity: net excl. transfers, with AGL freight added back
-    (planned as scheduled items) and card-paid ads added back (forecast as their
-    own card outflow).
+    (planned as scheduled items). All advertising, US included, counts as taken
+    from the Amazon balance (the owner's model, 2026-11-02) — even though in
+    practice US ads often land on the Israeli card when the wallet is empty.
 
     Cached on the amazon_transactions fingerprint (balance-independent), so the
     forecast doesn't re-query the whole year on every rerun / balance save.
     """
-    return _amazon_monthly_net_cached(year, usd_nis, exclude_agl, add_back_card_ads,
-                                      _amztx_fp())
+    return _amazon_monthly_net_cached(year, usd_nis, exclude_agl, _amztx_fp())
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _amazon_monthly_net_cached(year: int, usd_nis: float, exclude_agl: bool,
-                               add_back_card_ads: bool, fp: tuple) -> dict[int, float]:
+def _amazon_monthly_net_cached(year: int, usd_nis: float,
+                               exclude_agl: bool, fp: tuple) -> dict[int, float]:
     conn = _get_conn_cf()
     tt = "','".join(_TRANSFER_TYPES)
 
@@ -377,21 +368,6 @@ def _amazon_monthly_net_cached(year: int, usd_nis: float, exclude_agl: bool,
             idx = MONTHS.index(month_name) + 1
             usd = _to_usd(float(val or 0), currency or "USD", usd_nis)
             result[idx] = result.get(idx, 0.0) + usd  # add back
-
-    if add_back_card_ads:
-        mk_ph = ",".join("?" * len(_CARD_ADS_MARKETPLACES))
-        ad_rows = conn.execute(
-            f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions "
-            f"WHERE year=? AND marketplace IN ({mk_ph}) AND tx_type='Service Fee' "
-            f"AND LOWER(product_details) LIKE '%cost of advertising%' "
-            f"GROUP BY month, currency",
-            [year, *_CARD_ADS_MARKETPLACES]
-        ).fetchall()
-        for month_name, currency, val in ad_rows:
-            if month_name not in MONTHS:
-                continue
-            idx = MONTHS.index(month_name) + 1
-            result[idx] = result.get(idx, 0.0) + _to_usd(float(val or 0), currency or "USD", usd_nis)
 
     conn.close()
     return result
@@ -504,12 +480,6 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
         (a[0] for a in accounts if a[1].lower() == "amazon"), None
     )
 
-    # Card-paid ads history {'YYYY-MM': usd}, summed over the card-paid marketplaces
-    card_ads: dict[str, float] = {}
-    for mk in _CARD_ADS_MARKETPLACES:
-        for ym_k, v in get_ad_spend_monthly(usd_nis, mk).items():
-            card_ads[ym_k] = card_ads.get(ym_k, 0.0) + v
-
     # Primary account per (company, currency) — used to route item flows
     # Priority: first account in sort_order that matches
     _primary: dict[tuple, int] = {}
@@ -517,7 +487,6 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
         key = (a[2], a[3])   # (company, currency)
         if key not in _primary:
             _primary[key] = a[0]
-    card_acc_id = _primary.get(("IL", "ILS"))   # the Israeli card is billed to Mizrahi NIS
 
     # Build month list
     fy, fm = today.year, today.month
@@ -564,21 +533,6 @@ def build_forecast(conn, months_ahead: int, usd_nis: float,
                 "amount": amz_payout_used, "currency": "USD",
                 "company": "LLC", "auto": True, "item_id": None,
                 "reference": False,
-            })
-
-        # ── Card-paid Amazon ads (auto) ────────────────────────────────────
-        # Last month's ad spend (same month a year earlier × growth) is billed
-        # on the Israeli card this month, in ILS. Mirrors the add-back in the base.
-        sy, sm = (fy, fm - 1) if fm > 1 else (fy - 1, 12)
-        ads_usd = (card_ads.get(f"{sy - 1}-{sm:02d}")
-                   or card_ads.get(f"{sy - 2}-{sm:02d}", 0.0)) * (1 + amazon_growth)
-        if card_acc_id and ads_usd > 0:
-            ads_ils = ads_usd * usd_nis * prorate
-            running[card_acc_id] = running.get(card_acc_id, 0.0) - ads_ils
-            monthly_flows.append({
-                "name": _CARD_ADS_FLOW, "direction": "out", "category": "Other Expense",
-                "amount": ads_ils, "currency": "ILS", "company": "IL",
-                "auto": True, "item_id": None,
             })
 
         # ── Scheduled items ────────────────────────────────────────────────

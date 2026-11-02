@@ -8266,7 +8266,8 @@ if _nav == "💰 Cash Forecast":
                           help="What Amazon charged your card when the seller balance went negative")
             _dp_k3.metric(_BASE, f"${_dp_w_base:,.0f}",
                           help="The Cash Forecast's base for the same months: net activity "
-                               "excl. transfers, with AGL freight and card-paid US ads added back")
+                               "excl. transfers, with AGL freight added back; all ads count as "
+                               "taken from the Amazon balance")
             _dp_k4.metric("הפרש", f"${_dp_w_dep + _dp_w_card - _dp_w_base:,.0f}",
                           help="Net to bank (deposits − card charges) minus the forecast base")
 
@@ -8352,10 +8353,11 @@ if _nav == "💰 Cash Forecast":
                 "העמודות הכחולות הן ההעברות שאמזון ביצעה בפועל לבנק (שורות <bdi>Transfer</bdi> "
                 "בדוחות העסקאות), והכתומות — חיובים בכרטיס כשהיתרה באמזון הייתה שלילית. הקו הוא "
                 "בסיס התחזית לאותו חודש: הפעילות נטו (בלי ההעברות), עם החזרת חיובי <bdi>AGL</bdi> "
-                "(מתוכננים בנפרד) ועלות הפרסום בארה״ב (מחויבת בכרטיס הישראלי ומופיעה בתחזית כהוצאה "
-                "נפרדת); הקו המקווקו הוא תחזית ההפקדה לחודשים הבאים (חודש מקביל אשתקד × צמיחה). "
-                "ההפרש שנשאר נובע בעיקר מתזמון (אמזון משלמת על מכירות של שבועות קודמים) ומ-"
-                "<bdi>AGL</bdi>, שכן יורד מהיתרה. "
+                "(מתוכננים בנפרד). כל הפרסום, כולל ארה״ב, נחשב כיורד מהיתרה באמזון. "
+                "הקו המקווקו הוא תחזית ההפקדה לחודשים הבאים (חודש מקביל אשתקד × צמיחה). "
+                "ההפרש מול ההפקדות בפועל נובע מתזמון (אמזון משלמת על מכירות של שבועות קודמים), "
+                "מ-<bdi>AGL</bdi> שכן יורד מהיתרה, ומפרסום בארה״ב שחויב בפועל בכרטיס במקום לרדת "
+                "מהיתרה (עמודת „פרסום US” בטבלה). "
                 f"הנתונים מהדוחות שהועלו עד {_dp_thru[8:10]}.{_dp_thru[5:7]}.{_dp_thru[:4]}.")
 
             with st.expander("📋 Monthly table", expanded=False):
