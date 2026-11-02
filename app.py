@@ -8268,6 +8268,18 @@ if _nav == "💰 Cash Forecast":
             _dp_end    = _dp_pd.Period(_dp_thru[:7], freq="M")
             _dp_months = [str(_dp_end - i) for i in range(_dp_hist - 1, -1, -1)]   # 'YYYY-MM'
             _dp_lbl    = lambda ym: f"{ym[5:7]}/{ym[2:4]}"
+            # Is the last month fully covered? Every marketplace still active (data in
+            # the last two months) must have reports up to the month's last day.
+            _dp_last     = _dp_months[-1]
+            _dp_last_end = _dp_end.end_time.date().isoformat()           # e.g. '2026-10-31'
+            _dp_cov = {mk: d for mk, d in _cf_conn.execute(
+                "SELECT marketplace, MAX(tx_date) FROM amazon_transactions GROUP BY marketplace")
+                if d and d[:7] >= str(_dp_end - 1)}
+            _dp_cov_min = min(_dp_cov.values()) if _dp_cov else _dp_thru
+            _dp_partial = _dp_cov_min < _dp_last_end
+            _dp_ddmm    = lambda d: f"{d[8:10]}.{d[5:7]}"
+            # "עד 20.10" when every active marketplace reaches into the month
+            _dp_pnote   = f"עד {_dp_ddmm(_dp_cov_min)}" if _dp_cov_min[:7] == _dp_last else "חלקי"
 
             # Actual bank-side flows per month (+ deposited, − charged to the card)
             _dp["ym"] = _dp["tx_date"].str[:7]
@@ -8332,6 +8344,8 @@ if _nav == "💰 Cash Forecast":
             _dp_rows += [{"ym": _ym, "series": _FC, "value": float(_v)} for _ym, _v in _dp_fc]
             _dp_long = _dp_pd.DataFrame(_dp_rows)
             _dp_long["label"] = _dp_long["ym"].map(_dp_lbl)
+            _dp_long["partial"] = (_dp_partial & (_dp_long["ym"] == _dp_last)
+                                   & (_dp_long["series"] != _FC))
             _dp_order = [_dp_lbl(m) for m in sorted(_dp_long["ym"].unique())]
             _dp_wide = (_dp_long.pivot_table(index=["ym", "label"], columns="series",
                                              values="value", aggfunc="sum")
@@ -8352,16 +8366,23 @@ if _nav == "💰 Cash Forecast":
                                     range=["#2a78d6", "#eb6834", "#1baf7a", "#1baf7a"]),
                 legend=_dp_alt.Legend(orient="top", labelColor=_dp_ink, symbolStrokeWidth=2))
             _dp_c  = _dp_alt.Chart(_dp_long)
+            # partial month: lighter bars and a hollow potential point
+            _dp_op = _dp_alt.condition("datum.partial", _dp_alt.value(0.4), _dp_alt.value(1.0))
             _dp_is = lambda s: _dp_alt.datum.series == s
             _dp_dep_bars = (_dp_c.transform_filter(_dp_is(_DEP))
                             .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-                            .encode(x=_dp_X, y=_dp_Y, color=_dp_color))
+                            .encode(x=_dp_X, y=_dp_Y, color=_dp_color, opacity=_dp_op))
             _dp_card_bars = (_dp_c.transform_filter(_dp_is(_CARD))
                              .mark_bar(cornerRadiusBottomLeft=4, cornerRadiusBottomRight=4)
-                             .encode(x=_dp_X, y=_dp_Y, color=_dp_color))
+                             .encode(x=_dp_X, y=_dp_Y, color=_dp_color, opacity=_dp_op))
             _dp_base_line = (_dp_c.transform_filter(_dp_is(_BASE))
-                             .mark_line(strokeWidth=2, point=_dp_alt.OverlayMarkDef(size=60, filled=True))
+                             .mark_line(strokeWidth=2)
                              .encode(x=_dp_X, y=_dp_Y, color=_dp_color))
+            _dp_base_pts = (_dp_c.transform_filter(_dp_is(_BASE))
+                            .mark_point(size=60, filled=False, strokeWidth=2, opacity=1)
+                            .encode(x=_dp_X, y=_dp_Y, color=_dp_color,
+                                    fill=_dp_alt.condition("datum.partial", _dp_alt.value("white"),
+                                                           _dp_alt.value("#1baf7a"))))
             _dp_fc_line = (_dp_c.transform_filter(_dp_is(_FC))
                            .mark_line(strokeWidth=2, strokeDash=[5, 4],
                                       point=_dp_alt.OverlayMarkDef(size=60, filled=False, fill="white"))
@@ -8378,6 +8399,12 @@ if _nav == "💰 Cash Forecast":
                  .encode(x=_dp_X, y=_dp_Y, text="series:N"))
                 for s, a, dx in ((_BASE, "center", 0), (_FC, "right", -2))
                 for halo in ({"stroke": "white", "strokeWidth": 4}, {})])
+            # "partial" note at the top of the partial month's column (the axis shows every
+            # other month, so its own label may be hidden)
+            _dp_pmark = (_dp_alt.Chart(_dp_pd.DataFrame(
+                             {"label": [_dp_lbl(_dp_last)], "t": [_dp_iso(f"חלקי · {_dp_pnote}")]}))
+                         .mark_text(fontSize=11, color=_dp_ink, baseline="top")
+                         .encode(x=_dp_X, y=_dp_alt.value(2), text="t:N"))
             _dp_zero = (_dp_alt.Chart(_dp_pd.DataFrame({"v": [0]}))
                         .mark_rule(color="#8c8b87", strokeWidth=1).encode(y="v:Q"))
             # Hover: the whole month band is the hit target; a rule marks the hovered month
@@ -8398,7 +8425,9 @@ if _nav == "💰 Cash Forecast":
                 _dp_wide[f"t{_dp_i}"] = _dp_wide[_dp_s].map(
                     lambda v: "—" if _dp_pd.isna(v) or abs(v) < 0.5
                     else f"{'-' if v < 0 else ''}${abs(v):,.0f}")
-            _dp_tip = [_dp_alt.Tooltip("label:N", title="חודש")] + [
+            _dp_wide["tlabel"] = [_dp_iso(f"{l} · חלקי, {_dp_pnote}") if _dp_partial and y == _dp_last
+                                  else l for l, y in zip(_dp_wide["label"], _dp_wide["ym"])]
+            _dp_tip = [_dp_alt.Tooltip("tlabel:N", title="חודש")] + [
                 _dp_alt.Tooltip(f"t{i}:N", title=t) for i, (_, t) in enumerate(_dp_tip_rows)]
             _dp_catch = (_dp_alt.Chart(_dp_wide).mark_bar(color="white", opacity=0.001)
                          .encode(x=_dp_X, y=_dp_alt.value(0), y2=_dp_alt.value(_dp_H), tooltip=_dp_tip)
@@ -8406,8 +8435,8 @@ if _nav == "💰 Cash Forecast":
             _dp_rule = (_dp_alt.Chart(_dp_wide).mark_rule(color="#8c8b87", strokeWidth=1)
                         .encode(x=_dp_X).transform_filter(_dp_hover))
             st.altair_chart(
-                _dp_alt.layer(_dp_zero, _dp_dep_bars, _dp_card_bars, _dp_base_line, _dp_fc_line,
-                              _dp_end_lbl, _dp_rule, _dp_catch)
+                _dp_alt.layer(_dp_zero, _dp_dep_bars, _dp_card_bars, _dp_base_line, _dp_base_pts, _dp_fc_line,
+                              _dp_end_lbl, *([_dp_pmark] if _dp_partial else []), _dp_rule, _dp_catch)
                 .properties(height=_dp_H).configure_view(strokeWidth=0),
                 use_container_width=True)
 
@@ -8419,8 +8448,15 @@ if _nav == "💰 Cash Forecast":
                 "— הקו המקווקו (חודש מקביל אשתקד × צמיחה). בטבלה מתחת: השילוח והמכס של "
                 "<bdi>AGL</bdi> כפי שאמזון ניכתה אותם בפועל, ומה שנשאר אחריהם. ההפרש מול מה "
                 "שהגיע לבנק נובע בעיקר מתזמון: אמזון מעבירה את הכסף כמה ימים אחרי המכירות, כך "
-                "שמכירות של סוף החודש נכנסות בחודש שאחריו. "
-                f"הנתונים מהדוחות שהועלו עד {_dp_thru[8:10]}.{_dp_thru[5:7]}.{_dp_thru[:4]}.")
+                "שמכירות של סוף החודש נכנסות בחודש שאחריו. " + (
+                    f"<b>החודש האחרון (<bdi>{_dp_lbl(_dp_last)}</bdi>) חלקי:</b> הדוחות שהועלו מגיעים עד "
+                    f"{_dp_ddmm(_dp_cov_min)}.{_dp_cov_min[:4]}"
+                    + ("" if len(set(_dp_cov.values())) <= 1 else
+                       " (" + ", ".join(f"<bdi dir='rtl'><bdi>{mk}</bdi> עד {_dp_ddmm(d)}</bdi>"
+                                        for mk, d in sorted(_dp_cov.items())) + ")")
+                    + ", ולכן הוא נראה נמוך. העלו את הדוחות עד סוף החודש כדי לראות אותו מלא."
+                    if _dp_partial else
+                    f"הנתונים מהדוחות שהועלו עד {_dp_thru[8:10]}.{_dp_thru[5:7]}.{_dp_thru[:4]}."))
 
             # ── Monthly statement: rows = items, columns = months (+ total) ─────
             _dp_rtl("<b>פירוט חודשי</b>", color=T["text"])
@@ -8431,7 +8467,8 @@ if _nav == "💰 Cash Forecast":
             _dp_stmt = _dp_pd.DataFrame(
                 [_st_pot, _st_ship, _st_duty, _st_aft, _st_dep, _st_card, _st_net, _st_gap],
                 index=[_R_POT, _R_SHIP, _R_DUTY, _R_AFT, _R_DEP, _R_CARD, _R_NET, _R_GAP],
-                columns=[_dp_lbl(m) for m in _dp_months], dtype=float)
+                columns=[_dp_iso(f"{_dp_lbl(m)} · {_dp_pnote}") if _dp_partial and m == _dp_last
+                         else _dp_lbl(m) for m in _dp_months], dtype=float)
             _DP_TOTAL = "סה״כ"
             _dp_stmt[_DP_TOTAL] = _dp_stmt.sum(axis=1, skipna=True)
 
