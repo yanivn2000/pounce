@@ -311,12 +311,12 @@ _TRANSFER_TYPES = (
 )
 
 
-# AGL logistics charges that are deducted from Amazon wallet but should be
-# excluded from the forecast base (user plans these manually as Scheduled Items)
-_AGL_PRODUCT_DETAILS = (
-    "FBA International Freight Shipping Charge",
-    "FBA International Freight Duties and Taxes Charge",
-)
+# AGL logistics charges (international freight: shipping + customs) that Amazon
+# deducts from the wallet. They're kept out of the income potential (the user plans
+# them as Scheduled Items) and shown as their own rows in the Amazon Deposits tab.
+_AGL_SHIPPING = "FBA International Freight Shipping Charge"
+_AGL_DUTIES   = "FBA International Freight Duties and Taxes Charge"
+_AGL_PRODUCT_DETAILS = (_AGL_SHIPPING, _AGL_DUTIES)
 
 
 def get_amazon_monthly_net(conn, year: int, usd_nis: float,
@@ -354,11 +354,13 @@ def _amazon_monthly_net_cached(year: int, usd_nis: float,
         result[idx] = result.get(idx, 0.0) + usd
 
     if exclude_agl:
-        # Add back AGL charges (they were subtracted from net_total as Service Fee)
+        # Add back AGL charges (they were subtracted from net_total as Service Fee).
+        # Net of any reversal and over the same rows as the net above, so
+        # potential − get_agl_monthly() is exactly the raw net.
         agl_ph = ",".join("?" * len(_AGL_PRODUCT_DETAILS))
         agl_rows = conn.execute(
-            f"SELECT month, currency, SUM(ABS(net_total)) FROM amazon_transactions "
-            f"WHERE year=? AND product_details IN ({agl_ph}) "
+            f"SELECT month, currency, -SUM(net_total) FROM amazon_transactions "
+            f"WHERE year=? AND tx_type NOT IN ('{tt}') AND product_details IN ({agl_ph}) "
             f"GROUP BY month, currency",
             [year, *_AGL_PRODUCT_DETAILS]
         ).fetchall()
@@ -371,6 +373,38 @@ def _amazon_monthly_net_cached(year: int, usd_nis: float,
 
     conn.close()
     return result
+
+
+def get_agl_monthly(usd_nis: float) -> dict[str, dict[str, float]]:
+    """{'YYYY-MM': {'ship': usd, 'duty': usd}} — AGL international freight Amazon
+    took from the balance, split into shipping and customs (duties & taxes). Keyed
+    by the report's month, the same month the potential adds it back to.
+    Positive = charged; net of any reversal."""
+    return _agl_monthly_cached(usd_nis, _amztx_fp())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _agl_monthly_cached(usd_nis: float, fp: tuple) -> dict[str, dict[str, float]]:
+    conn = _get_conn_cf()
+    tt = "','".join(_TRANSFER_TYPES)
+    agl_ph = ",".join("?" * len(_AGL_PRODUCT_DETAILS))
+    rows = conn.execute(
+        f"SELECT year, month, product_details, currency, -SUM(net_total) "
+        f"FROM amazon_transactions "
+        f"WHERE tx_type NOT IN ('{tt}') AND product_details IN ({agl_ph}) "
+        f"GROUP BY year, month, product_details, currency",
+        list(_AGL_PRODUCT_DETAILS)
+    ).fetchall()
+    conn.close()
+    out: dict[str, dict[str, float]] = {}
+    for year, month_name, detail, currency, val in rows:
+        if month_name not in MONTHS or year is None:
+            continue
+        ym = f"{int(year)}-{MONTHS.index(month_name) + 1:02d}"
+        slot = out.setdefault(ym, {"ship": 0.0, "duty": 0.0})
+        slot["ship" if detail == _AGL_SHIPPING else "duty"] += _to_usd(
+            float(val or 0), currency or "USD", usd_nis)
+    return out
 
 
 # Within _TRANSFER_TYPES: money Amazon sent to the bank vs. "debt" rows — the card

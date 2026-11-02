@@ -8221,11 +8221,15 @@ if _nav == "💰 Cash Forecast":
         import altair as _dp_alt
         import pandas as _dp_pd
         from db.cashflow_module import (get_amazon_deposits, get_amazon_monthly_net,
-                                        get_ad_spend_monthly)
+                                        get_ad_spend_monthly, get_agl_monthly)
 
         def _dp_rtl(html, color=None):
             st.markdown(f"<div dir='rtl' style='color:{color or T['text_secondary']};"
                         f"font-size:0.85rem;margin:0 0 0.6rem'>{html}</div>", unsafe_allow_html=True)
+
+        # Right-to-left isolate (RLI…PDI) for Hebrew+Latin text where HTML isn't
+        # available (tile labels/help, table rows, chart tooltips): reads in typed order.
+        _dp_iso = lambda s: chr(0x2067) + s + chr(0x2069)
 
         _dp = get_amazon_deposits(_cf_usd_nis)
         _dp_thru = _cf_conn.execute("SELECT MAX(tx_date) FROM amazon_transactions").fetchone()[0]
@@ -8233,7 +8237,7 @@ if _nav == "💰 Cash Forecast":
             _dp_rtl("לא נמצאו העברות של אמזון לבנק. העלו את דוחות העסקאות של אמזון בטאב "
                     "<bdi>Amazon Transactions</bdi>.")
         else:
-            _DEP, _CARD, _BASE, _FC = "הפקדות בפועל", "חיובי כרטיס", "בסיס התחזית", "תחזית"
+            _DEP, _CARD, _BASE, _FC = "הפקדות בפועל", "חיובי כרטיס", "פוטנציאל", "תחזית"
             _dp_hist = st.selectbox("History", [12, 18, 24], index=1, key="cf_dep_hist",
                                     format_func=lambda n: f"{n} months")
             _dp_end    = _dp_pd.Period(_dp_thru[:7], freq="M")
@@ -8245,31 +8249,55 @@ if _nav == "💰 Cash Forecast":
             _dp_m = (_dp[_dp["ym"].isin(_dp_months)].groupby(["ym", "kind"])["usd"].sum()
                      .unstack(fill_value=0.0)
                      .reindex(index=_dp_months, columns=["deposit", "card"], fill_value=0.0))
-            # The forecast's base for each month's activity (net excl. transfers, AGL added back)
+            # Income potential per month = the forecast's base: net activity excl.
+            # transfers, with AGL NOT deducted (AGL is shown as its own rows below)
             _dp_base = {}
             for _dp_y in sorted({int(m[:4]) for m in _dp_months}):
                 for _dp_mi, _dp_v in get_amazon_monthly_net(_cf_conn, _dp_y, _cf_usd_nis).items():
                     _dp_base[f"{_dp_y}-{_dp_mi:02d}"] = _dp_v
             _dp_ads = get_ad_spend_monthly(_cf_usd_nis, "US")
+            # AGL that Amazon actually took from the balance: shipping / customs, USD (+ = charged)
+            _dp_agl  = get_agl_monthly(_cf_usd_nis)
+            _dp_ship = {m: _dp_agl.get(m, {}).get("ship", 0.0) for m in _dp_months}
+            _dp_duty = {m: _dp_agl.get(m, {}).get("duty", 0.0) for m in _dp_months}
             # Forward: the forecast's own Amazon payout per month (last year × growth)
             _dp_fc = [(r["ym"], f["amount"]) for r in _cf_result for f in r["flows"]
                       if f.get("name") == "Amazon Payout (auto)" and f.get("reference")]
 
+            # ── Monthly statement (USD; negative = taken off). One source for the
+            #    tiles and the table, so their totals always agree. A month with no
+            #    report rows has no potential → NaN ("—"), and no "after AGL"/gap.
+            _dp_nan = float("nan")
+            _st_pot  = [_dp_base.get(m, _dp_nan) for m in _dp_months]
+            _st_ship = [-_dp_ship[m] for m in _dp_months]
+            _st_duty = [-_dp_duty[m] for m in _dp_months]
+            _st_aft  = [p + s + d for p, s, d in zip(_st_pot, _st_ship, _st_duty)]
+            _st_dep  = [float(_dp_m.at[m, "deposit"]) for m in _dp_months]
+            _st_card = [float(_dp_m.at[m, "card"]) for m in _dp_months]
+            _st_net  = [a + b for a, b in zip(_st_dep, _st_card)]
+            # no potential that month → the whole net is unexplained (keeps total gap = net − after)
+            _st_gap  = [n - (0.0 if _dp_pd.isna(a) else a) for n, a in zip(_st_net, _st_aft)]
+            _st_ads  = [_dp_ads.get(m, 0.0) for m in _dp_months]
+            _dp_tot  = lambda xs: float(_dp_pd.Series(xs, dtype=float).sum(skipna=True))
+
             # ── Stat tiles for the shown window ──────────────────────────────
-            _dp_w_dep  = float(_dp_m["deposit"].sum())
-            _dp_w_card = float(_dp_m["card"].sum())
-            _dp_w_base = sum(_dp_base.get(m, 0.0) for m in _dp_months)
-            _dp_k1, _dp_k2, _dp_k3, _dp_k4 = st.columns(4)
-            _dp_k1.metric(_DEP, f"${_dp_w_dep:,.0f}",
-                          help="Transfers from Amazon to your bank in the shown months (all marketplaces, USD)")
-            _dp_k2.metric(_CARD, f"${-_dp_w_card:,.0f}",
-                          help="What Amazon charged your card when the seller balance went negative")
-            _dp_k3.metric(_BASE, f"${_dp_w_base:,.0f}",
-                          help="The Cash Forecast's base for the same months: net activity "
-                               "excl. transfers, with AGL freight added back; all ads count as "
-                               "taken from the Amazon balance")
-            _dp_k4.metric("הפרש", f"${_dp_w_dep + _dp_w_card - _dp_w_base:,.0f}",
-                          help="Net to bank (deposits − card charges) minus the forecast base")
+            _dp_w_ship, _dp_w_duty = -_dp_tot(_st_ship) + 0.0, -_dp_tot(_st_duty) + 0.0   # +0.0: no "$-0"
+            _dp_k = st.columns(5)
+            _dp_k[0].metric(_BASE, f"${_dp_tot(_st_pot):,.0f}",
+                            help=_dp_iso("ההכנסה מאמזון בחודשים המוצגים, בלי לנכות AGL. "
+                                         "זה הבסיס שהתחזית מגדילה."))
+            _dp_k[1].metric("AGL", f"${_dp_w_ship + _dp_w_duty:,.0f}",
+                            # \$: two bare "$" in help markdown would render as inline math
+                            help=_dp_iso(f"מה שאמזון ניכתה מהיתרה בפועל: שילוח \\${_dp_w_ship:,.0f}, "
+                                         f"מכס \\${_dp_w_duty:,.0f}."))
+            _dp_k[2].metric(_DEP, f"${_dp_tot(_st_dep):,.0f}",
+                            help=_dp_iso("ההעברות מאמזון לבנק, כל השווקים."))
+            _dp_k[3].metric(_CARD, f"${-_dp_tot(_st_card) + 0.0:,.0f}",
+                            help=_dp_iso("מה שאמזון חייבה בכרטיס כשהיתרה הייתה שלילית."))
+            _dp_w_gap = _dp_tot(_st_gap)
+            _dp_k[4].metric("הפרש", f"{'-' if _dp_w_gap <= -0.5 else ''}${abs(_dp_w_gap):,.0f}",
+                            help=_dp_iso("נטו לבנק פחות הפוטנציאל אחרי AGL. בעיקר תזמון, "
+                                         "ופרסום US שחויב בכרטיס."))
 
             # ── Chart: one USD axis — deposits up, card charges down, base/forecast lines ──
             _dp_rows = []
@@ -8332,12 +8360,23 @@ if _nav == "💰 Cash Forecast":
             # Hover: the whole month band is the hit target; a rule marks the hovered month
             _dp_hover = _dp_alt.selection_point(fields=["label"], nearest=True, on="pointerover",
                                                 clear="pointerout", empty=False)
+            # AGL rows for the tooltip (negative = taken off); none for forecast months
+            _dp_wide["agl_ship"] = _dp_wide["ym"].map(
+                lambda m: -_dp_agl[m]["ship"] if m in _dp_agl else float("nan")).astype(float)
+            _dp_wide["agl_duty"] = _dp_wide["ym"].map(
+                lambda m: -_dp_agl[m]["duty"] if m in _dp_agl else float("nan")).astype(float)
+            _dp_wide["agl_after"] = (_dp_wide[_BASE] + _dp_wide["agl_ship"].fillna(0.0)
+                                     + _dp_wide["agl_duty"].fillna(0.0))
             # pre-formatted text so a month without a value shows "—", not "null"
-            for _dp_i, _dp_s in enumerate((_DEP, _CARD, _BASE, _FC)):
+            _dp_tip_rows = [(_BASE, _BASE), ("agl_ship", _dp_iso("− שילוח AGL")),
+                            ("agl_duty", _dp_iso("− מכס AGL")), ("agl_after", _dp_iso("= אחרי AGL")),
+                            (_DEP, _DEP), (_CARD, _CARD), (_FC, _FC)]
+            for _dp_i, (_dp_s, _) in enumerate(_dp_tip_rows):
                 _dp_wide[f"t{_dp_i}"] = _dp_wide[_dp_s].map(
-                    lambda v: "—" if _dp_pd.isna(v) else f"{'-' if v < 0 else ''}${abs(v):,.0f}")
+                    lambda v: "—" if _dp_pd.isna(v) or abs(v) < 0.5
+                    else f"{'-' if v < 0 else ''}${abs(v):,.0f}")
             _dp_tip = [_dp_alt.Tooltip("label:N", title="חודש")] + [
-                _dp_alt.Tooltip(f"t{i}:N", title=s) for i, s in enumerate((_DEP, _CARD, _BASE, _FC))]
+                _dp_alt.Tooltip(f"t{i}:N", title=t) for i, (_, t) in enumerate(_dp_tip_rows)]
             _dp_catch = (_dp_alt.Chart(_dp_wide).mark_bar(color="white", opacity=0.001)
                          .encode(x=_dp_X, y=_dp_alt.value(0), y2=_dp_alt.value(_dp_H), tooltip=_dp_tip)
                          .add_params(_dp_hover))
@@ -8351,28 +8390,47 @@ if _nav == "💰 Cash Forecast":
 
             _dp_rtl(
                 "העמודות הכחולות הן ההעברות שאמזון ביצעה בפועל לבנק (שורות <bdi>Transfer</bdi> "
-                "בדוחות העסקאות), והכתומות — חיובים בכרטיס כשהיתרה באמזון הייתה שלילית. הקו הוא "
-                "בסיס התחזית לאותו חודש: הפעילות נטו (בלי ההעברות), עם החזרת חיובי <bdi>AGL</bdi> "
-                "(מתוכננים בנפרד). כל הפרסום, כולל ארה״ב, נחשב כיורד מהיתרה באמזון. "
-                "הקו המקווקו הוא תחזית ההפקדה לחודשים הבאים (חודש מקביל אשתקד × צמיחה). "
-                "ההפרש מול ההפקדות בפועל נובע מתזמון (אמזון משלמת על מכירות של שבועות קודמים), "
-                "מ-<bdi>AGL</bdi> שכן יורד מהיתרה, ומפרסום בארה״ב שחויב בפועל בכרטיס במקום לרדת "
-                "מהיתרה (עמודת „פרסום US” בטבלה). "
+                "בדוחות העסקאות), והכתומות — חיובים בכרטיס כשהיתרה באמזון הייתה שלילית. הקו הירוק "
+                "הוא פוטנציאל ההכנסה של אותו חודש: הפעילות נטו (בלי ההעברות), בלי לנכות "
+                "<bdi>AGL</bdi>. כל הפרסום, כולל ארה״ב, נחשב כיורד מהיתרה. זה גם הבסיס של התחזית "
+                "— הקו המקווקו (חודש מקביל אשתקד × צמיחה). בטבלה מתחת: השילוח והמכס של "
+                "<bdi>AGL</bdi> כפי שאמזון ניכתה אותם בפועל, ומה שנשאר אחריהם. ההפרש מול מה "
+                "שהגיע לבנק נובע בעיקר מתזמון (אמזון משלמת על מכירות של שבועות קודמים) ומפרסום "
+                "בארה״ב שחויב בפועל בכרטיס (שורת „<bdi>פרסום US</bdi>”). "
                 f"הנתונים מהדוחות שהועלו עד {_dp_thru[8:10]}.{_dp_thru[5:7]}.{_dp_thru[:4]}.")
 
-            with st.expander("📋 Monthly table", expanded=False):
-                _dp_tbl = _dp_pd.DataFrame({
-                    "חודש":         [_dp_lbl(m) for m in _dp_months],
-                    _DEP:           [_dp_m.at[m, "deposit"] for m in _dp_months],
-                    _CARD:          [_dp_m.at[m, "card"] for m in _dp_months],
-                    "נטו לבנק":     [_dp_m.at[m, "deposit"] + _dp_m.at[m, "card"] for m in _dp_months],
-                    _BASE:          [_dp_base.get(m) for m in _dp_months],
-                    "פרסום US":     [_dp_ads.get(m, 0.0) for m in _dp_months],
-                })
-                _dp_tbl["הפרש"] = _dp_tbl["נטו לבנק"] - _dp_tbl[_BASE].fillna(0.0)
-                st.dataframe(_dp_tbl, hide_index=True, use_container_width=True,
-                             column_config={c: st.column_config.NumberColumn(c, format="$%,.0f")
-                                            for c in _dp_tbl.columns if c != "חודש"})
+            # ── Monthly statement: rows = items, columns = months (+ total) ─────
+            _dp_rtl("<b>פירוט חודשי</b>", color=T["text"])
+            _R_POT, _R_SHIP, _R_DUTY, _R_AFT = (_dp_iso("פוטנציאל (ללא AGL)"), _dp_iso("− שילוח AGL"),
+                                                _dp_iso("− מכס AGL"), _dp_iso("= אחרי AGL"))
+            _R_DEP, _R_CARD, _R_NET = _dp_iso(_DEP), _dp_iso(_CARD), _dp_iso("= נטו לבנק")
+            _R_GAP, _R_ADS = _dp_iso("הפרש (נטו לבנק − אחרי AGL)"), _dp_iso("פרסום US (לידיעה)")
+            _dp_stmt = _dp_pd.DataFrame(
+                [_st_pot, _st_ship, _st_duty, _st_aft, _st_dep, _st_card, _st_net, _st_gap, _st_ads],
+                index=[_R_POT, _R_SHIP, _R_DUTY, _R_AFT, _R_DEP, _R_CARD, _R_NET, _R_GAP, _R_ADS],
+                columns=[_dp_lbl(m) for m in _dp_months], dtype=float)
+            _DP_TOTAL = "סה״כ"
+            _dp_stmt[_DP_TOTAL] = _dp_stmt.sum(axis=1, skipna=True)
+
+            def _dp_fmt(v):
+                if _dp_pd.isna(v) or abs(v) < 0.5:
+                    return "—"
+                return f"${v:,.0f}" if v > 0 else f"(${-v:,.0f})"
+
+            def _dp_style(df):
+                s = _dp_pd.DataFrame("", index=df.index, columns=df.columns)
+                s.loc[_R_POT] = "font-weight:bold;background-color:#f8fff8"
+                s.loc[[_R_SHIP, _R_DUTY]] = "color:#9a3a3a;background-color:#fdf3f3"
+                s.loc[_R_AFT] = "font-weight:bold;background-color:#eef9f0"
+                s.loc[_R_NET] = "font-weight:bold;background-color:#f0f4ff"
+                s.loc[_R_ADS] = "color:#8c8b87;font-style:italic"
+                s[_DP_TOTAL] = s[_DP_TOTAL].where(s[_DP_TOTAL] != "", "background-color:#f6f8fa")
+                return s
+
+            # total pinned beside the labels, so it's visible without scrolling the months
+            st.dataframe(_dp_stmt.style.apply(_dp_style, axis=None).format(_dp_fmt),
+                         use_container_width=True,
+                         column_config={_DP_TOTAL: st.column_config.Column(_DP_TOTAL, pinned=True)})
             with st.expander(f"🧾 All transfers ({len(_dp):,})", expanded=False):
                 _dp_list = _dp.sort_values("tx_date", ascending=False)[
                     ["tx_date", "marketplace", "currency", "amount", "usd", "kind"]].copy()
