@@ -369,6 +369,57 @@ def _amazon_monthly_net_cached(year: int, usd_nis: float,
     return result
 
 
+# Within _TRANSFER_TYPES: money Amazon sent to the bank vs. "debt" rows — the card
+# charged when the balance went negative (EU variants also move negative balances
+# between marketplaces).
+_DEBT_TYPES = ("Debt", "Verbindlichkeit", "Solde négatif", "Saldo descubierto",
+               "Schuld", "Saldo negativo")
+_DEPOSIT_TYPES = tuple(t for t in _TRANSFER_TYPES if t not in _DEBT_TYPES)
+
+
+def get_amazon_deposits(usd_nis: float):
+    """Every Amazon → bank transfer and every negative-balance card charge in the
+    uploaded transaction reports: DataFrame (tx_date, marketplace, currency, amount,
+    usd, kind='deposit'|'card'). amount/usd are seen from the bank — positive =
+    deposited, negative = charged. Same USD conversion as the forecast base."""
+    return _amazon_deposits_cached(usd_nis, _amztx_fp())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _amazon_deposits_cached(usd_nis: float, fp: tuple):
+    import pandas as pd
+    conn = _get_conn_cf()
+    ph = ",".join("?" * len(_TRANSFER_TYPES))
+    df = pd.read_sql_query(
+        "SELECT tx_date, marketplace, currency, tx_type, -net_total AS amount "
+        f"FROM amazon_transactions WHERE tx_type IN ({ph}) AND net_total <> 0 "
+        "ORDER BY tx_date", conn, params=list(_TRANSFER_TYPES))
+    conn.close()
+    df["kind"] = ["card" if t in _DEBT_TYPES else "deposit" for t in df["tx_type"]]
+    df["usd"] = [_to_usd(float(a), c or "USD", usd_nis) for a, c in zip(df["amount"], df["currency"])]
+    return df.drop(columns="tx_type")
+
+
+def get_ad_spend_monthly(usd_nis: float, marketplace: str = "US") -> dict[str, float]:
+    """{'YYYY-MM': usd} of "Cost of Advertising" service fees in one marketplace."""
+    return _ad_spend_cached(usd_nis, marketplace, _amztx_fp())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _ad_spend_cached(usd_nis: float, marketplace: str, fp: tuple) -> dict[str, float]:
+    conn = _get_conn_cf()
+    rows = conn.execute(
+        "SELECT substr(tx_date,1,7), currency, SUM(ABS(net_total)) FROM amazon_transactions "
+        "WHERE marketplace=? AND tx_type='Service Fee' "
+        "AND LOWER(product_details) LIKE '%cost of advertising%' GROUP BY 1, 2",
+        (marketplace,)).fetchall()
+    conn.close()
+    out: dict[str, float] = {}
+    for ym, cur, v in rows:
+        out[ym] = out.get(ym, 0.0) + _to_usd(float(v or 0), cur or "USD", usd_nis)
+    return out
+
+
 def _to_usd(amount: float, currency: str, usd_nis: float) -> float:
     if currency in ("USD", ""):
         return amount

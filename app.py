@@ -7801,8 +7801,8 @@ if _nav == "💰 Cash Forecast":
     st.divider()
 
     # ── Sub-tabs ──────────────────────────────────────────────────────────────
-    _cf_tab_forecast, _cf_tab_accounts, _cf_tab_items = st.tabs([
-        "📊 Forecast", "🏦 Accounts & Balances", "📋 Scheduled Items"
+    _cf_tab_forecast, _cf_tab_deposits, _cf_tab_accounts, _cf_tab_items = st.tabs([
+        "📊 Forecast", "🏧 Amazon Deposits", "🏦 Accounts & Balances", "📋 Scheduled Items"
     ])
 
     # ════════════════════════════════════════════════════════════════════════
@@ -8213,6 +8213,175 @@ if _nav == "💰 Cash Forecast":
                     add_account(cf_conn, _new_aname, _new_acomp, _new_acur, _new_abal, _new_alimit)
                     st.success(f"✅ Account '{_new_aname}' added.")
                     st.rerun()  # full-app rerun so Forecast/balance summary reflect the change
+
+    # ════════════════════════════════════════════════════════════════════════
+    # AMAZON DEPOSITS — what actually reached the bank, vs. the forecast's base
+    # ════════════════════════════════════════════════════════════════════════
+    with _cf_tab_deposits:
+        import altair as _dp_alt
+        import pandas as _dp_pd
+        from db.cashflow_module import (get_amazon_deposits, get_amazon_monthly_net,
+                                        get_ad_spend_monthly)
+
+        def _dp_rtl(html, color=None):
+            st.markdown(f"<div dir='rtl' style='color:{color or T['text_secondary']};"
+                        f"font-size:0.85rem;margin:0 0 0.6rem'>{html}</div>", unsafe_allow_html=True)
+
+        _dp = get_amazon_deposits(_cf_usd_nis)
+        _dp_thru = _cf_conn.execute("SELECT MAX(tx_date) FROM amazon_transactions").fetchone()[0]
+        if _dp.empty or not _dp_thru:
+            _dp_rtl("לא נמצאו העברות של אמזון לבנק. העלו את דוחות העסקאות של אמזון בטאב "
+                    "<bdi>Amazon Transactions</bdi>.")
+        else:
+            _DEP, _CARD, _BASE, _FC = "הפקדות בפועל", "חיובי כרטיס", "בסיס התחזית", "תחזית"
+            _dp_hist = st.selectbox("History", [12, 18, 24], index=1, key="cf_dep_hist",
+                                    format_func=lambda n: f"{n} months")
+            _dp_end    = _dp_pd.Period(_dp_thru[:7], freq="M")
+            _dp_months = [str(_dp_end - i) for i in range(_dp_hist - 1, -1, -1)]   # 'YYYY-MM'
+            _dp_lbl    = lambda ym: f"{ym[5:7]}/{ym[2:4]}"
+
+            # Actual bank-side flows per month (+ deposited, − charged to the card)
+            _dp["ym"] = _dp["tx_date"].str[:7]
+            _dp_m = (_dp[_dp["ym"].isin(_dp_months)].groupby(["ym", "kind"])["usd"].sum()
+                     .unstack(fill_value=0.0)
+                     .reindex(index=_dp_months, columns=["deposit", "card"], fill_value=0.0))
+            # The forecast's base for each month's activity (net excl. transfers, AGL added back)
+            _dp_base = {}
+            for _dp_y in sorted({int(m[:4]) for m in _dp_months}):
+                for _dp_mi, _dp_v in get_amazon_monthly_net(_cf_conn, _dp_y, _cf_usd_nis).items():
+                    _dp_base[f"{_dp_y}-{_dp_mi:02d}"] = _dp_v
+            _dp_ads = get_ad_spend_monthly(_cf_usd_nis, "US")
+            # Forward: the forecast's own Amazon payout per month (last year × growth)
+            _dp_fc = [(r["ym"], f["amount"]) for r in _cf_result for f in r["flows"]
+                      if f.get("name") == "Amazon Payout (auto)" and f.get("reference")]
+
+            # ── Stat tiles for the shown window ──────────────────────────────
+            _dp_w_dep  = float(_dp_m["deposit"].sum())
+            _dp_w_card = float(_dp_m["card"].sum())
+            _dp_w_base = sum(_dp_base.get(m, 0.0) for m in _dp_months)
+            _dp_k1, _dp_k2, _dp_k3, _dp_k4 = st.columns(4)
+            _dp_k1.metric(_DEP, f"${_dp_w_dep:,.0f}",
+                          help="Transfers from Amazon to your bank in the shown months (all marketplaces, USD)")
+            _dp_k2.metric(_CARD, f"${-_dp_w_card:,.0f}",
+                          help="What Amazon charged your card when the seller balance went negative")
+            _dp_k3.metric(_BASE, f"${_dp_w_base:,.0f}",
+                          help="The Cash Forecast's base for the same months: net activity "
+                               "excl. transfers, with AGL freight added back")
+            _dp_k4.metric("הפרש", f"${_dp_w_dep + _dp_w_card - _dp_w_base:,.0f}",
+                          help="Net to bank (deposits − card charges) minus the forecast base")
+
+            # ── Chart: one USD axis — deposits up, card charges down, base/forecast lines ──
+            _dp_rows = []
+            for _ym in _dp_months:
+                _dp_rows += [{"ym": _ym, "series": _DEP,  "value": float(_dp_m.at[_ym, "deposit"])},
+                             {"ym": _ym, "series": _CARD, "value": float(_dp_m.at[_ym, "card"])}]
+                if _ym in _dp_base:
+                    _dp_rows.append({"ym": _ym, "series": _BASE, "value": float(_dp_base[_ym])})
+            _dp_rows += [{"ym": _ym, "series": _FC, "value": float(_v)} for _ym, _v in _dp_fc]
+            _dp_long = _dp_pd.DataFrame(_dp_rows)
+            _dp_long["label"] = _dp_long["ym"].map(_dp_lbl)
+            _dp_order = [_dp_lbl(m) for m in sorted(_dp_long["ym"].unique())]
+            _dp_wide = (_dp_long.pivot_table(index=["ym", "label"], columns="series",
+                                             values="value", aggfunc="sum")
+                        .reindex(columns=[_DEP, _CARD, _BASE, _FC]).reset_index())
+
+            _dp_H   = 320
+            _dp_ink = T["text_secondary"]
+            _dp_X = _dp_alt.X("label:O", sort=_dp_order, title=None,
+                              scale=_dp_alt.Scale(paddingInner=0.3),
+                              axis=_dp_alt.Axis(labelAngle=0, labelColor=_dp_ink, ticks=False,
+                                                domainColor="#d0d7de"))
+            _dp_Y = _dp_alt.Y("value:Q", title=None,
+                              axis=_dp_alt.Axis(format="$~s", gridColor="#eeeeec", domain=False,
+                                                ticks=False, labelColor=_dp_ink, tickCount=6))
+            _dp_color = _dp_alt.Color(
+                "series:N", title=None,
+                scale=_dp_alt.Scale(domain=[_DEP, _CARD, _BASE, _FC],
+                                    range=["#2a78d6", "#eb6834", "#1baf7a", "#1baf7a"]),
+                legend=_dp_alt.Legend(orient="top", labelColor=_dp_ink, symbolStrokeWidth=2))
+            _dp_c  = _dp_alt.Chart(_dp_long)
+            _dp_is = lambda s: _dp_alt.datum.series == s
+            _dp_dep_bars = (_dp_c.transform_filter(_dp_is(_DEP))
+                            .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                            .encode(x=_dp_X, y=_dp_Y, color=_dp_color))
+            _dp_card_bars = (_dp_c.transform_filter(_dp_is(_CARD))
+                             .mark_bar(cornerRadiusBottomLeft=4, cornerRadiusBottomRight=4)
+                             .encode(x=_dp_X, y=_dp_Y, color=_dp_color))
+            _dp_base_line = (_dp_c.transform_filter(_dp_is(_BASE))
+                             .mark_line(strokeWidth=2, point=_dp_alt.OverlayMarkDef(size=60, filled=True))
+                             .encode(x=_dp_X, y=_dp_Y, color=_dp_color))
+            _dp_fc_line = (_dp_c.transform_filter(_dp_is(_FC))
+                           .mark_line(strokeWidth=2, strokeDash=[5, 4],
+                                      point=_dp_alt.OverlayMarkDef(size=60, filled=False, fill="white"))
+                           .encode(x=_dp_X, y=_dp_Y, color=_dp_color))
+            # Direct labels at the line ends (text in ink, not series color)
+            _dp_ends = (_dp_long[_dp_long["series"].isin([_BASE, _FC])]
+                        .sort_values("ym").groupby("series").tail(1))
+            # base ends where the forecast begins → label centred above its last point;
+            # the forecast ends at the plot edge → label right-aligned above, inside the plot.
+            # A white halo layer underneath keeps the text legible where it crosses a bar.
+            _dp_end_lbl = _dp_alt.layer(*[
+                (_dp_alt.Chart(_dp_ends[_dp_ends["series"] == s])
+                 .mark_text(align=a, dx=dx, dy=-14, fontSize=11, color=_dp_ink, **halo)
+                 .encode(x=_dp_X, y=_dp_Y, text="series:N"))
+                for s, a, dx in ((_BASE, "center", 0), (_FC, "right", -2))
+                for halo in ({"stroke": "white", "strokeWidth": 4}, {})])
+            _dp_zero = (_dp_alt.Chart(_dp_pd.DataFrame({"v": [0]}))
+                        .mark_rule(color="#8c8b87", strokeWidth=1).encode(y="v:Q"))
+            # Hover: the whole month band is the hit target; a rule marks the hovered month
+            _dp_hover = _dp_alt.selection_point(fields=["label"], nearest=True, on="pointerover",
+                                                clear="pointerout", empty=False)
+            # pre-formatted text so a month without a value shows "—", not "null"
+            for _dp_i, _dp_s in enumerate((_DEP, _CARD, _BASE, _FC)):
+                _dp_wide[f"t{_dp_i}"] = _dp_wide[_dp_s].map(
+                    lambda v: "—" if _dp_pd.isna(v) else f"{'-' if v < 0 else ''}${abs(v):,.0f}")
+            _dp_tip = [_dp_alt.Tooltip("label:N", title="חודש")] + [
+                _dp_alt.Tooltip(f"t{i}:N", title=s) for i, s in enumerate((_DEP, _CARD, _BASE, _FC))]
+            _dp_catch = (_dp_alt.Chart(_dp_wide).mark_bar(color="white", opacity=0.001)
+                         .encode(x=_dp_X, y=_dp_alt.value(0), y2=_dp_alt.value(_dp_H), tooltip=_dp_tip)
+                         .add_params(_dp_hover))
+            _dp_rule = (_dp_alt.Chart(_dp_wide).mark_rule(color="#8c8b87", strokeWidth=1)
+                        .encode(x=_dp_X).transform_filter(_dp_hover))
+            st.altair_chart(
+                _dp_alt.layer(_dp_zero, _dp_dep_bars, _dp_card_bars, _dp_base_line, _dp_fc_line,
+                              _dp_end_lbl, _dp_rule, _dp_catch)
+                .properties(height=_dp_H).configure_view(strokeWidth=0),
+                use_container_width=True)
+
+            _dp_rtl(
+                "העמודות הכחולות הן ההעברות שאמזון ביצעה בפועל לבנק (שורות <bdi>Transfer</bdi> "
+                "בדוחות העסקאות), והכתומות — חיובים בכרטיס כשהיתרה באמזון הייתה שלילית. הקו הוא "
+                "בסיס התחזית לאותו חודש: הפעילות נטו (בלי ההעברות) עם החזרת חיובי <bdi>AGL</bdi>; "
+                "הקו המקווקו הוא תחזית ההפקדה לחודשים הבאים (חודש מקביל אשתקד × צמיחה). ההפרש בין "
+                "השניים נובע מתזמון (אמזון משלמת על מכירות של שבועות קודמים), מ-<bdi>AGL</bdi> שכן "
+                "יורד מהיתרה, ומפריטים שמופיעים בדוח אבל לא יורדים מהיתרה — למשל פרסום שמחויב "
+                f"בכרטיס. הנתונים מהדוחות שהועלו עד {_dp_thru[8:10]}.{_dp_thru[5:7]}.{_dp_thru[:4]}.")
+
+            with st.expander("📋 Monthly table", expanded=False):
+                _dp_tbl = _dp_pd.DataFrame({
+                    "חודש":         [_dp_lbl(m) for m in _dp_months],
+                    _DEP:           [_dp_m.at[m, "deposit"] for m in _dp_months],
+                    _CARD:          [_dp_m.at[m, "card"] for m in _dp_months],
+                    "נטו לבנק":     [_dp_m.at[m, "deposit"] + _dp_m.at[m, "card"] for m in _dp_months],
+                    _BASE:          [_dp_base.get(m) for m in _dp_months],
+                    "פרסום US":     [_dp_ads.get(m, 0.0) for m in _dp_months],
+                })
+                _dp_tbl["הפרש"] = _dp_tbl["נטו לבנק"] - _dp_tbl[_BASE].fillna(0.0)
+                st.dataframe(_dp_tbl, hide_index=True, use_container_width=True,
+                             column_config={c: st.column_config.NumberColumn(c, format="$%,.0f")
+                                            for c in _dp_tbl.columns if c != "חודש"})
+            with st.expander(f"🧾 All transfers ({len(_dp):,})", expanded=False):
+                _dp_list = _dp.sort_values("tx_date", ascending=False)[
+                    ["tx_date", "marketplace", "currency", "amount", "usd", "kind"]].copy()
+                _dp_list["kind"] = _dp_list["kind"].map({"deposit": "הפקדה", "card": "חיוב כרטיס"})
+                st.dataframe(_dp_list, hide_index=True, use_container_width=True, column_config={
+                    "tx_date":     st.column_config.TextColumn("תאריך"),
+                    "marketplace": st.column_config.TextColumn("שוק"),
+                    "currency":    st.column_config.TextColumn("מטבע"),
+                    "amount":      st.column_config.NumberColumn("סכום", format="%,.2f"),
+                    "usd":         st.column_config.NumberColumn("USD", format="$%,.0f"),
+                    "kind":        st.column_config.TextColumn("סוג"),
+                })
 
     with _cf_tab_accounts:
         _cf_accounts_fragment(_cf_conn)
